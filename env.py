@@ -21,17 +21,19 @@ class TriplePendulumEnv(gym.Env):
         # -----------------------
         self.gravity = 9.8
         self.mass_cart = 1.0
-        self.mass_pend = 0.1   # mass of each pendulum link
-        self.length = 0.5      # length of each pendulum link
-        self.cart_friction = 0.5  # Increased friction for more realistic movement
-        self.pend_friction = 0.1  # Increased pendulum friction
-        self.air_resistance = 0.1  # New parameter for air resistance
-
-        # Maximum force magnitude the agent can apply
-        self.force_mag = 10.0
-
-        # Time step
-        self.tau = 0.02
+        self.mass_pend = 0.1
+        self.length = 0.5
+        self.cart_friction = 0.5
+        self.pend_friction = 0.1
+        self.air_resistance = 0.1
+        
+        # Reduce force magnitude
+        self.force_mag = 20.0
+        
+        # Increase simulation substeps for better stability
+        self.sub_steps = 8
+        self.tau = 0.02 / self.sub_steps
+        self.constraint_iterations = 3  # Nombre d'itérations pour les contraintes
 
         # Limits for cart position and velocity
         self.x_threshold = 2.4
@@ -83,11 +85,11 @@ class TriplePendulumEnv(gym.Env):
             self.state = np.array([
                 0.0,                        # cart x
                 0.0,                        # cart velocity
-                0.0,                        # theta1
+                np.random.uniform(-3, 3),   # theta1
                 0.0,                        # theta_dot1
-                0.0,                        # theta2
+                np.random.uniform(-3, 3),   # theta2
                 0.0,                        # theta_dot2
-                0.0,                        # theta3
+                np.random.uniform(-3, 3),   # theta3
                 0.0                         # theta_dot3
             ])
         else:
@@ -108,92 +110,112 @@ class TriplePendulumEnv(gym.Env):
 
         return self.state, {}
 
+    def apply_constraints(self, x, th1, th2, th3):
+        """Applique les contraintes de distance entre les pendules"""
+        l = self.length
+        
+        # Position du chariot
+        p0 = np.array([x, 0])
+        
+        # Positions initiales des pendules
+        p1 = p0 + l * np.array([np.sin(th1), np.cos(th1)])
+        p2 = p1 + l * np.array([np.sin(th2), np.cos(th2)])
+        p3 = p2 + l * np.array([np.sin(th3), np.cos(th3)])
+        
+        # Applique les contraintes plusieurs fois pour plus de stabilité
+        for _ in range(self.constraint_iterations):
+            # Contrainte entre p0 et p1
+            diff = p1 - p0
+            dist = np.linalg.norm(diff)
+            if abs(dist - l) > 1e-6:
+                correction = (dist - l) / dist
+                p1 = p0 + diff * (1 - correction)
+            
+            # Contrainte entre p1 et p2
+            diff = p2 - p1
+            dist = np.linalg.norm(diff)
+            if abs(dist - l) > 1e-6:
+                correction = (dist - l) / dist
+                p2 = p1 + diff * (1 - correction)
+            
+            # Contrainte entre p2 et p3
+            diff = p3 - p2
+            dist = np.linalg.norm(diff)
+            if abs(dist - l) > 1e-6:
+                correction = (dist - l) / dist
+                p3 = p2 + diff * (1 - correction)
+        
+        # Calcule les nouveaux angles
+        th1_new = np.arctan2(p1[0] - p0[0], p1[1] - p0[1])
+        th2_new = np.arctan2(p2[0] - p1[0], p2[1] - p1[1])
+        th3_new = np.arctan2(p3[0] - p2[0], p3[1] - p2[1])
+        
+        return th1_new, th2_new, th3_new
+
     def step(self, action):
-        # Unpack the state
-        x, x_dot, th1, th1_dot, th2, th2_dot, th3, th3_dot = self.state
         force = np.clip(action[0], -self.force_mag, self.force_mag)
-
-        # -------------
-        # Equations of motion (improved physics)
-        # -------------
-        sin1, cos1 = math.sin(th1), math.cos(th1)
-        sin2, cos2 = math.sin(th2), math.cos(th2)
-        sin3, cos3 = math.sin(th3), math.cos(th3)
-
-        # Calculate total mass and moments of inertia
-        total_mass = self.mass_cart + 3 * self.mass_pend
-        I1 = self.mass_pend * (self.length**2)
-        I2 = self.mass_pend * (self.length**2)
-        I3 = self.mass_pend * (self.length**2)
-
-        # Calculate gravitational torques
-        torque1 = -self.mass_pend * self.gravity * self.length * sin1
-        torque2 = -self.mass_pend * self.gravity * self.length * sin2
-        torque3 = -self.mass_pend * self.gravity * self.length * sin3
-
-        # Calculate coupling forces between links
-        coupling_force1 = self.mass_pend * self.length * (th1_dot**2 * sin1)
-        coupling_force2 = self.mass_pend * self.length * (th2_dot**2 * sin2)
-        coupling_force3 = self.mass_pend * self.length * (th3_dot**2 * sin3)
-
-        # Calculate total horizontal force on cart
-        horizontal_force = (coupling_force1 + coupling_force2 + coupling_force3) * cos1
-
-        # Calculate resistive forces
-        friction_force = -self.cart_friction * np.sign(x_dot) * (1 - np.exp(-abs(x_dot)))
-        air_resistance_force = -self.air_resistance * x_dot * abs(x_dot)
-
-        # Net force on cart
-        net_force = force + horizontal_force + friction_force + air_resistance_force
-
-        # Cart acceleration with momentum consideration
-        x_ddot = net_force / total_mass
-
-        # Angular accelerations with improved coupling
-        alpha1 = (torque1 - self.pend_friction * th1_dot) / I1
-        alpha2 = (torque2 - self.pend_friction * th2_dot) / I2
-        alpha3 = (torque3 - self.pend_friction * th3_dot) / I3
-
-        # ----------------------
-        # Integrate forward with improved stability
-        # ----------------------
-        # Use semi-implicit Euler integration for better stability
-        x_dot_new = x_dot + self.tau * x_ddot
-        x_new = x + self.tau * x_dot_new
         
-        th1_dot_new = th1_dot + self.tau * alpha1
-        th1_new = th1 + self.tau * th1_dot_new
+        # Store initial state
+        x, x_dot, th1, th1_dot, th2, th2_dot, th3, th3_dot = self.state
         
-        th2_dot_new = th2_dot + self.tau * alpha2
-        th2_new = th2 + self.tau * th2_dot_new
+        # Run multiple substeps for better stability
+        for _ in range(self.sub_steps):
+            # Unpack current state
+            x, x_dot, th1, th1_dot, th2, th2_dot, th3, th3_dot = self.state
+            
+            # Cart forces
+            friction = -self.cart_friction * x_dot
+            net_force = force + friction
+            x_ddot = net_force / self.mass_cart
+            
+            # Pendulum accelerations
+            g = self.gravity
+            th1_ddot = -g * np.sin(th1) / self.length - x_ddot * np.cos(th1) / self.length
+            th2_ddot = -g * np.sin(th2) / self.length - x_ddot * np.cos(th2) / self.length
+            th3_ddot = -g * np.sin(th3) / self.length - x_ddot * np.cos(th3) / self.length
+            
+            # Add damping
+            th1_ddot -= self.pend_friction * th1_dot
+            th2_ddot -= self.pend_friction * th2_dot
+            th3_ddot -= self.pend_friction * th3_dot
+            
+            # Semi-implicit Euler integration
+            dt = self.tau
+            
+            # Update velocities first
+            x_dot_new = x_dot + x_ddot * dt
+            th1_dot_new = th1_dot + th1_ddot * dt
+            th2_dot_new = th2_dot + th2_ddot * dt
+            th3_dot_new = th3_dot + th3_ddot * dt
+            
+            # Update positions
+            x_new = x + x_dot_new * dt
+            th1_temp = th1 + th1_dot_new * dt
+            th2_temp = th2 + th2_dot_new * dt
+            th3_temp = th3 + th3_dot_new * dt
+            
+            # Apply constraints to maintain rigid connections
+            th1_new, th2_new, th3_new = self.apply_constraints(x_new, th1_temp, th2_temp, th3_temp)
+            
+            # Update state
+            self.state = (x_new, x_dot_new, th1_new, th1_dot_new,
+                         th2_new, th2_dot_new, th3_new, th3_dot_new)
         
-        th3_dot_new = th3_dot + self.tau * alpha3
-        th3_new = th3 + self.tau * th3_dot_new
-
-        # Update state
-        self.state = (x_new, x_dot_new, th1_new, th1_dot_new, 
-                     th2_new, th2_dot_new, th3_new, th3_dot_new)
-
-        # ----------------------
         # Check termination
-        # ----------------------
         terminated = bool(
-            abs(x_new) > self.x_threshold
+            abs(x_new) > self.x_threshold or
+            abs(x_dot_new) > self.x_dot_threshold
         )
         
-        # ----------------------
         # Calculate reward
-        # ----------------------
-        # Reward for keeping angles near 0 (upright)
-        # Also small penalty for cart displacement and high velocities
         upright_reward = 3.0 - (abs(th1_new) + abs(th2_new) + abs(th3_new))
         cart_penalty = 0.05 * abs(x_new)
         velocity_penalty = 0.01 * abs(x_dot_new)
         reward = float(upright_reward - cart_penalty - velocity_penalty)
-
+        
         if terminated:
             reward -= 5.0
-
+        
         return np.array(self.state, dtype=np.float32), reward, terminated, False, {}
 
     def render(self):

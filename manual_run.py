@@ -1,7 +1,7 @@
 import pygame
 import sys
 import numpy as np
-from triple_pendulum_env import TriplePendulumEnv
+from env import TriplePendulumEnv
 
 # Create the environment with rendering
 env = TriplePendulumEnv(render_mode="human", test_mode=True)
@@ -19,9 +19,9 @@ while True:
     
     # Check for held keys
     if keys[pygame.K_RIGHT]:
-        action = np.array([-10.0], dtype=np.float32)
+        action = np.array([-5.0], dtype=np.float32)
     elif keys[pygame.K_LEFT]:
-        action = np.array([10.0], dtype=np.float32)
+        action = np.array([5.0], dtype=np.float32)
     
     # Check for other events (like quitting or resetting)
     for event in pygame.event.get():

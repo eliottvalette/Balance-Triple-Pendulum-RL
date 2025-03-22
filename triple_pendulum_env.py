@@ -13,7 +13,7 @@ class TriplePendulumEnv(gym.Env):
     """
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, render_mode=None):
+    def __init__(self, render_mode=None, test_mode = False):
         super(TriplePendulumEnv, self).__init__()
 
         # -----------------------
@@ -23,8 +23,9 @@ class TriplePendulumEnv(gym.Env):
         self.mass_cart = 1.0
         self.mass_pend = 0.1   # mass of each pendulum link
         self.length = 0.5      # length of each pendulum link
-        self.cart_friction = 0.0
-        self.pend_friction = 0.0
+        self.cart_friction = 0.5  # Increased friction for more realistic movement
+        self.pend_friction = 0.1  # Increased pendulum friction
+        self.air_resistance = 0.1  # New parameter for air resistance
 
         # Maximum force magnitude the agent can apply
         self.force_mag = 10.0
@@ -71,20 +72,36 @@ class TriplePendulumEnv(gym.Env):
         self.screen_height = 600
         self.cart_y_pos = 300   # y-position of cart in the rendered view
         self.pixels_per_meter = 100
+        
+        # Font for metrics display
+        self.font = None
+        self.test_mode = test_mode
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        # Small random initial angles near upright
-        self.state = np.array([
-            0.0,                        # cart x
-            0.0,                        # cart velocity
-            np.random.uniform(-3, 3),   # theta1
-            0.2,                            # theta_dot1
-            np.random.uniform(-3, 3),   # theta2
-            0.2,                            # theta_dot2
-            np.random.uniform(-3, 3),   # theta3
-            0.2                             # theta_dot3
-        ], dtype=np.float32)
+        if self.test_mode:
+            self.state = np.array([
+                0.0,                        # cart x
+                0.0,                        # cart velocity
+                0.0,                        # theta1
+                0.0,                        # theta_dot1
+                0.0,                        # theta2
+                0.0,                        # theta_dot2
+                0.0,                        # theta3
+                0.0                         # theta_dot3
+            ])
+        else:
+            # Small random initial angles near upright
+            self.state = np.array([
+                0.0,                        # cart x
+                0.0,                        # cart velocity
+                np.random.uniform(-3, 3),   # theta1
+                0.2,                        # theta_dot1
+                np.random.uniform(-3, 3),   # theta2
+                0.2,                        # theta_dot2
+                np.random.uniform(-3, 3),   # theta3
+                0.2                         # theta_dot3
+            ], dtype=np.float32)
 
         if self.render_mode == "human":
             self._render_init()
@@ -97,77 +114,84 @@ class TriplePendulumEnv(gym.Env):
         force = np.clip(action[0], -self.force_mag, self.force_mag)
 
         # -------------
-        # Equations of motion (simplified)
+        # Equations of motion (improved physics)
         # -------------
         sin1, cos1 = math.sin(th1), math.cos(th1)
         sin2, cos2 = math.sin(th2), math.cos(th2)
         sin3, cos3 = math.sin(th3), math.cos(th3)
 
-        # Effective mass for the cart (sum of cart mass + projection of pendulums)
+        # Calculate total mass and moments of inertia
         total_mass = self.mass_cart + 3 * self.mass_pend
+        I1 = self.mass_pend * (self.length**2)
+        I2 = self.mass_pend * (self.length**2)
+        I3 = self.mass_pend * (self.length**2)
 
-        # Torques on each pendulum due to gravity
+        # Calculate gravitational torques
         torque1 = -self.mass_pend * self.gravity * self.length * sin1
         torque2 = -self.mass_pend * self.gravity * self.length * sin2
         torque3 = -self.mass_pend * self.gravity * self.length * sin3
 
-        # Angular accelerations (assuming each link is pinned at the top)
-        # This is an approximation that doesn't consider link-to-link coupling properly.
-        alpha1 = torque1 / (self.mass_pend * (self.length**2))
-        alpha2 = torque2 / (self.mass_pend * (self.length**2))
-        alpha3 = torque3 / (self.mass_pend * (self.length**2))
+        # Calculate coupling forces between links
+        coupling_force1 = self.mass_pend * self.length * (th1_dot**2 * sin1)
+        coupling_force2 = self.mass_pend * self.length * (th2_dot**2 * sin2)
+        coupling_force3 = self.mass_pend * self.length * (th3_dot**2 * sin3)
 
-        # Coupled effect on the cart from pendulums
-        # For a more realistic approach, you'd sum up the horizontal components of
-        # each pendulum’s acceleration.  We'll do a rough approach:
-        horizontal_force_pend1 = self.mass_pend * self.length * (th1_dot**2 * sin1 + alpha1 * cos1)
-        horizontal_force_pend2 = self.mass_pend * self.length * (th2_dot**2 * sin2 + alpha2 * cos2)
-        horizontal_force_pend3 = self.mass_pend * self.length * (th3_dot**2 * sin3 + alpha3 * cos3)
-        net_pendulum_force = horizontal_force_pend1 + horizontal_force_pend2 + horizontal_force_pend3
+        # Calculate total horizontal force on cart
+        horizontal_force = (coupling_force1 + coupling_force2 + coupling_force3) * cos1
 
-        # Net force on the cart
-        net_force_on_cart = force + net_pendulum_force - self.cart_friction * x_dot
+        # Calculate resistive forces
+        friction_force = -self.cart_friction * np.sign(x_dot) * (1 - np.exp(-abs(x_dot)))
+        air_resistance_force = -self.air_resistance * x_dot * abs(x_dot)
 
-        # Cart acceleration
-        x_ddot = net_force_on_cart / total_mass
+        # Net force on cart
+        net_force = force + horizontal_force + friction_force + air_resistance_force
 
-        # Pendulum friction (very simplified)
-        alpha1 -= self.pend_friction * th1_dot
-        alpha2 -= self.pend_friction * th2_dot
-        alpha3 -= self.pend_friction * th3_dot
+        # Cart acceleration with momentum consideration
+        x_ddot = net_force / total_mass
+
+        # Angular accelerations with improved coupling
+        alpha1 = (torque1 - self.pend_friction * th1_dot) / I1
+        alpha2 = (torque2 - self.pend_friction * th2_dot) / I2
+        alpha3 = (torque3 - self.pend_friction * th3_dot) / I3
 
         # ----------------------
-        # Integrate forward
+        # Integrate forward with improved stability
         # ----------------------
-        x       = x       + self.tau * x_dot
-        x_dot   = x_dot   + self.tau * x_ddot
-        th1     = th1     + self.tau * th1_dot
-        th1_dot = th1_dot + self.tau * alpha1
-        th2     = th2     + self.tau * th2_dot
-        th2_dot = th2_dot + self.tau * alpha2
-        th3     = th3     + self.tau * th3_dot
-        th3_dot = th3_dot + self.tau * alpha3
+        # Use semi-implicit Euler integration for better stability
+        x_dot_new = x_dot + self.tau * x_ddot
+        x_new = x + self.tau * x_dot_new
+        
+        th1_dot_new = th1_dot + self.tau * alpha1
+        th1_new = th1 + self.tau * th1_dot_new
+        
+        th2_dot_new = th2_dot + self.tau * alpha2
+        th2_new = th2 + self.tau * th2_dot_new
+        
+        th3_dot_new = th3_dot + self.tau * alpha3
+        th3_new = th3 + self.tau * th3_dot_new
 
-        self.state = (x, x_dot, th1, th1_dot, th2, th2_dot, th3, th3_dot)
+        # Update state
+        self.state = (x_new, x_dot_new, th1_new, th1_dot_new, 
+                     th2_new, th2_dot_new, th3_new, th3_dot_new)
 
         # ----------------------
         # Check termination
         # ----------------------
         terminated = bool(
-            abs(x) > self.x_threshold
+            abs(x_new) > self.x_threshold
         )
         
         # ----------------------
         # Calculate reward
         # ----------------------
         # Reward for keeping angles near 0 (upright)
-        # Also small penalty for cart displacement
-        upright_reward = 3.0 - (abs(th1) + abs(th2) + abs(th3))
-        cart_penalty = 0.05 * abs(x)
-        reward = float(upright_reward - cart_penalty)
+        # Also small penalty for cart displacement and high velocities
+        upright_reward = 3.0 - (abs(th1_new) + abs(th2_new) + abs(th3_new))
+        cart_penalty = 0.05 * abs(x_new)
+        velocity_penalty = 0.01 * abs(x_dot_new)
+        reward = float(upright_reward - cart_penalty - velocity_penalty)
 
         if terminated:
-            # If the episode ends early, penalty can be added
             reward -= 5.0
 
         return np.array(self.state, dtype=np.float32), reward, terminated, False, {}
@@ -183,7 +207,7 @@ class TriplePendulumEnv(gym.Env):
         self.screen.fill((255, 255, 255))
 
         # Current state
-        x, _, th1, _, th2, _, th3, _ = self.state
+        x, x_dot, th1, th1_dot, th2, th2_dot, th3, th3_dot = self.state
 
         # Convert cart x (meters) to pixels
         cart_x_px = int(self.screen_width / 2 + x * self.pixels_per_meter)
@@ -201,28 +225,45 @@ class TriplePendulumEnv(gym.Env):
 
         # Helper function to draw each link
         def draw_link(origin_x, origin_y, angle, color):
-            # Convert from upright reference
-            # End of the pendulum link
             end_x = origin_x + self.length * self.pixels_per_meter * math.sin(angle)
             end_y = origin_y + self.length * self.pixels_per_meter * math.cos(angle)
             pygame.draw.line(
-                surface= self.screen,
-                color = color,
-                start_pos = (origin_x, origin_y),
-                end_pos = (end_x, end_y),
-                width = 3
+                surface=self.screen,
+                color=color,
+                start_pos=(origin_x, origin_y),
+                end_pos=(end_x, end_y),
+                width=3
             )
             return end_x, end_y
 
-        # First link pivot is at the cart center (top)
+        # Draw pendulum links
         pivot1_x, pivot1_y = cart_x_px, cart_y_px - cart_h//2
         end1_x, end1_y = draw_link(pivot1_x, pivot1_y, th1, (255, 0, 0))
-
-        # Second link pivot is at the end of link 1
         end2_x, end2_y = draw_link(end1_x, end1_y, th2, (0, 255, 0))
-
-        # Third link pivot is at the end of link 2
         end3_x, end3_y = draw_link(end2_x, end2_y, th3, (0, 0, 255))
+
+        # Display metrics
+        if self.font is None:
+            self.font = pygame.font.Font(None, 24)
+
+        # Convert angles to degrees for display
+        th1_deg = math.degrees(th1)
+        th2_deg = math.degrees(th2)
+        th3_deg = math.degrees(th3)
+
+        # Create metric texts
+        metrics = [
+            f"Cart Position: {x:.2f}m",
+            f"Cart Velocity: {x_dot:.2f}m/s",
+            f"Angle 1: {th1_deg:.1f}°",
+            f"Angle 2: {th2_deg:.1f}°",
+            f"Angle 3: {th3_deg:.1f}°"
+        ]
+
+        # Display metrics
+        for i, metric in enumerate(metrics):
+            text = self.font.render(metric, True, (0, 0, 0))
+            self.screen.blit(text, (10, 10 + i * 25))
 
         pygame.display.flip()
         self.clock.tick(50)
@@ -234,7 +275,9 @@ class TriplePendulumEnv(gym.Env):
             self.screen = None
 
     def _render_init(self):
-        pygame.init()
+        if not pygame.get_init():
+            pygame.init()
         pygame.display.set_caption("Triple Pendulum Environment")
         self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
         self.clock = pygame.time.Clock()
+        pygame.display.flip()

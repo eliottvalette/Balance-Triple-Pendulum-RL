@@ -47,8 +47,8 @@ class TriplePendulumTrainer:
             # Add exploration noise
             action = np.clip(action + np.random.normal(0, 0.1), -1, 1)
             
-            # Scale action to environment range
-            scaled_action = action * self.env.force_mag
+            # Scale action to environment range and ensure it's an array
+            scaled_action = np.array([action * self.env.force_mag])
             
             # Take step in environment
             next_state, _, done, _, _ = self.env.step(scaled_action)
@@ -66,10 +66,10 @@ class TriplePendulumTrainer:
     
     def update_networks(self, trajectory):
         states = torch.FloatTensor([t[0] for t in trajectory])
-        actions = torch.FloatTensor([t[1] for t in trajectory])
-        rewards = torch.FloatTensor([t[2] for t in trajectory])
+        actions = torch.FloatTensor([t[1] for t in trajectory]).unsqueeze(-1)
+        rewards = torch.FloatTensor([t[2] for t in trajectory]).unsqueeze(-1)
         next_states = torch.FloatTensor([t[3] for t in trajectory])
-        dones = torch.FloatTensor([t[4] for t in trajectory])
+        dones = torch.FloatTensor([t[4] for t in trajectory]).unsqueeze(-1)
         
         # Update critic
         current_q = self.critic(states, actions)

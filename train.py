@@ -11,7 +11,7 @@ import os
 class TriplePendulumTrainer:
     def __init__(self, config):
         self.config = config
-        self.env = TriplePendulumEnv(render_mode=None)
+        self.env = TriplePendulumEnv(render_mode=None)  # Disable rendering during training
         self.reward_manager = RewardManager()
         
         # Initialize models
@@ -27,6 +27,7 @@ class TriplePendulumTrainer:
         # Metrics tracking
         self.metrics = MetricsTracker()
         self.total_steps = 0
+        self.max_steps = 1000  # Maximum steps per episode
         
         # Créer le dossier pour sauvegarder les résultats
         os.makedirs('results', exist_ok=True)
@@ -38,8 +39,9 @@ class TriplePendulumTrainer:
         trajectory = []
         episode_reward = 0
         reward_components = None
+        num_steps = 0
         
-        while not done:
+        while not done and num_steps < self.max_steps:
             state_tensor = torch.FloatTensor(state).unsqueeze(0)
             with torch.no_grad():
                 action = self.actor(state_tensor).squeeze().numpy()
@@ -51,16 +53,17 @@ class TriplePendulumTrainer:
             scaled_action = np.array([action * self.env.force_mag])
             
             # Take step in environment
-            next_state, _, done, _, _ = self.env.step(scaled_action)
+            next_state, terminated = self.env.step(scaled_action)
             
             # Calculate custom reward and components
-            custom_reward = self.reward_manager.calculate_reward(next_state, done)
+            custom_reward, upright_reward, x_penalty, x_dot_penalty, non_alignement_penalty = self.reward_manager.calculate_reward(next_state, terminated)
             reward_components = self.reward_manager.get_reward_components(next_state)
             
-            trajectory.append((state, action, custom_reward, next_state, done))
+            trajectory.append((state, action, custom_reward, next_state, terminated))
             episode_reward += custom_reward
             state = next_state
             self.total_steps += 1
+            num_steps += 1
             
         return trajectory, episode_reward, reward_components
     
@@ -95,6 +98,7 @@ class TriplePendulumTrainer:
     
     def train(self):
         for episode in range(self.config['num_episodes']):
+            print(f"Episode {episode} started")
             # Collect trajectory and update networks
             trajectory, episode_reward, reward_components = self.collect_trajectory()
             losses = self.update_networks(trajectory)
@@ -114,10 +118,28 @@ class TriplePendulumTrainer:
                 print(f"Episode {episode}, Avg Reward: {avg_reward:.2f}")
                 
                 # Sauvegarder les graphiques
-                self.metrics.plot_metrics(f'results/metrics_episode_{episode}.png')
+                self.metrics.plot_metrics(f'results/metrics.png')
                 
                 # Sauvegarder le modèle
                 self.save_models(f"models/checkpoint_{episode}")
+                
+                # Render one episode at 30 FPS
+                self.env.render_mode = "human"
+                state, _ = self.env.reset()
+                done = False
+                num_steps = 0
+                while not done:
+                    state_tensor = torch.FloatTensor(state).unsqueeze(0)
+                    with torch.no_grad():
+                        action = self.actor(state_tensor).squeeze().numpy()
+                    scaled_action = np.array([action * self.env.force_mag])
+                    state, terminated = self.env.step(scaled_action)
+                    self.env.render()
+                    self.env.clock.tick(30)  # Limit to 30 FPS
+                    num_steps += 1
+                    if num_steps >= self.max_steps or terminated:
+                        done = True
+                self.env.render_mode = None  # Turn off rendering
     
     def save_models(self, path):
         torch.save({

@@ -2,7 +2,7 @@ import numpy as np
 import random as rd
 class RewardManager:
     def __init__(self):
-        self.cart_position_weight = 0.01
+        self.cart_position_weight = 3
         self.termination_penalty = 10.0
         self.alignement_weight = 0.01
         self.upright_weight = 1.0

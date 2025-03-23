@@ -107,7 +107,7 @@ class TriplePendulumTrainer:
             scaled_action = np.array([action * self.env.force_mag])
             
             # Take step in environment
-            next_state, terminated = self.env.step(scaled_action)
+            next_state, reward, terminated, info = self.env.step(scaled_action)
             
             # Render if rendering is enabled
             if self.env.render_mode == "human":
@@ -131,6 +131,9 @@ class TriplePendulumTrainer:
             state = next_state
             self.total_steps += 1
             num_steps += 1
+
+            if terminated:
+                break
             
         # Decay exploration parameters
         self.noise_scale = max(self.min_noise, self.noise_scale * self.noise_decay)
@@ -242,17 +245,17 @@ class TriplePendulumTrainer:
     def load_models(self):
         if os.path.exists('models/checkpoint_actor.pth'):
             print("Loading models")
-            self.actor.load_state_dict(torch.load('models/checkpoint_actor.pth'))
-            self.critic.load_state_dict(torch.load('models/checkpoint_critic.pth'))
-            self.actor_optimizer.load_state_dict(torch.load('models/checkpoint_actor_optimizer.pth'))
-            self.critic_optimizer.load_state_dict(torch.load('models/checkpoint_critic_optimizer.pth'))
+            self.actor.load_state_dict(torch.load('models/checkpoint_actor.pth', weights_only=True))
+            self.critic.load_state_dict(torch.load('models/checkpoint_critic.pth', weights_only=True))
+            self.actor_optimizer.load_state_dict(torch.load('models/checkpoint_actor_optimizer.pth', weights_only=True))
+            self.critic_optimizer.load_state_dict(torch.load('models/checkpoint_critic_optimizer.pth', weights_only=True))
 
 if __name__ == "__main__":
     config = {
         'num_episodes': 2000,
         'actor_lr': 3e-4,
         'critic_lr': 3e-4,
-        'gamma': 0.99,
+        'gamma': 1.01,
         'batch_size': 64,
         'hidden_dim': 256,
         'buffer_capacity': 100000,

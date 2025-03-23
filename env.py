@@ -19,7 +19,7 @@ class TriplePendulumEnv(gym.Env):
         # -----------------------
         # Environment parameters
         # -----------------------
-        self.gravity = 9.8
+        self.gravity = 2.0
         self.mass_cart = 1.0
         self.mass_pend1 = 0.1  # Mass of first pendulum
         self.mass_pend2 = 0.1  # Mass of second pendulum
@@ -346,9 +346,13 @@ class TriplePendulumEnv(gym.Env):
             self.state[12:18] = np.array([p1_x, p1_y, p2_x, p2_y, p3_x, p3_y])
         
         # Only terminate if velocity exceeds threshold
-        terminated = bool(abs(x_dot_new) > self.x_dot_threshold)
+        terminated = bool(abs(x_dot_new) > self.x_dot_threshold or abs(x_new) >= 3)
         
-        return np.array(self.state, dtype=np.float32), terminated
+        # Calculate the reward
+        reward = self.calculate_reward()
+        
+        # Return observation, reward, terminated, and info dictionary
+        return np.array(self.state, dtype=np.float32), reward, terminated, {}
 
     def calculate_reward(self):
         """Calculate the reward based on the current state"""

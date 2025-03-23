@@ -80,10 +80,11 @@ while True:
                 print(env.state)
     
     obs, terminated = env.step(action)
+    rich_obs = env.get_rich_state(obs)
     
     # Calculate and display reward
-    reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty = reward_manager.calculate_reward(obs, terminated, 0)
-    reward_components = reward_manager.get_reward_components(obs, 0)
+    reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty = reward_manager.calculate_reward(rich_obs, terminated, 0)
+    reward_components = reward_manager.get_reward_components(rich_obs, 0)
     
     # Update the environment's display with reward information
     env.current_reward = reward

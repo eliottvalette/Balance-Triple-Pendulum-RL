@@ -5,7 +5,7 @@ class RewardManager:
         self.cart_position_weight = 1
         self.termination_penalty = 10.0
         self.alignement_weight = 0.1
-        self.upright_weight = 1.0
+        self.upright_weight = 2.0
         self.stability_weight = 0.02  # Weight for the stability reward
         self.old_state = None
         self.length = 0.5  # Pendulum length
@@ -25,19 +25,13 @@ class RewardManager:
         """
         # Extract state components
         x, x_dot, x_ddot = state[0:3]  # Cart state
-        th1, th1_dot, th1_ddot = state[3:6]  # First pendulum
-        th2, th2_dot, th2_ddot = state[6:9]  # Second pendulum
-        th3, th3_dot, th3_ddot = state[9:12]  # Third pendulum
-        
-        # Calculate pendulum positions (these were previously in the state)
-        p1_x = x + self.length * np.sin(th1)
-        p1_y = -self.length * np.cos(th1)
-        p2_x = p1_x + self.length * np.sin(th2)
-        p2_y = p1_y + self.length * np.cos(th2)
-        p3_x = p2_x + self.length * np.sin(th3)
-        p3_y = p2_y + self.length * np.cos(th3)
-        
-        self.old_state = state
+        th1, th1_dot, th1_ddot = state[3:6]  # First pendulum angles and derivatives
+        th2, th2_dot, th2_ddot = state[6:9]  # Second pendulum angles and derivatives
+        th3, th3_dot, th3_ddot = state[9:12] # Third pendulum angles and derivatives
+        pivot1_x, pivot1_y = state[12:14]    # First pivot position
+        end1_x, end1_y = state[14:16]        # First end position
+        end2_x, end2_y = state[16:18]        # Second end position
+        end3_x, end3_y = state[18:20]        # Third end position
         
         # x close to 0
         x_penalty = self.cart_position_weight * (abs(x))
@@ -48,7 +42,7 @@ class RewardManager:
         # Uprightness of each node - negate p*_y values because in the physics simulation,
         # negative y means upward (which is what we want to reward)
         # The physics uses a reference frame where positive y is downward
-        upright_reward = self.upright_weight * (-p1_y - p2_y - p3_y)
+        upright_reward = self.upright_weight * (2.25 -end1_y - end2_y - end3_y)
 
         # Stability reward: penalize high angular velocities and accelerations
         angular_velocity_penalty = (th1_dot**2 + th2_dot**2 + th3_dot**2) / 3.0

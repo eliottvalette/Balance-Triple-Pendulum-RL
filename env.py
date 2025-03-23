@@ -344,6 +344,12 @@ class TriplePendulumEnv(gym.Env):
         end2_x, end2_y = calculate_following_node(end1_x, end1_y, th2)
         end3_x, end3_y = calculate_following_node(end2_x, end2_y, th3)
 
+        # normalize points to be between 0 and 1
+        pivot1_x, pivot1_y = pivot1_x / self.screen_width, pivot1_y / self.screen_height
+        end1_x, end1_y = end1_x / self.screen_width, end1_y / self.screen_height
+        end2_x, end2_y = end2_x / self.screen_width, end2_y / self.screen_height
+        end3_x, end3_y = end3_x / self.screen_width, end3_y / self.screen_height
+
         # Add to rich state
         rich_state = state
         rich_state = np.concatenate([rich_state, [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y]])

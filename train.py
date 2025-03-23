@@ -107,7 +107,7 @@ class TriplePendulumTrainer:
             scaled_action = np.array([action * self.env.force_mag])
             
             # Take step in environment
-            next_state, reward, terminated, info = self.env.step(scaled_action)
+            next_state, terminated = self.env.step(scaled_action)
             
             # Render if rendering is enabled
             if self.env.render_mode == "human":
@@ -117,8 +117,8 @@ class TriplePendulumTrainer:
                     self.env.clock.tick(60)
             
             # Calculate custom reward and components
-            custom_reward, upright_reward, x_penalty, non_alignement_penalty = self.reward_manager.calculate_reward(next_state, terminated)
-            reward_components = self.reward_manager.get_reward_components(next_state)
+            custom_reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty = self.reward_manager.calculate_reward(next_state, terminated, num_steps)
+            reward_components = self.reward_manager.get_reward_components(next_state, num_steps)
             
             # Normalize reward
             normalized_reward = self.normalize_reward(custom_reward)
@@ -252,7 +252,7 @@ class TriplePendulumTrainer:
 
 if __name__ == "__main__":
     config = {
-        'num_episodes': 2000,
+        'num_episodes': 10000,
         'actor_lr': 3e-4,
         'critic_lr': 3e-4,
         'gamma': 1.01,

@@ -317,42 +317,43 @@ class TriplePendulumEnv(gym.Env):
                 p1_x, p1_y, p2_x, p2_y, p3_x, p3_y,  # Pendulum positions
                 v1_x, v1_y, v2_x, v2_y, v3_x, v3_y  # Pendulum velocities
             ], dtype=np.float32)
+
+            # Check for NaN values in state
+            if np.isnan(np.sum(self.state)):
+                print('state:', self.state)
+                raise ValueError("Warning: NaN detected in state")
         
         # Check if cart position exceeds threshold and clip it instead of terminating
         x_new, x_dot_new = self.state[0], self.state[1]
         
-        # Clip cart position if it exceeds threshold
-        if abs(x_new) > self.x_threshold:
-            # Update x_new to be clipped at threshold
-            x_new = np.clip(x_new, -self.x_threshold, self.x_threshold)
-            
-            # Set velocity to zero at the boundary to prevent bouncing
-            if (x_new == self.x_threshold and x_dot_new > 0) or (x_new == -self.x_threshold and x_dot_new < 0):
-                x_dot_new = 0
-            
-            # Update the state with clipped position and adjusted velocity
-            self.state[0] = x_new
-            self.state[1] = x_dot_new
-            
-            # Recalculate pendulum positions with the new cart position
-            p1_x = x_new + self.length * np.sin(self.state[3])
-            p1_y = -self.length * np.cos(self.state[3])
-            p2_x = p1_x + self.length * np.sin(self.state[6])
-            p2_y = p1_y + self.length * np.cos(self.state[6])
-            p3_x = p2_x + self.length * np.sin(self.state[9])
-            p3_y = p2_y + self.length * np.cos(self.state[9])
-            
-            # Update pendulum positions in the state
-            self.state[12:18] = np.array([p1_x, p1_y, p2_x, p2_y, p3_x, p3_y])
+        # Update x_new to be clipped at threshold
+        x_new = np.clip(x_new, -self.x_threshold, self.x_threshold)
+        
+        # Set velocity to zero at the boundary to prevent bouncing
+        if (x_new == self.x_threshold and x_dot_new > 0) or (x_new == -self.x_threshold and x_dot_new < 0):
+            x_dot_new = 0
+        
+        # Update the state with clipped position and adjusted velocity
+        self.state[0] = x_new
+        self.state[1] = x_dot_new
+        
+        # Recalculate pendulum positions with the new cart position
+        p1_x = x_new + self.length * np.sin(self.state[3])
+        p1_y = -self.length * np.cos(self.state[3])
+        p2_x = p1_x + self.length * np.sin(self.state[6])
+        p2_y = p1_y + self.length * np.cos(self.state[6])
+        p3_x = p2_x + self.length * np.sin(self.state[9])
+        p3_y = p2_y + self.length * np.cos(self.state[9])
+        
+        # Update pendulum positions in the state
+        self.state[12:18] = np.array([p1_x, p1_y, p2_x, p2_y, p3_x, p3_y])
         
         # Only terminate if velocity exceeds threshold
         terminated = bool(abs(x_dot_new) > self.x_dot_threshold or abs(x_new) >= 3)
-        
-        # Calculate the reward
-        reward = self.calculate_reward()
+
         
         # Return observation, reward, terminated, and info dictionary
-        return np.array(self.state, dtype=np.float32), reward, terminated, {}
+        return np.array(self.state, dtype=np.float32), terminated
 
     def calculate_reward(self):
         """Calculate the reward based on the current state"""
@@ -587,6 +588,10 @@ class TriplePendulumEnv(gym.Env):
                 {"name": "Position", "value": self.reward_components.get('x_penalty', 0), "color": (200, 80, 80)},
                 {"name": "Alignment", "value": self.reward_components.get('non_alignement_penalty', 0), "color": (180, 130, 80)}
             ]
+            
+            # Add stability penalty if it exists
+            if 'stability_penalty' in self.reward_components:
+                reward_components.append({"name": "Stability", "value": self.reward_components.get('stability_penalty', 0), "color": (150, 80, 150)})
             
             # Add velocity penalty if it exists
             if 'x_dot_penalty' in self.reward_components:

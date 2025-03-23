@@ -73,12 +73,14 @@ while True:
             elif event.key == pygame.K_t:
                 strong_braking = not strong_braking
                 print(f"Auto-braking on direction change: {'ON' if strong_braking else 'OFF'}")
+            elif event.key == pygame.K_s: # print state
+                print(env.state)
     
     obs, terminated = env.step(action)
     
     # Calculate and display reward
-    reward, upright_reward, x_penalty, non_alignement_penalty = reward_manager.calculate_reward(obs, terminated)
-    reward_components = reward_manager.get_reward_components(obs)
+    reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty = reward_manager.calculate_reward(obs, terminated, 0)
+    reward_components = reward_manager.get_reward_components(obs, 0)
     
     # Update the environment's display with reward information
     env.current_reward = reward

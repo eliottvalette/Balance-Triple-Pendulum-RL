@@ -43,7 +43,7 @@ class MetricsTracker:
         # Plot reward components
         ax = axes[0, 2]
         reward_components = ['upright_reward', 'x_penalty', 
-                           'non_alignement_penalty']
+                           'non_alignement_penalty', 'stability_penalty']
         for component in reward_components:
             if component in self.metrics:
                 ax.plot(self.metrics[component], label=component)
@@ -61,6 +61,19 @@ class MetricsTracker:
                                        mode='valid')
                 ax.plot(moving_avg, label=f'{component} (MA)')
         ax.set_title('Moving Averages of Reward Components')
+        ax.set_xlabel('Episode')
+        ax.set_ylabel('Value')
+        ax.legend()
+        
+        # Plot stability metrics
+        ax = axes[1, 1]
+        if 'stability_penalty' in self.metrics:
+            ax.plot(self.metrics['stability_penalty'], label='Stability Penalty')
+            moving_avg = np.convolve(self.metrics['stability_penalty'], 
+                                   np.ones(self.episode_window)/self.episode_window, 
+                                   mode='valid')
+            ax.plot(moving_avg, label='Stability Penalty (MA)')
+        ax.set_title('Stability Metrics')
         ax.set_xlabel('Episode')
         ax.set_ylabel('Value')
         ax.legend()

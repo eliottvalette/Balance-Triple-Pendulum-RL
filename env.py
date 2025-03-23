@@ -75,10 +75,10 @@ class TriplePendulumEnv(gym.Env):
             np.finfo(np.float32).max       # theta3_ddot
         ], dtype=np.float32)
 
-        self.observation_space = spaces.Box(-high, high, dtype=np.float32)
+        self.observation_space = 21
 
         # Internal state
-        self.state = None
+        self.state_for_simu = None
 
         # Rendering
         self.render_mode = render_mode
@@ -97,7 +97,7 @@ class TriplePendulumEnv(gym.Env):
         self.reward_components = {}
 
     def reset(self):
-        self.state = [
+        self.state_for_simu = [
             0.0,                        # cart x
             0.0,                        # cart velocity
             0.0,                        # cart acceleration
@@ -115,7 +115,10 @@ class TriplePendulumEnv(gym.Env):
         if self.render_mode == "human":
             self._render_init()
         
-        return self.state, {}
+        # Create a copy of the state to avoid directly sharing state_for_simu
+        observation = np.array(self.state_for_simu, dtype=np.float32)
+        
+        return observation, {}
 
     def apply_constraints(self, x, th1, th2, th3):
         """Applique les contraintes de distance entre les pendules"""
@@ -163,7 +166,7 @@ class TriplePendulumEnv(gym.Env):
         force = np.clip(action[0], -self.force_mag, self.force_mag)
         
         # Store initial state
-        x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state
+        x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state_for_simu
         
         # Total system mass calculation for proper momentum conservation
         total_mass = self.mass_cart + self.mass_pend1 + self.mass_pend2 + self.mass_pend3
@@ -171,7 +174,7 @@ class TriplePendulumEnv(gym.Env):
         # Run multiple substeps for better stability
         for _ in range(self.sub_steps):
             # Unpack current state
-            x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state
+            x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state_for_simu
             
             # Calculate pendulum positions
             p1_x = x + self.length * np.sin(th1)
@@ -289,33 +292,36 @@ class TriplePendulumEnv(gym.Env):
             v3_y = v2_y + self.length * th3_dot_new * np.sin(th3_new)
             
             # Update state with all information (only 12 core variables now)
-            self.state = np.array([
+            self.state_for_simu = np.array([
                 x_new, x_dot_new, x_ddot,  # Cart state
                 th1_new, th1_dot_new, th1_ddot,  # First pendulum
                 th2_new, th2_dot_new, th2_ddot,  # Second pendulum
                 th3_new, th3_dot_new, th3_ddot   # Third pendulum
             ], dtype=np.float32)
         
-        x_new, x_dot_new = self.state[0], self.state[1]
+        x_new, x_dot_new = self.state_for_simu[0], self.state_for_simu[1]
         
         # Set velocity to zero at the boundary to prevent bouncing
         if (x_new == self.x_threshold and x_dot_new > 0) or (x_new == -self.x_threshold and x_dot_new < 0):
             x_dot_new = 0
         
         # Update the state with clipped position and adjusted velocity
-        self.state[0] = x_new
-        self.state[1] = x_dot_new
+        self.state_for_simu[0] = x_new
+        self.state_for_simu[1] = x_dot_new
 
         # Only terminate if velocity exceeds threshold
         terminated = bool(abs(x_dot_new) > self.x_dot_threshold or abs(x_new) >= 3)
 
         # Check for NaN values in state
-        if np.isnan(np.sum(self.state)):
-            print('state:', self.state)
+        if np.isnan(np.sum(self.state_for_simu)):
+            print('state:', self.state_for_simu)
             raise ValueError("Warning: NaN detected in state")
         
+        # Create a copy of the state for the observation to avoid directly sharing state_for_simu
+        observation = np.array(self.state_for_simu, dtype=np.float32)
+        
         # Return observation, reward, terminated, and info dictionary
-        return np.array(self.state, dtype=np.float32), terminated
+        return observation, terminated
 
     def get_rich_state(self, state):
         """
@@ -325,9 +331,12 @@ class TriplePendulumEnv(gym.Env):
             dict: A dictionary containing all relevant state variables and their values.
         """
 
+        # Create a copy of the state to avoid modifying state_for_simu
+        processed_state = np.array(state, dtype=np.float32)
+
         # Extract relevant state variables
-        x, x_dot = state[0], state[1]
-        th1, th2, th3 = state[3], state[6], state[9]
+        x, x_dot = processed_state[0], processed_state[1]
+        th1, th2, th3 = processed_state[3], processed_state[6], processed_state[9]
 
         cart_x_px = int(self.screen_width / 2 + x * self.pixels_per_meter)
         cart_y_px = int(self.cart_y_pos)
@@ -350,48 +359,13 @@ class TriplePendulumEnv(gym.Env):
         end2_x, end2_y = end2_x / self.screen_width, end2_y / self.screen_height
         end3_x, end3_y = end3_x / self.screen_width, end3_y / self.screen_height
 
-        # Add to rich state
-        rich_state = state
-        rich_state = np.concatenate([rich_state, [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y]])
+        # Create model-ready state (only include necessary information)
+        model_state = np.concatenate([
+            processed_state[:12],  # Original 12 state variables
+            [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y]  # Additional visual information
+        ])
 
-        return rich_state
-    
-    def calculate_reward(self):
-        """Calculate the reward based on the current state"""
-        # Extract relevant state variables
-        x, x_dot = self.state[0], self.state[1]
-        th1, th2, th3 = self.state[3], self.state[6], self.state[9]
-        
-        # Basic reward for staying alive
-        reward = 1.0
-        
-        # Penalty for cart distance from center
-        x_penalty = -0.1 * abs(x)
-        
-        # Penalty for cart velocity
-        x_dot_penalty = -0.1 * abs(x_dot)
-        
-        # Reward for keeping pendulums upright (pi is upright)
-        # Use cosine to make it smooth - closer to upright = higher reward
-        upright_reward = 3.0 * (np.cos(th1 - np.pi) + np.cos(th2 - np.pi) + np.cos(th3 - np.pi)) / 3.0
-        
-        # Penalty for non-alignment of the pendulums (they should all point in same direction)
-        non_alignement_penalty = -0.5 * (abs(th1 - th2) + abs(th2 - th3)) 
-        
-        # Total reward
-        total_reward = reward + x_penalty + x_dot_penalty + upright_reward + non_alignement_penalty
-        
-        # Store reward components for visualization
-        self.current_reward = total_reward
-        self.reward_components = {
-            "reward": reward,
-            "x_penalty": x_penalty,
-            "x_dot_penalty": x_dot_penalty, 
-            "upright_reward": upright_reward,
-            "non_alignement_penalty": non_alignement_penalty
-        }
-        
-        return total_reward
+        return model_state
 
     def render(self):
         if self.render_mode != "human":
@@ -445,7 +419,7 @@ class TriplePendulumEnv(gym.Env):
         )
 
         # Current state
-        x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state
+        x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state_for_simu
 
         # Convert cart x (meters) to pixels
         cart_x_px = int(self.screen_width / 2 + x * self.pixels_per_meter)
@@ -702,9 +676,9 @@ class TriplePendulumEnv(gym.Env):
         """
         Apply more physically realistic emergency brake to the cart
         """
-        if self.state is not None:
+        if self.state_for_simu is not None:
             # Get current velocity
-            current_velocity = self.state[1]
+            current_velocity = self.state_for_simu[1]
             
             # Apply strong braking force but preserve momentum physics
             if abs(current_velocity) > 0.01:

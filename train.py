@@ -32,8 +32,9 @@ class TriplePendulumTrainer:
         self.reward_manager = RewardManager()
         
         # Initialize models
-        state_dim = self.env.observation_space.shape[0]
-        action_dim = self.env.action_space.shape[0]
+        # Original state dimension is 12 (basic state) + 8 (visual information)
+        state_dim = 20
+        action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim)
         self.critic = TriplePendulumCritic(state_dim, action_dim)
         
@@ -84,6 +85,7 @@ class TriplePendulumTrainer:
 
     def collect_trajectory(self):
         state, _ = self.env.reset()
+        rich_state = self.env.get_rich_state(state)
         done = False
         trajectory = []
         episode_reward = 0
@@ -91,7 +93,7 @@ class TriplePendulumTrainer:
         num_steps = 0
         
         while not done and num_steps < self.max_steps:
-            state_tensor = torch.FloatTensor(state).unsqueeze(0)
+            state_tensor = torch.FloatTensor(rich_state).unsqueeze(0)
             
             # Epsilon-greedy exploration
             if np.random.random() < self.epsilon:
@@ -130,11 +132,11 @@ class TriplePendulumTrainer:
             normalized_reward = self.normalize_reward(custom_reward)
             
             # Store transition in replay buffer with normalized reward
-            self.memory.push(state, action, normalized_reward, next_rich_state, terminated)
+            self.memory.push(rich_state, action, normalized_reward, next_rich_state, terminated)
             
-            trajectory.append((state, action, custom_reward, next_rich_state, terminated))
+            trajectory.append((rich_state, action, custom_reward, next_rich_state, terminated))
             episode_reward += custom_reward
-            state = next_rich_state
+            rich_state = next_rich_state
             self.total_steps += 1
             num_steps += 1
 

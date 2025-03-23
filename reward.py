@@ -16,8 +16,9 @@ class RewardManager:
         
         Args:
             state (tuple): A tuple containing:
-                - Cart state: x, x_dot, x_ddot
-                - Pendulum states: th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot
+                - Cart state: x, x_dot, x_ddot (indices 0-2)
+                - Pendulum states: th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot (indices 3-11)
+                - Pendulum node positions: pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y (indices 12-19)
             terminated (bool): Whether the episode has terminated due to constraints violation
         
         Returns:

@@ -77,7 +77,7 @@ while True:
                 strong_braking = not strong_braking
                 print(f"Auto-braking on direction change: {'ON' if strong_braking else 'OFF'}")
             elif event.key == pygame.K_s: # print state
-                print(env.state)
+                print(env.state_for_simu)  # Print the observation instead of internal state
     
     obs, terminated = env.step(action)
     rich_obs = env.get_rich_state(obs)

@@ -502,20 +502,44 @@ class TriplePendulumEnv(gym.Env):
         pygame.draw.circle(self.screen, (30, 30, 30), (int(end3_x), int(end3_y)), 7)
         pygame.draw.circle(self.screen, (90, 90, 100), (int(end3_x), int(end3_y)), 5)
 
-        # Draw info panel background
+        # Draw info panel background (left panel for metrics)
         panel_width = 240
-        panel_height = 250
+        panel_height = 220
         panel_x = 10
         panel_y = 10
         panel_rect = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
         pygame.draw.rect(self.screen, (230, 230, 235), panel_rect, border_radius=10)
         pygame.draw.rect(self.screen, (200, 200, 205), panel_rect, border_radius=10, width=2)
         
+        # Draw reward panel at top right if we have reward components
+        if self.reward_components:
+            reward_panel_width = 300
+            reward_panel_height = 180
+            reward_panel_x = self.screen_width - reward_panel_width - 10
+            reward_panel_y = 10
+            reward_panel_rect = pygame.Rect(reward_panel_x, reward_panel_y, reward_panel_width, reward_panel_height)
+            pygame.draw.rect(self.screen, (230, 230, 235), reward_panel_rect, border_radius=10)
+            pygame.draw.rect(self.screen, (200, 200, 205), reward_panel_rect, border_radius=10, width=2)
+            
+            # Title for reward panel
+            reward_title_font = pygame.font.Font(None, 28)
+            reward_title = reward_title_font.render("Reward Components", True, (60, 60, 70))
+            self.screen.blit(reward_title, (reward_panel_x + 10, reward_panel_y + 10))
+            
+            # Separator for reward panel
+            pygame.draw.line(
+                self.screen, 
+                (200, 200, 205), 
+                (reward_panel_x + 10, reward_panel_y + 40), 
+                (reward_panel_x + reward_panel_width - 10, reward_panel_y + 40), 
+                2
+            )
+        
         # Initialize font if not done yet
         if self.font is None:
             self.font = pygame.font.Font(None, 24)
         
-        # Title for the panel
+        # Title for the metrics panel
         title_font = pygame.font.Font(None, 28)
         title = title_font.render("Triple Pendulum", True, (60, 60, 70))
         self.screen.blit(title, (panel_x + 10, panel_y + 10))
@@ -543,9 +567,9 @@ class TriplePendulumEnv(gym.Env):
             {"text": f"Angle 3: {th3_deg:.1f}°", "color": PENDULUM3_COLOR},
         ]
         
-        # Draw reward information in a separate section
+        # Add total reward to metrics panel
         if self.reward_components:
-            metrics.append({"text": f"Reward: {self.current_reward:.2f}", "color": (80, 80, 200)})
+            metrics.append({"text": f"Total Reward: {self.current_reward:.2f}", "color": (80, 80, 200)})
             # Visualize reward components with bars
             reward_components = [
                 {"name": "Base", "value": self.reward_components.get('reward', 0), "color": (100, 100, 200)},
@@ -553,8 +577,12 @@ class TriplePendulumEnv(gym.Env):
                 {"name": "Position", "value": self.reward_components.get('x_penalty', 0), "color": (200, 80, 80)},
                 {"name": "Alignment", "value": self.reward_components.get('non_alignement_penalty', 0), "color": (180, 130, 80)}
             ]
+            
+            # Add velocity penalty if it exists
+            if 'x_dot_penalty' in self.reward_components:
+                reward_components.append({"name": "Velocity", "value": self.reward_components.get('x_dot_penalty', 0), "color": (180, 80, 180)})
 
-        # Display metrics
+        # Display metrics in left panel
         for i, metric in enumerate(metrics):
             text = self.font.render(metric["text"], True, metric["color"])
             self.screen.blit(text, (panel_x + 15, panel_y + 50 + i * 25))
@@ -566,30 +594,25 @@ class TriplePendulumEnv(gym.Env):
         controls_x = (self.screen_width - controls.get_width()) // 2
         self.screen.blit(controls, (controls_x, controls_y))
 
-        # Draw reward component bars if we have reward information
+        # Draw reward component bars in the right panel if we have reward information
         if self.reward_components:
-            bar_y = panel_y + 50 + len(metrics) * 25 + 10
-            bar_width = panel_width - 30
-            bar_height = 12
-            bar_spacing = 20
-            
-            # Draw title for reward components
-            comp_title = self.font.render("Reward Components:", True, TEXT_COLOR)
-            self.screen.blit(comp_title, (panel_x + 15, bar_y))
-            bar_y += 25
+            bar_y = reward_panel_y + 50
+            bar_width = reward_panel_width - 40
+            bar_height = 16
+            bar_spacing = 28
             
             max_bar_value = 3.0  # Scale for visualization
             
             for comp in reward_components:
                 name_text = self.font.render(comp["name"], True, TEXT_COLOR)
-                self.screen.blit(name_text, (panel_x + 15, bar_y))
+                self.screen.blit(name_text, (reward_panel_x + 15, bar_y))
                 
                 # Background bar
                 pygame.draw.rect(
                     self.screen,
                     (220, 220, 225),
-                    pygame.Rect(panel_x + 80, bar_y + 5, bar_width - 80, bar_height),
-                    border_radius=3
+                    pygame.Rect(reward_panel_x + 100, bar_y + 5, bar_width - 130, bar_height),
+                    border_radius=4
                 )
                 
                 # Value bar (handle negative values)
@@ -598,11 +621,11 @@ class TriplePendulumEnv(gym.Env):
                 
                 if value != 0:
                     if value > 0:
-                        bar_length = min(value / max_bar_value * (bar_width - 80), bar_width - 80)
-                        bar_x = panel_x + 80
+                        bar_length = min(value / max_bar_value * (bar_width - 130), bar_width - 130)
+                        bar_x = reward_panel_x + 100
                     else:
-                        bar_length = min(abs(value) / max_bar_value * (bar_width - 80), bar_width - 80)
-                        bar_x = panel_x + 80 - bar_length
+                        bar_length = min(abs(value) / max_bar_value * (bar_width - 130), bar_width - 130)
+                        bar_x = reward_panel_x + 100 - bar_length
                         bar_color = (200, 90, 90)  # Red for negative values
                     
                     # Ensure bar_length is always a valid number and at least 1 pixel
@@ -612,12 +635,12 @@ class TriplePendulumEnv(gym.Env):
                         self.screen,
                         bar_color,
                         pygame.Rect(int(bar_x), int(bar_y + 5), bar_length, bar_height),
-                        border_radius=3
+                        border_radius=4
                     )
                 
                 # Value text
                 value_text = self.font.render(f"{value:.2f}", True, TEXT_COLOR)
-                self.screen.blit(value_text, (panel_x + bar_width - 30, bar_y))
+                self.screen.blit(value_text, (reward_panel_x + bar_width - 30, bar_y + 5))
                 
                 bar_y += bar_spacing
 

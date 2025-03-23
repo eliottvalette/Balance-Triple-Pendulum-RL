@@ -18,24 +18,38 @@ force_magnitude = 5.0
 # Whether to apply stronger braking when direction changes
 strong_braking = True
 
+# Font for instructions
+pygame.font.init()
+font = pygame.font.Font(None, 24)
+
+# Initialize action with zero force
+action = np.array([0.0], dtype=np.float32)
+
 # Run a small loop to see it in action
 while True:
     # Get the current state of all keyboard buttons
     keys = pygame.key.get_pressed()
     
-    # Initialize action with zero force
-    action = np.array([0.0], dtype=np.float32)
+    # Get current state for velocity information
+    action = action * 0.9
     
     # Check for held keys and apply appropriate force
     if keys[pygame.K_RIGHT]:
         action = np.array([-force_magnitude], dtype=np.float32)
         last_direction = -1
+
     elif keys[pygame.K_LEFT]:
         action = np.array([force_magnitude], dtype=np.float32)
         last_direction = 1
+
     # Apply braking when B is held down
     elif keys[pygame.K_b]:
         action = env.apply_brake()
+        env.state[1] = 0.0  # Directly zero out velocity
+    # Apply full stop when S is held down
+    elif keys[pygame.K_s]:
+        action = np.array([0.0], dtype=np.float32)
+        env.state[1] = 0.0  # Directly zero out velocity
     else:
         # When no key is pressed, reset direction
         last_direction = 0
@@ -58,17 +72,7 @@ while True:
             # Toggle momentum stopping when T is pressed
             elif event.key == pygame.K_t:
                 strong_braking = not strong_braking
-                print(f"Momentum stopping on direction change: {'ON' if strong_braking else 'OFF'}")
-    
-    # Get current state for velocity information
-    current_x_vel = obs[1] if len(obs) > 1 else 0
-    
-    # If braking is enabled and we're changing direction with momentum
-    if strong_braking and current_x_vel != 0:
-        # Check if we're trying to move against current momentum
-        if (current_x_vel > 0 and last_direction == -1) or (current_x_vel < 0 and last_direction == 1):
-            # Apply additional braking force to counter momentum
-            action = env.apply_brake()
+                print(f"Auto-braking on direction change: {'ON' if strong_braking else 'OFF'}")
     
     obs, terminated = env.step(action)
     
@@ -80,7 +84,9 @@ while True:
     env.current_reward = reward
     env.reward_components = reward_components
     
+    # Render the environment
     env.render()
+    
     if terminated:
         obs, info = env.reset()
 

@@ -2,7 +2,7 @@ import numpy as np
 
 class RewardManager:
     def __init__(self):
-        self.cart_position_weight = 0.5
+        self.cart_position_weight = 0.01
         self.velocity_weight = 0.05
         self.termination_penalty = 10.0
         self.alignement_weight = 0.2

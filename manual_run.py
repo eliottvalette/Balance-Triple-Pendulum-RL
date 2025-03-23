@@ -35,11 +35,11 @@ while True:
     
     # Check for held keys and apply appropriate force
     if keys[pygame.K_RIGHT]:
-        action = np.array([-force_magnitude], dtype=np.float32)
+        action = np.array([force_magnitude], dtype=np.float32)
         last_direction = -1
 
     elif keys[pygame.K_LEFT]:
-        action = np.array([force_magnitude], dtype=np.float32)
+        action = np.array([-force_magnitude], dtype=np.float32)
         last_direction = 1
 
     # Apply braking when B is held down

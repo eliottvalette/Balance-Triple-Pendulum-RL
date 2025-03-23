@@ -151,6 +151,8 @@ class TriplePendulumTrainer:
         critic_loss = F.mse_loss(current_q, target_q)
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+        # Add gradient clipping for critic
+        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=1.0)
         self.critic_optimizer.step()
         
         # Update actor - we want to maximize the critic output (Q-value)
@@ -159,6 +161,8 @@ class TriplePendulumTrainer:
         actor_loss = -self.critic(states, self.actor(states)).mean()
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+        # Add gradient clipping for actor
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
         self.actor_optimizer.step()
         
         return {
@@ -237,7 +241,7 @@ if __name__ == "__main__":
         'num_episodes': 10000,
         'actor_lr': 3e-4,
         'critic_lr': 3e-4,
-        'gamma': 1.01,
+        'gamma': 0.99,
         'batch_size': 64,
         'hidden_dim': 256,
         'buffer_capacity': 100000,

@@ -19,9 +19,11 @@ class TriplePendulumEnv(gym.Env):
         # -----------------------
         # Environment parameters
         # -----------------------
-        self.gravity = 1.0 # 9.8
+        self.gravity = 9.8
         self.mass_cart = 1.0
-        self.mass_pend = 0.1
+        self.mass_pend1 = 0.1  # Mass of first pendulum
+        self.mass_pend2 = 0.1  # Mass of second pendulum
+        self.mass_pend3 = 0.1  # Mass of third pendulum
         self.length = 0.5
         self.cart_friction = 0.5
         self.pend_friction = 0.1
@@ -33,8 +35,13 @@ class TriplePendulumEnv(gym.Env):
         # Increase simulation substeps for better stability
         self.sub_steps = 8
         self.tau = 0.02 / self.sub_steps
-        self.constraint_iterations = 3  # Nombre d'itérations pour les contraintes
-
+        self.constraint_iterations = 3  # Iterations for constraints
+        
+        # Inertia for each rod (simplified as thin rods)
+        self.inertia_pend1 = (1/12) * self.mass_pend1 * self.length**2
+        self.inertia_pend2 = (1/12) * self.mass_pend2 * self.length**2
+        self.inertia_pend3 = (1/12) * self.mass_pend3 * self.length**2
+        
         # Limits for cart position and velocity
         self.x_threshold = 3.2
         self.x_dot_threshold = 10.0
@@ -128,9 +135,6 @@ class TriplePendulumEnv(gym.Env):
 
         if self.render_mode == "human":
             self._render_init()
-
-        # Reset direction tracking
-        self.prev_force_direction = 0
         
         return self.state, {}
 
@@ -182,56 +186,87 @@ class TriplePendulumEnv(gym.Env):
         # Store initial state
         x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state[:12]
         
-        # Track the previous force direction to detect changes
-        self.prev_force_direction = getattr(self, 'prev_force_direction', 0)
-        current_force_direction = 0 if abs(force) < 0.1 else (1 if force > 0 else -1)
-        
-        # Check for direction change - make the detection more sensitive
-        direction_changed = self.prev_force_direction != current_force_direction and (
-            self.prev_force_direction != 0 or current_force_direction != 0
-        )
-        
-        # Reset momentum if direction changed
-        if direction_changed:
-            # Force immediate stop - completely zero out velocity
-            x_dot = 0.0
-            x_ddot = 0.0
-            self.state[1] = 0.0
-            self.state[2] = 0.0
-            
-            # Override the current direction for physics calculation
-            force_to_apply = force * 1.5  # Apply a bit more force to overcome any residual momentum
-            
-            # Reset all physics for this step to ensure momentum is truly gone
-            for i in range(self.sub_steps):
-                # Add a strong counter force to ensure all momentum is stopped
-                if i == 0 and abs(x_dot) > 0.01:
-                    counter_force = -np.sign(x_dot) * min(abs(x_dot) * 5.0, self.force_mag)
-                    force = counter_force
-        
-        # Save current direction for next step
-        self.prev_force_direction = current_force_direction
+        # Total system mass calculation for proper momentum conservation
+        total_mass = self.mass_cart + self.mass_pend1 + self.mass_pend2 + self.mass_pend3
         
         # Run multiple substeps for better stability
         for _ in range(self.sub_steps):
             # Unpack current state
             x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state[:12]
             
-            # Cart forces
+            # Calculate pendulum positions
+            p1_x = x + self.length * np.sin(th1)
+            p1_y = -self.length * np.cos(th1)
+            p2_x = p1_x + self.length * np.sin(th2)
+            p2_y = p1_y + self.length * np.cos(th2)
+            p3_x = p2_x + self.length * np.sin(th3)
+            p3_y = p2_y + self.length * np.cos(th3)
+            
+            # Calculate pendulum velocities
+            v1_x = x_dot + self.length * th1_dot * np.cos(th1)
+            v1_y = self.length * th1_dot * np.sin(th1)
+            v2_x = v1_x + self.length * th2_dot * np.cos(th2)
+            v2_y = v1_y + self.length * th2_dot * np.sin(th2)
+            v3_x = v2_x + self.length * th3_dot * np.cos(th3)
+            v3_y = v2_y + self.length * th3_dot * np.sin(th3)
+            
+            # Calculate forces from pendulum mass on cart
+            # Compute centripetal forces from pendulum rotations
+            f1_x = self.mass_pend1 * self.length * (th1_dot**2) * np.sin(th1)
+            f2_x = self.mass_pend2 * self.length * (th2_dot**2) * np.sin(th2)
+            f3_x = self.mass_pend3 * self.length * (th3_dot**2) * np.sin(th3)
+            
+            # Compute tangential forces from pendulum angular accelerations
+            f1_tang = self.mass_pend1 * self.length * th1_ddot * np.cos(th1)
+            f2_tang = self.mass_pend2 * self.length * th2_ddot * np.cos(th2)
+            f3_tang = self.mass_pend3 * self.length * th3_ddot * np.cos(th3)
+            
+            # Cart friction
             friction = -self.cart_friction * x_dot
-            net_force = force + friction
-            x_ddot = net_force / self.mass_cart
             
-            # Pendulum accelerations
+            # Total force on cart
+            net_force = force + friction + f1_x + f2_x + f3_x + f1_tang + f2_tang + f3_tang
+            
+            # Cart acceleration (F = ma)
+            # Include the effective mass of pendulums for momentum conservation
+            x_ddot = net_force / total_mass
+            
+            # Calculate pendulum joint forces (tension in the links)
+            # This is simplified - a full constraint-based system would be more accurate
+            tension1 = self.mass_pend1 * (self.gravity * np.sin(th1) + x_ddot * np.cos(th1))
+            tension2 = self.mass_pend2 * (self.gravity * np.sin(th2) + x_ddot * np.cos(th2))
+            tension3 = self.mass_pend3 * (self.gravity * np.sin(th3) + x_ddot * np.cos(th3))
+            
+            # Apply air resistance to each pendulum node
+            v1_speed = np.sqrt(v1_x**2 + v1_y**2)
+            v2_speed = np.sqrt(v2_x**2 + v2_y**2)
+            v3_speed = np.sqrt(v3_x**2 + v3_y**2)
+            
+            air_resistance1 = -self.air_resistance * v1_speed * np.array([v1_x, v1_y])
+            air_resistance2 = -self.air_resistance * v2_speed * np.array([v2_x, v2_y])
+            air_resistance3 = -self.air_resistance * v3_speed * np.array([v3_x, v3_y])
+            
+            # Convert air resistance to angular forces
+            th1_air = np.cross([0, 0, 1], [air_resistance1[0], air_resistance1[1], 0])[2] / self.length
+            th2_air = np.cross([0, 0, 1], [air_resistance2[0], air_resistance2[1], 0])[2] / self.length
+            th3_air = np.cross([0, 0, 1], [air_resistance3[0], air_resistance3[1], 0])[2] / self.length
+            
+            # Pendulum angular accelerations with proper physics
             g = self.gravity
-            th1_ddot = -g * np.sin(th1) / self.length - x_ddot * np.cos(th1) / self.length
-            th2_ddot = -g * np.sin(th2) / self.length - x_ddot * np.cos(th2) / self.length
-            th3_ddot = -g * np.sin(th3) / self.length - x_ddot * np.cos(th3) / self.length
             
-            # Add damping
+            # First pendulum angular acceleration
+            th1_ddot = (-g * np.sin(th1) - x_ddot * np.cos(th1) + th1_air) / self.length
+            
+            # Second pendulum angular acceleration influenced by first pendulum
+            th2_ddot = (-g * np.sin(th2) - x_ddot * np.cos(th2) + th2_air) / self.length
+            
+            # Third pendulum angular acceleration influenced by second pendulum
+            th3_ddot = (-g * np.sin(th3) - x_ddot * np.cos(th3) + th3_air) / self.length
+            
+            # Add damping with momentum preservation
             th1_ddot -= self.pend_friction * th1_dot
-            th2_ddot -= self.pend_friction * th2_dot
-            th3_ddot -= self.pend_friction * th3_dot
+            th2_ddot -= self.pend_friction * (th2_dot - th1_dot)  # Relative to first node
+            th3_ddot -= self.pend_friction * (th3_dot - th2_dot)  # Relative to second node
             
             # Semi-implicit Euler integration
             dt = self.tau
@@ -251,7 +286,7 @@ class TriplePendulumEnv(gym.Env):
             # Apply constraints to maintain rigid connections
             th1_new, th2_new, th3_new = self.apply_constraints(x_new, th1_temp, th2_temp, th3_temp)
             
-            # Calculate pendulum positions and velocities
+            # Recalculate pendulum positions and velocities with updated positions
             p1_x = x_new + self.length * np.sin(th1_new)
             p1_y = -self.length * np.cos(th1_new)
             p2_x = p1_x + self.length * np.sin(th2_new)
@@ -278,12 +313,50 @@ class TriplePendulumEnv(gym.Env):
             ], dtype=np.float32)
         
         # Check termination
+        x_new, x_dot_new = self.state[0], self.state[1]
         terminated = bool(
             abs(x_new) > self.x_threshold or
             abs(x_dot_new) > self.x_dot_threshold
         )
         
         return np.array(self.state, dtype=np.float32), terminated
+
+    def calculate_reward(self):
+        """Calculate the reward based on the current state"""
+        # Extract relevant state variables
+        x, x_dot = self.state[0], self.state[1]
+        th1, th2, th3 = self.state[3], self.state[6], self.state[9]
+        
+        # Basic reward for staying alive
+        reward = 1.0
+        
+        # Penalty for cart distance from center
+        x_penalty = -0.1 * abs(x)
+        
+        # Penalty for cart velocity
+        x_dot_penalty = -0.1 * abs(x_dot)
+        
+        # Reward for keeping pendulums upright (pi is upright)
+        # Use cosine to make it smooth - closer to upright = higher reward
+        upright_reward = 3.0 * (np.cos(th1 - np.pi) + np.cos(th2 - np.pi) + np.cos(th3 - np.pi)) / 3.0
+        
+        # Penalty for non-alignment of the pendulums (they should all point in same direction)
+        non_alignement_penalty = -0.5 * (abs(th1 - th2) + abs(th2 - th3)) 
+        
+        # Total reward
+        total_reward = reward + x_penalty + x_dot_penalty + upright_reward + non_alignement_penalty
+        
+        # Store reward components for visualization
+        self.current_reward = total_reward
+        self.reward_components = {
+            "reward": reward,
+            "x_penalty": x_penalty,
+            "x_dot_penalty": x_dot_penalty, 
+            "upright_reward": upright_reward,
+            "non_alignement_penalty": non_alignement_penalty
+        }
+        
+        return total_reward
 
     def render(self):
         if self.render_mode != "human":
@@ -384,21 +457,19 @@ class TriplePendulumEnv(gym.Env):
         pygame.display.flip()
 
     def apply_brake(self):
-        """Apply emergency brake to quickly stop the cart's momentum"""
+        """
+        Apply more physically realistic emergency brake to the cart
+        """
         if self.state is not None:
             # Get current velocity
             current_velocity = self.state[1]
             
-            # Apply strong braking by setting velocity to zero
-            self.state[1] = 0.0  # Reset x_dot (cart velocity) to zero
-            
-            # Apply a strong counter force proportional to the current velocity
-            # This helps overcome any residual momentum
+            # Apply strong braking force but preserve momentum physics
             if abs(current_velocity) > 0.01:
                 braking_direction = -1 if current_velocity > 0 else 1
-                braking_force = abs(current_velocity) * 3.0  # Proportional braking
-                # Clip to force limits but maintain a minimum braking force
-                braking_force = max(min(braking_force, self.force_mag), self.force_mag * 0.25)
+                # Apply a very strong braking force - but not instant zeroing of velocity
+                braking_force = abs(current_velocity) * 5.0  # Strong proportional braking
+                braking_force = min(braking_force, self.force_mag)
                 return np.array([braking_direction * braking_force], dtype=np.float32)
         
         return np.array([0.0], dtype=np.float32)

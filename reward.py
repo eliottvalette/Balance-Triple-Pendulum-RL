@@ -34,12 +34,6 @@ class RewardManager:
         
         # x close to 0
         x_penalty = self.cart_position_weight * abs(x) if abs(x) > 0.5 else 0
-        
-        # x_dot close to 0
-        x_dot_penalty = self.velocity_weight * abs(x_dot) if abs(x) > 0.5 else 0
-        
-        # Penalize high acceleration
-        acceleration_penalty = self.acceleration_weight * abs(x_ddot) if abs(x) > 0.5 else 0
 
         # angles alignement 
         non_alignement_penalty = self.alignement_weight * (abs(th1-th2) + abs(th2-th3) + abs(th3-th1)) / np.pi
@@ -48,21 +42,19 @@ class RewardManager:
         upright_reward = self.upright_weight * (p1_y + p2_y + p3_y) / 3
 
         # Penalties are negative, rewards are positive
-        reward = upright_reward - x_penalty - x_dot_penalty - acceleration_penalty - non_alignement_penalty
+        reward = upright_reward - x_penalty - non_alignement_penalty
         
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
             
-        return reward, upright_reward, x_penalty, x_dot_penalty, non_alignement_penalty, acceleration_penalty
+        return reward, upright_reward, x_penalty, non_alignement_penalty
 
     def get_reward_components(self, state):
-        reward, upright_reward, x_penalty, x_dot_penalty, non_alignement_penalty, acceleration_penalty = self.calculate_reward(state, False)
+        reward, upright_reward, x_penalty, non_alignement_penalty = self.calculate_reward(state, False)
         return {
             'x_penalty': x_penalty,
-            'x_dot_penalty': x_dot_penalty,
             'non_alignement_penalty': non_alignement_penalty,
             'upright_reward': upright_reward,
-            'acceleration_penalty': acceleration_penalty,
             'reward': reward
         } 

@@ -312,12 +312,35 @@ class TriplePendulumEnv(gym.Env):
                 v1_x, v1_y, v2_x, v2_y, v3_x, v3_y  # Pendulum velocities
             ], dtype=np.float32)
         
-        # Check termination
+        # Check if cart position exceeds threshold and clip it instead of terminating
         x_new, x_dot_new = self.state[0], self.state[1]
-        terminated = bool(
-            abs(x_new) > self.x_threshold or
-            abs(x_dot_new) > self.x_dot_threshold
-        )
+        
+        # Clip cart position if it exceeds threshold
+        if abs(x_new) > self.x_threshold:
+            # Update x_new to be clipped at threshold
+            x_new = np.clip(x_new, -self.x_threshold, self.x_threshold)
+            
+            # Set velocity to zero at the boundary to prevent bouncing
+            if (x_new == self.x_threshold and x_dot_new > 0) or (x_new == -self.x_threshold and x_dot_new < 0):
+                x_dot_new = 0
+            
+            # Update the state with clipped position and adjusted velocity
+            self.state[0] = x_new
+            self.state[1] = x_dot_new
+            
+            # Recalculate pendulum positions with the new cart position
+            p1_x = x_new + self.length * np.sin(self.state[3])
+            p1_y = -self.length * np.cos(self.state[3])
+            p2_x = p1_x + self.length * np.sin(self.state[6])
+            p2_y = p1_y + self.length * np.cos(self.state[6])
+            p3_x = p2_x + self.length * np.sin(self.state[9])
+            p3_y = p2_y + self.length * np.cos(self.state[9])
+            
+            # Update pendulum positions in the state
+            self.state[12:18] = np.array([p1_x, p1_y, p2_x, p2_y, p3_x, p3_y])
+        
+        # Only terminate if velocity exceeds threshold
+        terminated = bool(abs(x_dot_new) > self.x_dot_threshold)
         
         return np.array(self.state, dtype=np.float32), terminated
 
@@ -365,8 +388,49 @@ class TriplePendulumEnv(gym.Env):
         if self.screen is None:
             self._render_init()
 
-        # Clear screen
-        self.screen.fill((255, 255, 255))
+        # Define colors
+        BACKGROUND_COLOR = (240, 240, 245)
+        CART_COLOR = (50, 50, 60)
+        TRACK_COLOR = (180, 180, 190)
+        PENDULUM1_COLOR = (220, 60, 60)
+        PENDULUM2_COLOR = (60, 180, 60)
+        PENDULUM3_COLOR = (60, 60, 220)
+        TEXT_COLOR = (40, 40, 40)
+        GRID_COLOR = (210, 210, 215)
+        
+        # Clear screen with a light background
+        self.screen.fill(BACKGROUND_COLOR)
+        
+        # Draw grid
+        grid_spacing = 50
+        for x in range(0, self.screen_width, grid_spacing):
+            pygame.draw.line(self.screen, GRID_COLOR, (x, 0), (x, self.screen_height))
+        for y in range(0, self.screen_height, grid_spacing):
+            pygame.draw.line(self.screen, GRID_COLOR, (0, y), (self.screen_width, y))
+        
+        # Draw track
+        track_height = 5
+        track_width = self.x_threshold * 2 * self.pixels_per_meter
+        pygame.draw.rect(
+            self.screen,
+            TRACK_COLOR,
+            pygame.Rect(
+                self.screen_width // 2 - track_width // 2,
+                self.cart_y_pos + 15,
+                track_width,
+                track_height
+            )
+        )
+        
+        # Mark center of track
+        center_mark_height = 10
+        pygame.draw.line(
+            self.screen,
+            (100, 100, 110),
+            (self.screen_width // 2, self.cart_y_pos + 15),
+            (self.screen_width // 2, self.cart_y_pos + 15 + center_mark_height),
+            2
+        )
 
         # Current state
         x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state[:12]
@@ -375,69 +439,187 @@ class TriplePendulumEnv(gym.Env):
         cart_x_px = int(self.screen_width / 2 + x * self.pixels_per_meter)
         cart_y_px = int(self.cart_y_pos)
 
-        # Draw cart
-        cart_w, cart_h = 50, 30
+        # Draw cart with rounded corners and 3D effect
+        cart_w, cart_h = 60, 30
         cart_rect = pygame.Rect(
             cart_x_px - cart_w//2,
             cart_y_px - cart_h//2,
             cart_w,
             cart_h
         )
-        pygame.draw.rect(self.screen, (0, 0, 0), cart_rect)
+        
+        # Draw cart shadow
+        shadow_offset = 3
+        shadow_rect = pygame.Rect(
+            cart_rect.left + shadow_offset,
+            cart_rect.top + shadow_offset,
+            cart_rect.width,
+            cart_rect.height
+        )
+        pygame.draw.rect(self.screen, (180, 180, 190), shadow_rect, border_radius=5)
+        
+        # Draw main cart
+        pygame.draw.rect(self.screen, CART_COLOR, cart_rect, border_radius=5)
+        
+        # Add a highlight to the cart for 3D effect
+        highlight_rect = pygame.Rect(
+            cart_rect.left + 3,
+            cart_rect.top + 3,
+            cart_rect.width - 6,
+            10
+        )
+        pygame.draw.rect(self.screen, (80, 80, 90), highlight_rect, border_radius=3)
 
-        # Helper function to draw each link
+        # Helper function to draw each link with thickness and joints
         def draw_link(origin_x, origin_y, angle, color):
-            end_x = origin_x + self.length * self.pixels_per_meter * math.sin(angle)
-            end_y = origin_y + self.length * self.pixels_per_meter * math.cos(angle)
+            link_length = self.length * self.pixels_per_meter
+            end_x = origin_x + link_length * math.sin(angle)
+            end_y = origin_y + link_length * math.cos(angle)
+            
+            # Draw link with thickness
             pygame.draw.line(
                 surface=self.screen,
                 color=color,
                 start_pos=(origin_x, origin_y),
                 end_pos=(end_x, end_y),
-                width=3
+                width=6
             )
+            
+            # Draw joint at start and end
+            pygame.draw.circle(self.screen, (30, 30, 30), (int(origin_x), int(origin_y)), 7)
+            pygame.draw.circle(self.screen, (90, 90, 100), (int(origin_x), int(origin_y)), 5)
+            
+            # End joint is drawn by the next link or at the end
             return end_x, end_y
 
         # Draw pendulum links
         pivot1_x, pivot1_y = cart_x_px, cart_y_px - cart_h//2
-        end1_x, end1_y = draw_link(pivot1_x, pivot1_y, th1, (255, 0, 0))
-        end2_x, end2_y = draw_link(end1_x, end1_y, th2, (0, 255, 0))
-        end3_x, end3_y = draw_link(end2_x, end2_y, th3, (0, 0, 255))
+        end1_x, end1_y = draw_link(pivot1_x, pivot1_y, th1, PENDULUM1_COLOR)
+        end2_x, end2_y = draw_link(end1_x, end1_y, th2, PENDULUM2_COLOR)
+        end3_x, end3_y = draw_link(end2_x, end2_y, th3, PENDULUM3_COLOR)
+        
+        # Draw final joint at the end of last pendulum
+        pygame.draw.circle(self.screen, (30, 30, 30), (int(end3_x), int(end3_y)), 7)
+        pygame.draw.circle(self.screen, (90, 90, 100), (int(end3_x), int(end3_y)), 5)
 
-        # Display metrics
+        # Draw info panel background
+        panel_width = 240
+        panel_height = 250
+        panel_x = 10
+        panel_y = 10
+        panel_rect = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
+        pygame.draw.rect(self.screen, (230, 230, 235), panel_rect, border_radius=10)
+        pygame.draw.rect(self.screen, (200, 200, 205), panel_rect, border_radius=10, width=2)
+        
+        # Initialize font if not done yet
         if self.font is None:
             self.font = pygame.font.Font(None, 24)
+        
+        # Title for the panel
+        title_font = pygame.font.Font(None, 28)
+        title = title_font.render("Triple Pendulum", True, (60, 60, 70))
+        self.screen.blit(title, (panel_x + 10, panel_y + 10))
+        
+        # Draw separator
+        pygame.draw.line(
+            self.screen, 
+            (200, 200, 205), 
+            (panel_x + 10, panel_y + 40), 
+            (panel_x + panel_width - 10, panel_y + 40), 
+            2
+        )
 
         # Convert angles to degrees for display
         th1_deg = math.degrees(th1)
         th2_deg = math.degrees(th2)
         th3_deg = math.degrees(th3)
 
-        # Create metric texts
+        # Create metrics with colored indicators
         metrics = [
-            f"Cart Position: {x:.2f}m",
-            f"Cart Velocity: {x_dot:.2f}m/s",
-            f"Cart Acceleration: {x_ddot:.2f}m/s²",
-            f"Angle 1: {th1_deg:.1f}°",
-            f"Angle 2: {th2_deg:.1f}°",
-            f"Angle 3: {th3_deg:.1f}°",
-            f"Total Reward: {self.current_reward:.2f}"
+            {"text": f"Cart Position: {x:.2f}m", "color": TEXT_COLOR},
+            {"text": f"Cart Velocity: {x_dot:.2f}m/s", "color": TEXT_COLOR},
+            {"text": f"Angle 1: {th1_deg:.1f}°", "color": PENDULUM1_COLOR},
+            {"text": f"Angle 2: {th2_deg:.1f}°", "color": PENDULUM2_COLOR},
+            {"text": f"Angle 3: {th3_deg:.1f}°", "color": PENDULUM3_COLOR},
         ]
-
-        # Add reward components if available
+        
+        # Draw reward information in a separate section
         if self.reward_components:
-            metrics.extend([
-                f"Reward: {self.reward_components['reward']:.2f}",
-                f"Alignement Penalty: {self.reward_components['non_alignement_penalty']:.2f}",
-                f"Upright Reward: {self.reward_components['upright_reward']:.2f}",
-                f"Cart Penalty: {self.reward_components['x_penalty']:.2f}",
-                f"Velocity Penalty: {self.reward_components['x_dot_penalty']:.2f}"
-            ])
+            metrics.append({"text": f"Reward: {self.current_reward:.2f}", "color": (80, 80, 200)})
+            # Visualize reward components with bars
+            reward_components = [
+                {"name": "Base", "value": self.reward_components.get('reward', 0), "color": (100, 100, 200)},
+                {"name": "Upright", "value": self.reward_components.get('upright_reward', 0), "color": (80, 180, 80)},
+                {"name": "Position", "value": self.reward_components.get('x_penalty', 0), "color": (200, 80, 80)},
+                {"name": "Alignment", "value": self.reward_components.get('non_alignement_penalty', 0), "color": (180, 130, 80)}
+            ]
 
         # Display metrics
         for i, metric in enumerate(metrics):
-            text = self.font.render(metric, True, (0, 0, 0))
-            self.screen.blit(text, (10, 10 + i * 25))
+            text = self.font.render(metric["text"], True, metric["color"])
+            self.screen.blit(text, (panel_x + 15, panel_y + 50 + i * 25))
+        
+        # Draw controls help at the bottom
+        controls_y = self.screen_height - 30
+        controls_text = "Controls: ← → (Move)  |  SPACE (Reset)  |  B (Brake)  |  S (Stop)  |  ↑↓ (Force)"
+        controls = self.font.render(controls_text, True, (100, 100, 110))
+        controls_x = (self.screen_width - controls.get_width()) // 2
+        self.screen.blit(controls, (controls_x, controls_y))
+
+        # Draw reward component bars if we have reward information
+        if self.reward_components:
+            bar_y = panel_y + 50 + len(metrics) * 25 + 10
+            bar_width = panel_width - 30
+            bar_height = 12
+            bar_spacing = 20
+            
+            # Draw title for reward components
+            comp_title = self.font.render("Reward Components:", True, TEXT_COLOR)
+            self.screen.blit(comp_title, (panel_x + 15, bar_y))
+            bar_y += 25
+            
+            max_bar_value = 3.0  # Scale for visualization
+            
+            for comp in reward_components:
+                name_text = self.font.render(comp["name"], True, TEXT_COLOR)
+                self.screen.blit(name_text, (panel_x + 15, bar_y))
+                
+                # Background bar
+                pygame.draw.rect(
+                    self.screen,
+                    (220, 220, 225),
+                    pygame.Rect(panel_x + 80, bar_y + 5, bar_width - 80, bar_height),
+                    border_radius=3
+                )
+                
+                # Value bar (handle negative values)
+                value = comp["value"]
+                bar_color = comp["color"]
+                
+                if value != 0:
+                    if value > 0:
+                        bar_length = min(value / max_bar_value * (bar_width - 80), bar_width - 80)
+                        bar_x = panel_x + 80
+                    else:
+                        bar_length = min(abs(value) / max_bar_value * (bar_width - 80), bar_width - 80)
+                        bar_x = panel_x + 80 - bar_length
+                        bar_color = (200, 90, 90)  # Red for negative values
+                    
+                    # Ensure bar_length is always a valid number and at least 1 pixel
+                    bar_length = max(1, int(bar_length))
+                    
+                    pygame.draw.rect(
+                        self.screen,
+                        bar_color,
+                        pygame.Rect(int(bar_x), int(bar_y + 5), bar_length, bar_height),
+                        border_radius=3
+                    )
+                
+                # Value text
+                value_text = self.font.render(f"{value:.2f}", True, TEXT_COLOR)
+                self.screen.blit(value_text, (panel_x + bar_width - 30, bar_y))
+                
+                bar_y += bar_spacing
 
         pygame.display.flip()
         self.clock.tick(50)
@@ -451,9 +633,16 @@ class TriplePendulumEnv(gym.Env):
     def _render_init(self):
         if not pygame.get_init():
             pygame.init()
-        pygame.display.set_caption("Triple Pendulum Environment")
+        pygame.display.set_caption("Triple Pendulum Simulation")
         self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
         self.clock = pygame.time.Clock()
+        
+        # Set up a nicer font if available
+        try:
+            self.font = pygame.font.SysFont("Arial", 18)
+        except:
+            self.font = pygame.font.Font(None, 24)
+            
         pygame.display.flip()
 
     def apply_brake(self):

@@ -5,7 +5,7 @@ from collections import defaultdict
 class MetricsTracker:
     def __init__(self):
         self.metrics = defaultdict(list)
-        self.episode_window = 100  # Pour la moyenne glissante
+        self.episode_window = 100  # For moving average
         
     def add_metric(self, name, value):
         self.metrics[name].append(value)
@@ -17,10 +17,10 @@ class MetricsTracker:
         return np.mean(values[-self.episode_window:])
     
     def plot_metrics(self, save_path=None):
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        fig, axes = plt.subplots(2, 3, figsize=(20, 12))
         fig.suptitle('Training Metrics')
         
-        # Plot des récompenses
+        # Plot rewards
         ax = axes[0, 0]
         rewards = self.metrics['episode_reward']
         ax.plot(rewards, alpha=0.3, label='Episode Reward')
@@ -31,28 +31,62 @@ class MetricsTracker:
         ax.set_ylabel('Reward')
         ax.legend()
         
-        # Plot des pertes Actor
+        # Plot losses
         ax = axes[0, 1]
         ax.plot(self.metrics['actor_loss'], label='Actor Loss')
-        ax.set_title('Actor Loss')
-        ax.set_xlabel('Episode')
-        ax.set_ylabel('Loss')
-        ax.legend()
-        
-        # Plot des pertes Critic
-        ax = axes[1, 0]
         ax.plot(self.metrics['critic_loss'], label='Critic Loss')
-        ax.set_title('Critic Loss')
+        ax.set_title('Network Losses')
         ax.set_xlabel('Episode')
         ax.set_ylabel('Loss')
         ax.legend()
         
-        # Plot des composantes de récompense
-        ax = axes[1, 1]
-        for component in ['upright_reward', 'cart_penalty', 'velocity_penalty']:
+        # Plot reward components
+        ax = axes[0, 2]
+        reward_components = ['upright_reward', 'x_penalty', 'x_dot_penalty', 
+                           'non_alignement_penalty', 'acceleration_penalty', 'energy_penalty']
+        for component in reward_components:
             if component in self.metrics:
                 ax.plot(self.metrics[component], label=component)
         ax.set_title('Reward Components')
+        ax.set_xlabel('Episode')
+        ax.set_ylabel('Value')
+        ax.legend()
+        
+        # Plot moving averages of reward components
+        ax = axes[1, 0]
+        for component in reward_components:
+            if component in self.metrics:
+                moving_avg = np.convolve(self.metrics[component], 
+                                       np.ones(self.episode_window)/self.episode_window, 
+                                       mode='valid')
+                ax.plot(moving_avg, label=f'{component} (MA)')
+        ax.set_title('Moving Averages of Reward Components')
+        ax.set_xlabel('Episode')
+        ax.set_ylabel('Value')
+        ax.legend()
+        
+        # Plot energy metrics
+        ax = axes[1, 1]
+        if 'energy_penalty' in self.metrics:
+            ax.plot(self.metrics['energy_penalty'], label='Energy Penalty')
+            moving_avg = np.convolve(self.metrics['energy_penalty'], 
+                                   np.ones(self.episode_window)/self.episode_window, 
+                                   mode='valid')
+            ax.plot(moving_avg, label='Energy Penalty (MA)')
+        ax.set_title('Energy Metrics')
+        ax.set_xlabel('Episode')
+        ax.set_ylabel('Value')
+        ax.legend()
+        
+        # Plot alignment metrics
+        ax = axes[1, 2]
+        if 'non_alignement_penalty' in self.metrics:
+            ax.plot(self.metrics['non_alignement_penalty'], label='Alignment Penalty')
+            moving_avg = np.convolve(self.metrics['non_alignement_penalty'], 
+                                   np.ones(self.episode_window)/self.episode_window, 
+                                   mode='valid')
+            ax.plot(moving_avg, label='Alignment Penalty (MA)')
+        ax.set_title('Alignment Metrics')
         ax.set_xlabel('Episode')
         ax.set_ylabel('Value')
         ax.legend()

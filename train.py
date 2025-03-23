@@ -7,6 +7,23 @@ from reward import RewardManager
 from metrics import MetricsTracker
 import torch.nn.functional as F
 import os
+import random
+from collections import deque
+
+class ReplayBuffer:
+    def __init__(self, capacity=10000):
+        self.buffer = deque(maxlen=capacity)
+    
+    def push(self, state, action, reward, next_state, done):
+        self.buffer.append((state, action, reward, next_state, done))
+    
+    def sample(self, batch_size):
+        batch = random.sample(self.buffer, min(len(self.buffer), batch_size))
+        state, action, reward, next_state, done = map(np.stack, zip(*batch))
+        return state, action, reward, next_state, done
+    
+    def __len__(self):
+        return len(self.buffer)
 
 class TriplePendulumTrainer:
     def __init__(self, config):
@@ -27,12 +44,41 @@ class TriplePendulumTrainer:
         # Metrics tracking
         self.metrics = MetricsTracker()
         self.total_steps = 0
-        self.max_steps = 1000  # Maximum steps per episode
+        self.max_steps = 300  # Maximum steps per episode
+        
+        # Exploration parameters
+        self.noise_scale = 0.5  # Initial noise scale
+        self.noise_decay = 0.9999  # Decay rate
+        self.min_noise = 0.01  # Minimum noise
+        self.epsilon = 1.0  # Initial random action probability
+        self.epsilon_decay = 0.995  # Epsilon decay rate
+        self.min_epsilon = 0.1  # Minimum epsilon
+        
+        # Replay buffer
+        self.memory = ReplayBuffer(capacity=config['buffer_capacity'])
+        
+        # Reward normalization
+        self.reward_scale = 1.0
+        self.reward_running_mean = 0
+        self.reward_running_std = 1
+        self.reward_alpha = 0.001  # For running statistics update
         
         # Créer le dossier pour sauvegarder les résultats
         os.makedirs('results', exist_ok=True)
         os.makedirs('models', exist_ok=True)
     
+    def normalize_reward(self, reward):
+        # Update running statistics
+        self.reward_running_mean = (1 - self.reward_alpha) * self.reward_running_mean + self.reward_alpha * reward
+        self.reward_running_std = (1 - self.reward_alpha) * self.reward_running_std + self.reward_alpha * abs(reward - self.reward_running_mean)
+        
+        # Avoid division by zero
+        std = max(self.reward_running_std, 1e-6)
+        
+        # Normalize and scale
+        normalized_reward = (reward - self.reward_running_mean) / std
+        return normalized_reward * self.reward_scale
+
     def collect_trajectory(self):
         state, _ = self.env.reset()
         done = False
@@ -43,11 +89,16 @@ class TriplePendulumTrainer:
         
         while not done and num_steps < self.max_steps:
             state_tensor = torch.FloatTensor(state).unsqueeze(0)
-            with torch.no_grad():
-                action = self.actor(state_tensor).squeeze().numpy()
             
-            # Add exploration noise
-            action = np.clip(action + np.random.normal(0, 0.1), -1, 1)
+            # Epsilon-greedy exploration
+            if np.random.random() < self.epsilon:
+                action = np.random.uniform(-1, 1)  # Random action
+            else:
+                with torch.no_grad():
+                    action = self.actor(state_tensor).squeeze().numpy()
+                    # Add exploration noise with decay
+                    noise = np.random.normal(0, self.noise_scale)
+                    action = np.clip(action + noise, -1, 1)
             
             # Scale action to environment range and ensure it's an array
             scaled_action = np.array([action * self.env.force_mag])
@@ -56,8 +107,14 @@ class TriplePendulumTrainer:
             next_state, terminated = self.env.step(scaled_action)
             
             # Calculate custom reward and components
-            custom_reward, upright_reward, x_penalty, x_dot_penalty, non_alignement_penalty = self.reward_manager.calculate_reward(next_state, terminated)
+            custom_reward, upright_reward, x_penalty, x_dot_penalty, non_alignement_penalty, acceleration_penalty, energy_penalty = self.reward_manager.calculate_reward(next_state, terminated)
             reward_components = self.reward_manager.get_reward_components(next_state)
+            
+            # Normalize reward
+            normalized_reward = self.normalize_reward(custom_reward)
+            
+            # Store transition in replay buffer with normalized reward
+            self.memory.push(state, action, normalized_reward, next_state, terminated)
             
             trajectory.append((state, action, custom_reward, next_state, terminated))
             episode_reward += custom_reward
@@ -65,14 +122,25 @@ class TriplePendulumTrainer:
             self.total_steps += 1
             num_steps += 1
             
+        # Decay exploration parameters
+        self.noise_scale = max(self.min_noise, self.noise_scale * self.noise_decay)
+        self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
+            
         return trajectory, episode_reward, reward_components
     
-    def update_networks(self, trajectory):
-        states = torch.FloatTensor([t[0] for t in trajectory])
-        actions = torch.FloatTensor([t[1] for t in trajectory]).unsqueeze(-1)
-        rewards = torch.FloatTensor([t[2] for t in trajectory]).unsqueeze(-1)
-        next_states = torch.FloatTensor([t[3] for t in trajectory])
-        dones = torch.FloatTensor([t[4] for t in trajectory]).unsqueeze(-1)
+    def update_networks(self):
+        if len(self.memory) < self.config['batch_size']:
+            return {"critic_loss": 0, "actor_loss": 0}  # Not enough samples yet
+
+        # Sample batch from replay buffer
+        states, actions, rewards, next_states, dones = self.memory.sample(self.config['batch_size'])
+
+        # Convert to tensors
+        states = torch.FloatTensor(states)
+        actions = torch.FloatTensor(actions).unsqueeze(-1)
+        rewards = torch.FloatTensor(rewards).unsqueeze(-1)
+        next_states = torch.FloatTensor(next_states)
+        dones = torch.FloatTensor(dones).unsqueeze(-1)
         
         # Update critic
         current_q = self.critic(states, actions)
@@ -85,7 +153,9 @@ class TriplePendulumTrainer:
         critic_loss.backward()
         self.critic_optimizer.step()
         
-        # Update actor
+        # Update actor - we want to maximize the critic output (Q-value)
+        # Since optimizers perform minimization by default, we use negative sign to turn maximization into minimization
+        # This is correct for DDPG: we want the actor to choose actions that maximize Q-values
         actor_loss = -self.critic(states, self.actor(states)).mean()
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
@@ -99,9 +169,22 @@ class TriplePendulumTrainer:
     def train(self):
         for episode in range(self.config['num_episodes']):
             print(f"Episode {episode} started")
-            # Collect trajectory and update networks
+            # Collect trajectory and store in replay buffer
             trajectory, episode_reward, reward_components = self.collect_trajectory()
-            losses = self.update_networks(trajectory)
+            
+            # Only update after we have enough samples
+            losses = {"critic_loss": 0, "actor_loss": 0}
+            if len(self.memory) >= self.config['batch_size']:
+                # Perform multiple updates per episode
+                for _ in range(self.config['updates_per_episode']):
+                    update_losses = self.update_networks()
+                    # Accumulate losses for reporting
+                    losses['critic_loss'] += update_losses['critic_loss']
+                    losses['actor_loss'] += update_losses['actor_loss']
+                
+                # Average the losses
+                losses['critic_loss'] /= self.config['updates_per_episode']
+                losses['actor_loss'] /= self.config['updates_per_episode']
             
             # Track metrics
             self.metrics.add_metric('episode_reward', episode_reward)
@@ -154,9 +237,11 @@ if __name__ == "__main__":
         'num_episodes': 10000,
         'actor_lr': 3e-4,
         'critic_lr': 3e-4,
-        'gamma': 0.99,
+        'gamma': 1.01,
         'batch_size': 64,
-        'hidden_dim': 256
+        'hidden_dim': 256,
+        'buffer_capacity': 100000,
+        'updates_per_episode': 10
     }
     
     trainer = TriplePendulumTrainer(config)

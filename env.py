@@ -36,7 +36,7 @@ class TriplePendulumEnv(gym.Env):
         self.constraint_iterations = 3  # Nombre d'itérations pour les contraintes
 
         # Limits for cart position and velocity
-        self.x_threshold = 2.4
+        self.x_threshold = 3.2
         self.x_dot_threshold = 10.0
 
         # Angular limits (radians)
@@ -49,25 +49,37 @@ class TriplePendulumEnv(gym.Env):
         self.action_space = spaces.Box(low=-self.force_mag, high=self.force_mag, shape=(1,), dtype=np.float32)
 
         # Observation:
-        #   [x, x_dot, theta1, theta_dot1, theta2, theta_dot2, theta3, theta_dot3,
-        #    p0_x, p0_y, p1_x, p1_y, p2_x, p2_y, p3_x, p3_y]
+        #   [x, x_dot, x_ddot,  # Cart state
+        #    th1, th1_dot, th1_ddot,  # First pendulum
+        #    th2, th2_dot, th2_ddot,  # Second pendulum
+        #    th3, th3_dot, th3_ddot,  # Third pendulum
+        #    p1_x, p1_y, p2_x, p2_y, p3_x, p3_y,  # Pendulum positions
+        #    v1_x, v1_y, v2_x, v2_y, v3_x, v3_y]  # Pendulum velocities
         high = np.array([
             self.x_threshold * 2.0,        # x
             self.x_dot_threshold * 2.0,    # x_dot
+            self.x_dot_threshold * 2.0,    # x_ddot
             np.finfo(np.float32).max,      # theta1
             np.finfo(np.float32).max,      # theta1_dot
+            np.finfo(np.float32).max,      # theta1_ddot
             np.finfo(np.float32).max,      # theta2
             np.finfo(np.float32).max,      # theta2_dot
+            np.finfo(np.float32).max,      # theta2_ddot
             np.finfo(np.float32).max,      # theta3
             np.finfo(np.float32).max,      # theta3_dot
-            self.x_threshold * 2.0,        # p0_x
-            2.0,                           # p0_y
-            self.x_threshold * 2.0 + 2.0,  # p1_x
-            2.0,                           # p1_y
-            self.x_threshold * 2.0 + 2.0,  # p2_x
-            2.0,                           # p2_y
-            self.x_threshold * 2.0 + 2.0,  # p3_x
-            2.0                            # p3_y
+            np.finfo(np.float32).max,      # theta3_ddot
+            self.x_threshold * 2.0,        # p1_x
+            self.x_threshold * 2.0,        # p1_y
+            self.x_threshold * 2.0,        # p2_x
+            self.x_threshold * 2.0,        # p2_y
+            self.x_threshold * 2.0,        # p3_x
+            self.x_threshold * 2.0,        # p3_y
+            self.x_dot_threshold * 2.0,    # v1_x
+            self.x_dot_threshold * 2.0,    # v1_y
+            self.x_dot_threshold * 2.0,    # v2_x
+            self.x_dot_threshold * 2.0,    # v2_y
+            self.x_dot_threshold * 2.0,    # v3_x
+            self.x_dot_threshold * 2.0,    # v3_y
         ], dtype=np.float32)
 
         self.observation_space = spaces.Box(-high, high, dtype=np.float32)
@@ -92,30 +104,27 @@ class TriplePendulumEnv(gym.Env):
         self.current_reward = 0.0
         self.reward_components = {}
 
-    def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
-        if self.test_mode:
-            self.state = [
-                0.0,                        # cart x
-                0.0,                        # cart velocity
-                np.random.uniform(-3, 3),   # theta1
-                0.0,                        # theta_dot1
-                np.random.uniform(-3, 3),   # theta2
-                0.0,                        # theta_dot2
-                np.random.uniform(-3, 3),   # theta3
-                0.0                         # theta_dot3
-            ]
-        else:
-            self.state = [
-                0.0,                        # cart x
-                0.0,                        # cart velocity
-                np.random.uniform(-3, 3),   # theta1
-                0.2,                        # theta_dot1
-                np.random.uniform(-3, 3),   # theta2
-                0.2,                        # theta_dot2
-                np.random.uniform(-3, 3),   # theta3
-                0.2                         # theta_dot3
-            ]
+    def reset(self):
+        self.state = [
+            0.0,                        # cart x
+            0.0,                        # cart velocity
+            0.0,                        # cart acceleration
+            np.random.uniform(-1, 1),   # theta1
+            np.random.uniform(-0.2, 0.2), # theta_dot1
+            0.0,                        # theta_ddot1
+            np.random.uniform(-1, 1),   # theta2
+            np.random.uniform(-0.2, 0.2), # theta_dot2
+            0.0,                        # theta_ddot2
+            np.random.uniform(-1, 1),   # theta3
+            np.random.uniform(-0.2, 0.2), # theta_dot3
+            0.0,                        # theta_ddot3
+            0.0, 0.0,                   # p1_x, p1_y
+            0.0, 0.0,                   # p2_x, p2_y
+            0.0, 0.0,                   # p3_x, p3_y
+            0.0, 0.0,                   # v1_x, v1_y
+            0.0, 0.0,                   # v2_x, v2_y
+            0.0, 0.0                    # v3_x, v3_y
+        ]
 
         if self.render_mode == "human":
             self._render_init()
@@ -171,7 +180,7 @@ class TriplePendulumEnv(gym.Env):
         force = np.clip(action[0], -self.force_mag, self.force_mag)
         
         # Store initial state
-        x, x_dot, th1, th1_dot, th2, th2_dot, th3, th3_dot = self.state[:8]
+        x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state[:12]
         
         # Track the previous force direction to detect changes
         self.prev_force_direction = getattr(self, 'prev_force_direction', 0)
@@ -186,10 +195,11 @@ class TriplePendulumEnv(gym.Env):
         if direction_changed:
             # Force immediate stop - completely zero out velocity
             x_dot = 0.0
+            x_ddot = 0.0
             self.state[1] = 0.0
+            self.state[2] = 0.0
             
             # Override the current direction for physics calculation
-            # This ensures we start fresh with the new direction
             force_to_apply = force * 1.5  # Apply a bit more force to overcome any residual momentum
             
             # Reset all physics for this step to ensure momentum is truly gone
@@ -205,7 +215,7 @@ class TriplePendulumEnv(gym.Env):
         # Run multiple substeps for better stability
         for _ in range(self.sub_steps):
             # Unpack current state
-            x, x_dot, th1, th1_dot, th2, th2_dot, th3, th3_dot = self.state[:8]
+            x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state[:12]
             
             # Cart forces
             friction = -self.cart_friction * x_dot
@@ -241,12 +251,30 @@ class TriplePendulumEnv(gym.Env):
             # Apply constraints to maintain rigid connections
             th1_new, th2_new, th3_new = self.apply_constraints(x_new, th1_temp, th2_temp, th3_temp)
             
-            # Update state with positions
+            # Calculate pendulum positions and velocities
+            p1_x = x_new + self.length * np.sin(th1_new)
+            p1_y = -self.length * np.cos(th1_new)
+            p2_x = p1_x + self.length * np.sin(th2_new)
+            p2_y = p1_y + self.length * np.cos(th2_new)
+            p3_x = p2_x + self.length * np.sin(th3_new)
+            p3_y = p2_y + self.length * np.cos(th3_new)
+            
+            # Calculate pendulum velocities
+            v1_x = x_dot_new + self.length * th1_dot_new * np.cos(th1_new)
+            v1_y = self.length * th1_dot_new * np.sin(th1_new)
+            v2_x = v1_x + self.length * th2_dot_new * np.cos(th2_new)
+            v2_y = v1_y + self.length * th2_dot_new * np.sin(th2_new)
+            v3_x = v2_x + self.length * th3_dot_new * np.cos(th3_new)
+            v3_y = v2_y + self.length * th3_dot_new * np.sin(th3_new)
+            
+            # Update state with all information
             self.state = np.array([
-                x_new, x_dot_new, 
-                th1_new, th1_dot_new,
-                th2_new, th2_dot_new, 
-                th3_new, th3_dot_new,
+                x_new, x_dot_new, x_ddot,  # Cart state
+                th1_new, th1_dot_new, th1_ddot,  # First pendulum
+                th2_new, th2_dot_new, th2_ddot,  # Second pendulum
+                th3_new, th3_dot_new, th3_ddot,  # Third pendulum
+                p1_x, p1_y, p2_x, p2_y, p3_x, p3_y,  # Pendulum positions
+                v1_x, v1_y, v2_x, v2_y, v3_x, v3_y  # Pendulum velocities
             ], dtype=np.float32)
         
         # Check termination
@@ -268,7 +296,7 @@ class TriplePendulumEnv(gym.Env):
         self.screen.fill((255, 255, 255))
 
         # Current state
-        x, x_dot, th1, th1_dot, th2, th2_dot, th3, th3_dot = self.state[:8]
+        x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state[:12]
 
         # Convert cart x (meters) to pixels
         cart_x_px = int(self.screen_width / 2 + x * self.pixels_per_meter)
@@ -316,6 +344,7 @@ class TriplePendulumEnv(gym.Env):
         metrics = [
             f"Cart Position: {x:.2f}m",
             f"Cart Velocity: {x_dot:.2f}m/s",
+            f"Cart Acceleration: {x_ddot:.2f}m/s²",
             f"Angle 1: {th1_deg:.1f}°",
             f"Angle 2: {th2_deg:.1f}°",
             f"Angle 3: {th3_deg:.1f}°",

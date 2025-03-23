@@ -77,7 +77,7 @@ while True:
     obs, terminated = env.step(action)
     
     # Calculate and display reward
-    reward, upright_reward, x_penalty, x_dot_penalty, non_alignement_penalty = reward_manager.calculate_reward(obs, terminated)
+    reward, upright_reward, x_penalty, x_dot_penalty, non_alignement_penalty, acceleration_penalty, energy_penalty = reward_manager.calculate_reward(obs, terminated)
     reward_components = reward_manager.get_reward_components(obs)
     
     # Update the environment's display with reward information

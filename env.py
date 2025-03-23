@@ -13,7 +13,7 @@ class TriplePendulumEnv(gym.Env):
     """
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, render_mode=None, test_mode = False):
+    def __init__(self, render_mode=None):
         super(TriplePendulumEnv, self).__init__()
 
         # -----------------------
@@ -27,7 +27,7 @@ class TriplePendulumEnv(gym.Env):
         self.length = 0.5
         self.cart_friction = 0.5
         self.pend_friction = 0.1
-        self.air_resistance = 0.1
+        self.air_resistance = 0.5  # Increased air resistance for more realistic movement
         
         # Reduce force magnitude
         self.force_mag = 20.0
@@ -105,8 +105,7 @@ class TriplePendulumEnv(gym.Env):
         
         # Font for metrics display
         self.font = None
-        self.test_mode = test_mode
-        
+
         # Reward display
         self.current_reward = 0.0
         self.reward_components = {}
@@ -242,9 +241,10 @@ class TriplePendulumEnv(gym.Env):
             v2_speed = np.sqrt(v2_x**2 + v2_y**2)
             v3_speed = np.sqrt(v3_x**2 + v3_y**2)
             
-            air_resistance1 = -self.air_resistance * v1_speed * np.array([v1_x, v1_y])
-            air_resistance2 = -self.air_resistance * v2_speed * np.array([v2_x, v2_y])
-            air_resistance3 = -self.air_resistance * v3_speed * np.array([v3_x, v3_y])
+            # Apply air resistance proportional to velocity squared for more realistic physics
+            air_resistance1 = -self.air_resistance * v1_speed**2 * np.array([v1_x/max(v1_speed, 1e-6), v1_y/max(v1_speed, 1e-6)])
+            air_resistance2 = -self.air_resistance * v2_speed**2 * np.array([v2_x/max(v2_speed, 1e-6), v2_y/max(v2_speed, 1e-6)])
+            air_resistance3 = -self.air_resistance * v3_speed**2 * np.array([v3_x/max(v3_speed, 1e-6), v3_y/max(v3_speed, 1e-6)])
             
             # Convert air resistance to angular forces
             th1_air = np.cross([0, 0, 1], [air_resistance1[0], air_resistance1[1], 0])[2] / self.length
@@ -276,6 +276,12 @@ class TriplePendulumEnv(gym.Env):
             th1_dot_new = th1_dot + th1_ddot * dt
             th2_dot_new = th2_dot + th2_ddot * dt
             th3_dot_new = th3_dot + th3_ddot * dt
+            
+            # Apply maximum angular velocity limits to prevent unrealistic movement
+            max_angular_velocity = 15.0  # radians per second
+            th1_dot_new = np.clip(th1_dot_new, -max_angular_velocity, max_angular_velocity)
+            th2_dot_new = np.clip(th2_dot_new, -max_angular_velocity, max_angular_velocity)
+            th3_dot_new = np.clip(th3_dot_new, -max_angular_velocity, max_angular_velocity)
             
             # Update positions
             x_new = x + x_dot_new * dt
@@ -607,25 +613,38 @@ class TriplePendulumEnv(gym.Env):
                 name_text = self.font.render(comp["name"], True, TEXT_COLOR)
                 self.screen.blit(name_text, (reward_panel_x + 15, bar_y))
                 
+                # Calculate the center point for the bar (this will be zero point)
+                center_x = reward_panel_x + 100 + (bar_width - 130) / 2
+                usable_width = bar_width - 130
+                
                 # Background bar
                 pygame.draw.rect(
                     self.screen,
                     (220, 220, 225),
-                    pygame.Rect(reward_panel_x + 100, bar_y + 5, bar_width - 130, bar_height),
+                    pygame.Rect(center_x - usable_width/2, bar_y + 5, usable_width, bar_height),
                     border_radius=4
                 )
                 
-                # Value bar (handle negative values)
+                # Draw center line to mark zero
+                pygame.draw.line(
+                    self.screen, 
+                    (150, 150, 155), 
+                    (center_x, bar_y + 3), 
+                    (center_x, bar_y + bar_height + 7), 
+                    2
+                )
+                
+                # Value bar
                 value = comp["value"]
-                bar_color = comp["color"]
                 
                 if value != 0:
                     if value > 0:
-                        bar_length = min(value / max_bar_value * (bar_width - 130), bar_width - 130)
-                        bar_x = reward_panel_x + 100
+                        bar_length = min(value / max_bar_value * (usable_width/2), usable_width/2)
+                        bar_x = center_x
+                        bar_color = comp["color"]
                     else:
-                        bar_length = min(abs(value) / max_bar_value * (bar_width - 130), bar_width - 130)
-                        bar_x = reward_panel_x + 100 - bar_length
+                        bar_length = min(abs(value) / max_bar_value * (usable_width/2), usable_width/2)
+                        bar_x = center_x - bar_length
                         bar_color = (200, 90, 90)  # Red for negative values
                     
                     # Ensure bar_length is always a valid number and at least 1 pixel
@@ -645,7 +664,7 @@ class TriplePendulumEnv(gym.Env):
                 bar_y += bar_spacing
 
         pygame.display.flip()
-        self.clock.tick(50)
+        self.clock.tick(60)
 
     def close(self):
         if self.screen is not None:

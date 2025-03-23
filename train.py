@@ -109,6 +109,13 @@ class TriplePendulumTrainer:
             # Take step in environment
             next_state, terminated = self.env.step(scaled_action)
             
+            # Render if rendering is enabled
+            if self.env.render_mode == "human":
+                self.env.render()
+                # Limit to 60 FPS during visualization
+                if hasattr(self.env, 'clock'):
+                    self.env.clock.tick(60)
+            
             # Calculate custom reward and components
             custom_reward, upright_reward, x_penalty, non_alignement_penalty = self.reward_manager.calculate_reward(next_state, terminated)
             reward_components = self.reward_manager.get_reward_components(next_state)
@@ -176,6 +183,14 @@ class TriplePendulumTrainer:
     def train(self):
         for episode in range(self.config['num_episodes']):
             print(f"Episode {episode} started")
+            
+            # Enable rendering every 100 episodes
+            if episode % 100 == 0:
+                self.env.render_mode = "human"
+                self._render_init_if_needed()
+            else:
+                self.env.render_mode = None
+                
             # Collect trajectory and store in replay buffer
             trajectory, episode_reward, reward_components = self.collect_trajectory()
             
@@ -202,35 +217,22 @@ class TriplePendulumTrainer:
             for component_name, value in reward_components.items():
                 self.metrics.add_metric(component_name, value)
             
-            # Affichage périodique et sauvegarde
-            if episode % 100 == 0:
+            # Periodic display and saving
+            if episode % 100 == 99:
                 avg_reward = self.metrics.get_moving_average('episode_reward')
                 print(f"Episode {episode}, Avg Reward: {avg_reward:.2f}")
                 
-                # Sauvegarder les graphiques
+                # Save graphs
                 self.metrics.plot_metrics(f'results/metrics.png')
                 
-                # Sauvegarder le modèle
-                self.save_models(f"models/checkpoint_{episode}.pth")
-                
-                # Render one episode at 30 FPS
-                self.env.render_mode = "human"
-                state, _ = self.env.reset()
-                done = False
-                num_steps = 0
-                while not done:
-                    state_tensor = torch.FloatTensor(state).unsqueeze(0)
-                    with torch.no_grad():
-                        action = self.actor(state_tensor).squeeze().numpy()
-                    scaled_action = np.array([action * self.env.force_mag])
-                    state, terminated = self.env.step(scaled_action)
-                    self.env.render()
-                    self.env.clock.tick(30)  # Limit to 30 FPS
-                    num_steps += 1
-                    if num_steps >= self.max_steps or terminated:
-                        done = True
-                self.env.render_mode = None  # Turn off rendering
+                # Save model
+                self.save_models(f"models/checkpoint")
     
+    def _render_init_if_needed(self):
+        """Initialize rendering if it's not already initialized"""
+        if self.env.render_mode == "human" and self.env.screen is None:
+            self.env._render_init()
+            
     def save_models(self, path):
         torch.save(self.actor.state_dict(), path + '_actor.pth')
         torch.save(self.critic.state_dict(), path + '_critic.pth')
@@ -239,6 +241,7 @@ class TriplePendulumTrainer:
 
     def load_models(self):
         if os.path.exists('models/checkpoint_actor.pth'):
+            print("Loading models")
             self.actor.load_state_dict(torch.load('models/checkpoint_actor.pth'))
             self.critic.load_state_dict(torch.load('models/checkpoint_critic.pth'))
             self.actor_optimizer.load_state_dict(torch.load('models/checkpoint_actor_optimizer.pth'))
@@ -246,7 +249,7 @@ class TriplePendulumTrainer:
 
 if __name__ == "__main__":
     config = {
-        'num_episodes': 10000,
+        'num_episodes': 2000,
         'actor_lr': 3e-4,
         'critic_lr': 3e-4,
         'gamma': 0.99,

@@ -5,7 +5,7 @@ from env import TriplePendulumEnv
 from reward import RewardManager
 
 # Create the environment with rendering
-env = TriplePendulumEnv(render_mode="human", test_mode=True)
+env = TriplePendulumEnv(render_mode="human")
 reward_manager = RewardManager()
 
 # Reset the environment and get initial observation

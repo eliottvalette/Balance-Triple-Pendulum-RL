@@ -3,11 +3,9 @@ import random as rd
 class RewardManager:
     def __init__(self):
         self.cart_position_weight = 0.01
-        self.velocity_weight = 0.05
         self.termination_penalty = 10.0
-        self.alignement_weight = 0.2
+        self.alignement_weight = 0.01
         self.upright_weight = 1.0
-        self.acceleration_weight = 0.05
 
     def calculate_reward(self, state, terminated):
         """
@@ -33,13 +31,13 @@ class RewardManager:
         v1_x, v1_y, v2_x, v2_y, v3_x, v3_y = state[18:24]  # Pendulum velocities
         
         # x close to 0
-        x_penalty = self.cart_position_weight * abs(x) if abs(x) > 0.5 else 0
+        x_penalty = self.cart_position_weight * (abs(x) / 3.2) ** 2
 
         # angles alignement 
         non_alignement_penalty = self.alignement_weight * (abs(th1-th2) + abs(th2-th3) + abs(th3-th1)) / np.pi
 
         # Uprightness of each node
-        upright_reward = self.upright_weight * (p1_y + p2_y + p3_y) / 3
+        upright_reward = self.upright_weight * (np.cos(th1 - np.pi) + np.cos(th2 - np.pi) + np.cos(th3 - np.pi)) / 3.0
 
         # Penalties are negative, rewards are positive
         reward = upright_reward - x_penalty - non_alignement_penalty

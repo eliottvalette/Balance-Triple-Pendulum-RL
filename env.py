@@ -60,12 +60,10 @@ class TriplePendulumEnv(gym.Env):
         #    th1, th1_dot, th1_ddot,  # First pendulum
         #    th2, th2_dot, th2_ddot,  # Second pendulum
         #    th3, th3_dot, th3_ddot,  # Third pendulum
-        #    p1_x, p1_y, p2_x, p2_y, p3_x, p3_y,  # Pendulum positions
-        #    v1_x, v1_y, v2_x, v2_y, v3_x, v3_y]  # Pendulum velocities
         high = np.array([
             self.x_threshold * 2.0,        # x
             self.x_dot_threshold * 2.0,    # x_dot
-            self.x_dot_threshold * 2.0,    # x_ddot
+            np.finfo(np.float32).max,      # x_ddot
             np.finfo(np.float32).max,      # theta1
             np.finfo(np.float32).max,      # theta1_dot
             np.finfo(np.float32).max,      # theta1_ddot
@@ -74,19 +72,7 @@ class TriplePendulumEnv(gym.Env):
             np.finfo(np.float32).max,      # theta2_ddot
             np.finfo(np.float32).max,      # theta3
             np.finfo(np.float32).max,      # theta3_dot
-            np.finfo(np.float32).max,      # theta3_ddot
-            self.x_threshold * 2.0,        # p1_x
-            self.x_threshold * 2.0,        # p1_y
-            self.x_threshold * 2.0,        # p2_x
-            self.x_threshold * 2.0,        # p2_y
-            self.x_threshold * 2.0,        # p3_x
-            self.x_threshold * 2.0,        # p3_y
-            self.x_dot_threshold * 2.0,    # v1_x
-            self.x_dot_threshold * 2.0,    # v1_y
-            self.x_dot_threshold * 2.0,    # v2_x
-            self.x_dot_threshold * 2.0,    # v2_y
-            self.x_dot_threshold * 2.0,    # v3_x
-            self.x_dot_threshold * 2.0,    # v3_y
+            np.finfo(np.float32).max       # theta3_ddot
         ], dtype=np.float32)
 
         self.observation_space = spaces.Box(-high, high, dtype=np.float32)
@@ -123,13 +109,7 @@ class TriplePendulumEnv(gym.Env):
             0.0,                        # theta_ddot2
             np.random.uniform(-1, 1),   # theta3
             np.random.uniform(-0.2, 0.2), # theta_dot3
-            0.0,                        # theta_ddot3
-            0.0, 0.0,                   # p1_x, p1_y
-            0.0, 0.0,                   # p2_x, p2_y
-            0.0, 0.0,                   # p3_x, p3_y
-            0.0, 0.0,                   # v1_x, v1_y
-            0.0, 0.0,                   # v2_x, v2_y
-            0.0, 0.0                    # v3_x, v3_y
+            0.0                        # theta_ddot3
         ]
 
         if self.render_mode == "human":
@@ -183,7 +163,7 @@ class TriplePendulumEnv(gym.Env):
         force = np.clip(action[0], -self.force_mag, self.force_mag)
         
         # Store initial state
-        x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state[:12]
+        x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state
         
         # Total system mass calculation for proper momentum conservation
         total_mass = self.mass_cart + self.mass_pend1 + self.mass_pend2 + self.mass_pend3
@@ -191,7 +171,7 @@ class TriplePendulumEnv(gym.Env):
         # Run multiple substeps for better stability
         for _ in range(self.sub_steps):
             # Unpack current state
-            x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state[:12]
+            x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state
             
             # Calculate pendulum positions
             p1_x = x + self.length * np.sin(th1)
@@ -308,26 +288,15 @@ class TriplePendulumEnv(gym.Env):
             v3_x = v2_x + self.length * th3_dot_new * np.cos(th3_new)
             v3_y = v2_y + self.length * th3_dot_new * np.sin(th3_new)
             
-            # Update state with all information
+            # Update state with all information (only 12 core variables now)
             self.state = np.array([
                 x_new, x_dot_new, x_ddot,  # Cart state
                 th1_new, th1_dot_new, th1_ddot,  # First pendulum
                 th2_new, th2_dot_new, th2_ddot,  # Second pendulum
-                th3_new, th3_dot_new, th3_ddot,  # Third pendulum
-                p1_x, p1_y, p2_x, p2_y, p3_x, p3_y,  # Pendulum positions
-                v1_x, v1_y, v2_x, v2_y, v3_x, v3_y  # Pendulum velocities
+                th3_new, th3_dot_new, th3_ddot   # Third pendulum
             ], dtype=np.float32)
-
-            # Check for NaN values in state
-            if np.isnan(np.sum(self.state)):
-                print('state:', self.state)
-                raise ValueError("Warning: NaN detected in state")
         
-        # Check if cart position exceeds threshold and clip it instead of terminating
         x_new, x_dot_new = self.state[0], self.state[1]
-        
-        # Update x_new to be clipped at threshold
-        x_new = np.clip(x_new, -self.x_threshold, self.x_threshold)
         
         # Set velocity to zero at the boundary to prevent bouncing
         if (x_new == self.x_threshold and x_dot_new > 0) or (x_new == -self.x_threshold and x_dot_new < 0):
@@ -336,25 +305,51 @@ class TriplePendulumEnv(gym.Env):
         # Update the state with clipped position and adjusted velocity
         self.state[0] = x_new
         self.state[1] = x_dot_new
-        
-        # Recalculate pendulum positions with the new cart position
-        p1_x = x_new + self.length * np.sin(self.state[3])
-        p1_y = -self.length * np.cos(self.state[3])
-        p2_x = p1_x + self.length * np.sin(self.state[6])
-        p2_y = p1_y + self.length * np.cos(self.state[6])
-        p3_x = p2_x + self.length * np.sin(self.state[9])
-        p3_y = p2_y + self.length * np.cos(self.state[9])
-        
-        # Update pendulum positions in the state
-        self.state[12:18] = np.array([p1_x, p1_y, p2_x, p2_y, p3_x, p3_y])
-        
+
         # Only terminate if velocity exceeds threshold
         terminated = bool(abs(x_dot_new) > self.x_dot_threshold or abs(x_new) >= 3)
 
+        # Check for NaN values in state
+        if np.isnan(np.sum(self.state)):
+            print('state:', self.state)
+            raise ValueError("Warning: NaN detected in state")
         
         # Return observation, reward, terminated, and info dictionary
         return np.array(self.state, dtype=np.float32), terminated
 
+    def get_rich_state(self, state):
+        """
+        Get a rich state representation for the environment.
+        
+        Returns:
+            dict: A dictionary containing all relevant state variables and their values.
+        """
+
+        # Extract relevant state variables
+        x, x_dot = state[0], state[1]
+        th1, th2, th3 = state[3], state[6], state[9]
+
+        cart_x_px = int(self.screen_width / 2 + x * self.pixels_per_meter)
+        cart_y_px = int(self.cart_y_pos)
+
+        def calculate_following_node(origin_x, origin_y, angle):
+            link_length = self.length * self.pixels_per_meter
+            end_x = origin_x + link_length * math.sin(angle)
+            end_y = origin_y + link_length * math.cos(angle)
+            return end_x, end_y
+
+        # Get pendulum nodes positions in pixels refering to draw_link in pygame render
+        pivot1_x, pivot1_y = cart_x_px, cart_y_px
+        end1_x, end1_y = calculate_following_node(pivot1_x, pivot1_y, th1)
+        end2_x, end2_y = calculate_following_node(end1_x, end1_y, th2)
+        end3_x, end3_y = calculate_following_node(end2_x, end2_y, th3)
+
+        # Add to rich state
+        rich_state = state
+        rich_state = np.concatenate([rich_state, [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y]])
+
+        return rich_state
+    
     def calculate_reward(self):
         """Calculate the reward based on the current state"""
         # Extract relevant state variables
@@ -444,7 +439,7 @@ class TriplePendulumEnv(gym.Env):
         )
 
         # Current state
-        x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state[:12]
+        x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state
 
         # Convert cart x (meters) to pixels
         cart_x_px = int(self.screen_width / 2 + x * self.pixels_per_meter)
@@ -568,6 +563,7 @@ class TriplePendulumEnv(gym.Env):
         th1_deg = math.degrees(th1)
         th2_deg = math.degrees(th2)
         th3_deg = math.degrees(th3)
+
 
         # Create metrics with colored indicators
         metrics = [

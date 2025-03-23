@@ -4,10 +4,11 @@ class RewardManager:
     def __init__(self):
         self.cart_position_weight = 1
         self.termination_penalty = 10.0
-        self.alignement_weight = 0.01
+        self.alignement_weight = 0.1
         self.upright_weight = 1.0
         self.stability_weight = 0.02  # Weight for the stability reward
         self.old_state = None
+        self.length = 0.5  # Pendulum length
 
     def calculate_reward(self, state, terminated, current_step):
         """
@@ -17,8 +18,6 @@ class RewardManager:
             state (tuple): A tuple containing:
                 - Cart state: x, x_dot, x_ddot
                 - Pendulum states: th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot
-                - Pendulum positions: p1_x, p1_y, p2_x, p2_y, p3_x, p3_y
-                - Pendulum velocities: v1_x, v1_y, v2_x, v2_y, v3_x, v3_y
             terminated (bool): Whether the episode has terminated due to constraints violation
         
         Returns:
@@ -29,8 +28,14 @@ class RewardManager:
         th1, th1_dot, th1_ddot = state[3:6]  # First pendulum
         th2, th2_dot, th2_ddot = state[6:9]  # Second pendulum
         th3, th3_dot, th3_ddot = state[9:12]  # Third pendulum
-        p1_x, p1_y, p2_x, p2_y, p3_x, p3_y = state[12:18]  # Pendulum positions
-        v1_x, v1_y, v2_x, v2_y, v3_x, v3_y = state[18:24]  # Pendulum velocities
+        
+        # Calculate pendulum positions (these were previously in the state)
+        p1_x = x + self.length * np.sin(th1)
+        p1_y = -self.length * np.cos(th1)
+        p2_x = p1_x + self.length * np.sin(th2)
+        p2_y = p1_y + self.length * np.cos(th2)
+        p3_x = p2_x + self.length * np.sin(th3)
+        p3_y = p2_y + self.length * np.cos(th3)
         
         self.old_state = state
         
@@ -40,12 +45,15 @@ class RewardManager:
         # angles alignement 
         non_alignement_penalty = self.alignement_weight * (abs(th1-th2) + abs(th2-th3) + abs(th3-th1)) / np.pi
 
-        # Uprightness of each node
-        upright_reward = self.upright_weight * (np.cos(th1 - np.pi) + np.cos(th2 - np.pi) + np.cos(th3 - np.pi)) / 3.0
+        # Uprightness of each node - negate p*_y values because in the physics simulation,
+        # negative y means upward (which is what we want to reward)
+        # The physics uses a reference frame where positive y is downward
+        upright_reward = self.upright_weight * (-p1_y - p2_y - p3_y)
 
         # Stability reward: penalize high angular velocities and accelerations
         angular_velocity_penalty = (th1_dot**2 + th2_dot**2 + th3_dot**2) / 3.0
         angular_accel_penalty = (th1_ddot**2 + th2_ddot**2 + th3_ddot**2) / 3.0
+
         stability_penalty = self.stability_weight * (angular_velocity_penalty + angular_accel_penalty)
 
         # Penalties are negative, rewards are positive

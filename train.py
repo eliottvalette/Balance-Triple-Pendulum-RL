@@ -108,6 +108,12 @@ class TriplePendulumTrainer:
             
             # Take step in environment
             next_state, terminated = self.env.step(scaled_action)
+            next_rich_state = self.env.get_rich_state(next_state)
+
+            # Check for NaN values in state
+            if np.isnan(np.sum(next_rich_state)):
+                print('state:', next_rich_state)
+                raise ValueError("Warning: NaN detected in state")
             
             # Render if rendering is enabled
             if self.env.render_mode == "human":
@@ -117,18 +123,18 @@ class TriplePendulumTrainer:
                     self.env.clock.tick(60)
             
             # Calculate custom reward and components
-            custom_reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty = self.reward_manager.calculate_reward(next_state, terminated, num_steps)
-            reward_components = self.reward_manager.get_reward_components(next_state, num_steps)
+            custom_reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty = self.reward_manager.calculate_reward(next_rich_state, terminated, num_steps)
+            reward_components = self.reward_manager.get_reward_components(next_rich_state, num_steps)
             
             # Normalize reward
             normalized_reward = self.normalize_reward(custom_reward)
             
             # Store transition in replay buffer with normalized reward
-            self.memory.push(state, action, normalized_reward, next_state, terminated)
+            self.memory.push(state, action, normalized_reward, next_rich_state, terminated)
             
-            trajectory.append((state, action, custom_reward, next_state, terminated))
+            trajectory.append((state, action, custom_reward, next_rich_state, terminated))
             episode_reward += custom_reward
-            state = next_state
+            state = next_rich_state
             self.total_steps += 1
             num_steps += 1
 

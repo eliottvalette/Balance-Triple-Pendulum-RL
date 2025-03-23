@@ -25,6 +25,9 @@ font = pygame.font.Font(None, 24)
 # Initialize action with zero force
 action = np.array([0.0], dtype=np.float32)
 
+# Initialize clock for controlling frame rate
+clock = pygame.time.Clock()
+
 # Run a small loop to see it in action
 while True:
     # Get the current state of all keyboard buttons
@@ -88,6 +91,9 @@ while True:
     
     # Render the environment
     env.render()
+    
+    # Control frame rate
+    clock.tick(30)
     
     if terminated:
         obs, info = env.reset()

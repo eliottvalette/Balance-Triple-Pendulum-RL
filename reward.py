@@ -1,5 +1,5 @@
 import numpy as np
-
+import random as rd
 class RewardManager:
     def __init__(self):
         self.cart_position_weight = 0.01
@@ -8,7 +8,6 @@ class RewardManager:
         self.alignement_weight = 0.2
         self.upright_weight = 1.0
         self.acceleration_weight = 0.05
-        self.energy_weight = 0.1
 
     def calculate_reward(self, state, terminated):
         """
@@ -34,50 +33,36 @@ class RewardManager:
         v1_x, v1_y, v2_x, v2_y, v3_x, v3_y = state[18:24]  # Pendulum velocities
         
         # x close to 0
-        x_penalty = self.cart_position_weight * abs(x)
+        x_penalty = self.cart_position_weight * abs(x) if abs(x) > 0.5 else 0
         
         # x_dot close to 0
-        x_dot_penalty = self.velocity_weight * abs(x_dot)
+        x_dot_penalty = self.velocity_weight * abs(x_dot) if abs(x) > 0.5 else 0
         
         # Penalize high acceleration
-        acceleration_penalty = self.acceleration_weight * abs(x_ddot)
+        acceleration_penalty = self.acceleration_weight * abs(x_ddot) if abs(x) > 0.5 else 0
 
         # angles alignement 
         non_alignement_penalty = self.alignement_weight * (abs(th1-th2) + abs(th2-th3) + abs(th3-th1)) / np.pi
 
         # Uprightness of each node
-        # Measure how close each pendulum segment is to vertical position (upward)
-        # When pendulum is upright, cos(θ) is -1, when pointing down, cos(θ) is 1
-        # We convert to a [0,1] scale where 1 is fully upright
-        upright_reward = self.upright_weight * (
-            (1 - np.cos(th1)) / 2 +  # Map from [-1,1] to [0,1]
-            (1 - np.cos(th2)) / 2 + 
-            (1 - np.cos(th3)) / 2
-        ) / 3  # Average across all three segments
-        
-        # Energy penalty to encourage smooth motion
-        # Calculate total kinetic and potential energy
-        kinetic_energy = 0.5 * (v1_x**2 + v1_y**2 + v2_x**2 + v2_y**2 + v3_x**2 + v3_y**2)
-        potential_energy = abs(p1_y) + abs(p2_y) + abs(p3_y)  # Height from ground
-        energy_penalty = self.energy_weight * (kinetic_energy + potential_energy)
+        upright_reward = self.upright_weight * (p1_y + p2_y + p3_y) / 3
 
         # Penalties are negative, rewards are positive
-        reward = upright_reward - x_penalty - x_dot_penalty - acceleration_penalty - non_alignement_penalty - energy_penalty
+        reward = upright_reward - x_penalty - x_dot_penalty - acceleration_penalty - non_alignement_penalty
         
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
             
-        return reward, upright_reward, x_penalty, x_dot_penalty, non_alignement_penalty, acceleration_penalty, energy_penalty
+        return reward, upright_reward, x_penalty, x_dot_penalty, non_alignement_penalty, acceleration_penalty
 
     def get_reward_components(self, state):
-        reward, upright_reward, x_penalty, x_dot_penalty, non_alignement_penalty, acceleration_penalty, energy_penalty = self.calculate_reward(state, False)
+        reward, upright_reward, x_penalty, x_dot_penalty, non_alignement_penalty, acceleration_penalty = self.calculate_reward(state, False)
         return {
             'x_penalty': x_penalty,
             'x_dot_penalty': x_dot_penalty,
             'non_alignement_penalty': non_alignement_penalty,
             'upright_reward': upright_reward,
             'acceleration_penalty': acceleration_penalty,
-            'energy_penalty': energy_penalty,
             'reward': reward
         } 

@@ -66,6 +66,9 @@ class TriplePendulumTrainer:
         # Créer le dossier pour sauvegarder les résultats
         os.makedirs('results', exist_ok=True)
         os.makedirs('models', exist_ok=True)
+
+        # Load models
+        self.load_models()
     
     def normalize_reward(self, reward):
         # Update running statistics
@@ -107,7 +110,7 @@ class TriplePendulumTrainer:
             next_state, terminated = self.env.step(scaled_action)
             
             # Calculate custom reward and components
-            custom_reward, upright_reward, x_penalty, x_dot_penalty, non_alignement_penalty, acceleration_penalty, energy_penalty = self.reward_manager.calculate_reward(next_state, terminated)
+            custom_reward, upright_reward, x_penalty, x_dot_penalty, non_alignement_penalty, acceleration_penalty = self.reward_manager.calculate_reward(next_state, terminated)
             reward_components = self.reward_manager.get_reward_components(next_state)
             
             # Normalize reward
@@ -208,7 +211,7 @@ class TriplePendulumTrainer:
                 self.metrics.plot_metrics(f'results/metrics.png')
                 
                 # Sauvegarder le modèle
-                self.save_models(f"models/checkpoint_{episode}")
+                self.save_models(f"models/checkpoint_{episode}.pth")
                 
                 # Render one episode at 30 FPS
                 self.env.render_mode = "human"
@@ -229,12 +232,17 @@ class TriplePendulumTrainer:
                 self.env.render_mode = None  # Turn off rendering
     
     def save_models(self, path):
-        torch.save({
-            'actor_state_dict': self.actor.state_dict(),
-            'critic_state_dict': self.critic.state_dict(),
-            'actor_optimizer': self.actor_optimizer.state_dict(),
-            'critic_optimizer': self.critic_optimizer.state_dict()
-        }, path)
+        torch.save(self.actor.state_dict(), path + '_actor.pth')
+        torch.save(self.critic.state_dict(), path + '_critic.pth')
+        torch.save(self.actor_optimizer.state_dict(), path + '_actor_optimizer.pth')
+        torch.save(self.critic_optimizer.state_dict(), path + '_critic_optimizer.pth')
+
+    def load_models(self):
+        if os.path.exists('models/checkpoint_actor.pth'):
+            self.actor.load_state_dict(torch.load('models/checkpoint_actor.pth'))
+            self.critic.load_state_dict(torch.load('models/checkpoint_critic.pth'))
+            self.actor_optimizer.load_state_dict(torch.load('models/checkpoint_actor_optimizer.pth'))
+            self.critic_optimizer.load_state_dict(torch.load('models/checkpoint_critic_optimizer.pth'))
 
 if __name__ == "__main__":
     config = {

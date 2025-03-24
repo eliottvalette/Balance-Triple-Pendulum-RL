@@ -19,7 +19,7 @@ class TriplePendulumEnv(gym.Env):
         # -----------------------
         # Environment parameters
         # -----------------------
-        self.gravity = 2.0
+        self.gravity = 1.0
         self.mass_cart = 1.0
         self.mass_pend1 = 0.1  # Mass of first pendulum
         self.mass_pend2 = 0.1  # Mass of second pendulum
@@ -83,7 +83,7 @@ class TriplePendulumEnv(gym.Env):
         # Rendering
         self.render_mode = render_mode
         self.screen = None
-        self.clock = None
+        self.clock = pygame.time.Clock()
         self.screen_width = 800
         self.screen_height = 600
         self.cart_y_pos = 300   # y-position of cart in the rendered view
@@ -112,7 +112,7 @@ class TriplePendulumEnv(gym.Env):
             0.0                        # theta_ddot3
         ]
 
-        if self.render_mode == "human":
+        if self.render_mode == "human" and self.screen is None:
             self._render_init()
         
         # Create a copy of the state to avoid directly sharing state_for_simu
@@ -367,7 +367,7 @@ class TriplePendulumEnv(gym.Env):
 
         return model_state
 
-    def render(self):
+    def render(self, episode = None):
         if self.render_mode != "human":
             return
 
@@ -552,6 +552,7 @@ class TriplePendulumEnv(gym.Env):
             {"text": f"Angle 1: {th1_deg:.1f}°", "color": PENDULUM1_COLOR},
             {"text": f"Angle 2: {th2_deg:.1f}°", "color": PENDULUM2_COLOR},
             {"text": f"Angle 3: {th3_deg:.1f}°", "color": PENDULUM3_COLOR},
+            {"text": f"Episode: {episode if episode is not None else 'None'}", "color": TEXT_COLOR}
         ]
         
         # Add total reward to metrics panel
@@ -649,7 +650,6 @@ class TriplePendulumEnv(gym.Env):
                 bar_y += bar_spacing
 
         pygame.display.flip()
-        self.clock.tick(60)
 
     def close(self):
         if self.screen is not None:
@@ -661,16 +661,19 @@ class TriplePendulumEnv(gym.Env):
         if not pygame.get_init():
             pygame.init()
         pygame.display.set_caption("Triple Pendulum Simulation")
-        self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
-        self.clock = pygame.time.Clock()
         
-        # Set up a nicer font if available
-        try:
-            self.font = pygame.font.SysFont("Arial", 18)
-        except:
-            self.font = pygame.font.Font(None, 24)
+        # Only create a new screen if it doesn't exist
+        if self.screen is None:
+            self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
+            self.clock = pygame.time.Clock()
             
-        pygame.display.flip()
+            # Set up a nicer font if available
+            try:
+                self.font = pygame.font.SysFont("Arial", 18)
+            except:
+                self.font = pygame.font.Font(None, 24)
+            
+            pygame.display.flip()
 
     def apply_brake(self):
         """

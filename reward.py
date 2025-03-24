@@ -2,11 +2,11 @@ import numpy as np
 import random as rd
 class RewardManager:
     def __init__(self):
-        self.cart_position_weight = 1
-        self.termination_penalty = 10.0
+        self.cart_position_weight = 0.15
+        self.termination_penalty = 100.0
         self.alignement_weight = 0.1
-        self.upright_weight = 2.0
-        self.stability_weight = 0.02  # Weight for the stability reward
+        self.upright_weight = 2.5
+        self.stability_weight = 0.001  # Weight for the stability reward
         self.old_state = None
         self.length = 0.5  # Pendulum length
 
@@ -35,7 +35,7 @@ class RewardManager:
         end3_x, end3_y = state[18:20]        # Third end position
         
         # x close to 0
-        x_penalty = self.cart_position_weight * (abs(x))
+        x_penalty = self.cart_position_weight * (abs(x)) **2
 
         # angles alignement 
         non_alignement_penalty = self.alignement_weight * (abs(th1-th2) + abs(th2-th3) + abs(th3-th1)) / np.pi
@@ -43,7 +43,7 @@ class RewardManager:
         # Uprightness of each node - negate p*_y values because in the physics simulation,
         # negative y means upward (which is what we want to reward)
         # The physics uses a reference frame where positive y is downward
-        upright_reward = self.upright_weight * (2.25 -end1_y - end2_y - end3_y)
+        upright_reward = self.upright_weight * (2.25 - end1_y - end2_y - end3_y)
 
         # Stability reward: penalize high angular velocities and accelerations
         angular_velocity_penalty = (th1_dot**2 + th2_dot**2 + th3_dot**2) / 3.0

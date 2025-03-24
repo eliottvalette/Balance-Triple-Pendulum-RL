@@ -48,11 +48,7 @@ while True:
     # Apply braking when B is held down
     elif keys[pygame.K_b]:
         action = env.apply_brake()
-        env.state[1] = 0.0  # Directly zero out velocity
-    # Apply full stop when S is held down
-    elif keys[pygame.K_s]:
-        action = np.array([0.0], dtype=np.float32)
-        env.state[1] = 0.0  # Directly zero out velocity
+        env.state_for_simu[1] = 0.0  # Directly zero out velocity
     else:
         # When no key is pressed, reset direction
         last_direction = 0
@@ -78,6 +74,7 @@ while True:
                 print(f"Auto-braking on direction change: {'ON' if strong_braking else 'OFF'}")
             elif event.key == pygame.K_s: # print state
                 print(env.state_for_simu)  # Print the observation instead of internal state
+                print(env.get_rich_state(env.state_for_simu))
     
     obs, terminated = env.step(action)
     rich_obs = env.get_rich_state(obs)

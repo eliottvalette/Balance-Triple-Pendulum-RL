@@ -28,7 +28,7 @@ class ReplayBuffer:
 class TriplePendulumTrainer:
     def __init__(self, config):
         self.config = config
-        self.env = TriplePendulumEnv(render_mode=None)  # Disable rendering during training
+        self.env = TriplePendulumEnv(render_mode="human")  # Enable rendering from the start
         self.reward_manager = RewardManager()
         
         # Initialize models
@@ -64,10 +64,13 @@ class TriplePendulumTrainer:
         self.reward_running_std = 1
         self.reward_alpha = 0.001  # For running statistics update
         
-        # Créer le dossier pour sauvegarder les résultats
+        # Create directories for saving results
         os.makedirs('results', exist_ok=True)
         os.makedirs('models', exist_ok=True)
 
+        # Initialize rendering
+        self.env._render_init()
+        
         # Load models
         self.load_models()
     
@@ -83,7 +86,7 @@ class TriplePendulumTrainer:
         normalized_reward = (reward - self.reward_running_mean) / std
         return normalized_reward * self.reward_scale
 
-    def collect_trajectory(self):
+    def collect_trajectory(self, episode):
         state, _ = self.env.reset()
         rich_state = self.env.get_rich_state(state)
         done = False
@@ -119,10 +122,7 @@ class TriplePendulumTrainer:
             
             # Render if rendering is enabled
             if self.env.render_mode == "human":
-                self.env.render()
-                # Limit to 60 FPS during visualization
-                if hasattr(self.env, 'clock'):
-                    self.env.clock.tick(60)
+                self.env.render(episode=episode)
             
             # Calculate custom reward and components
             custom_reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty = self.reward_manager.calculate_reward(next_rich_state, terminated, num_steps)
@@ -195,15 +195,14 @@ class TriplePendulumTrainer:
         for episode in range(self.config['num_episodes']):
             print(f"Episode {episode} started")
             
-            # Enable rendering every 100 episodes
+            # Adjust clock speed based on episode number
             if episode % 100 == 0:
-                self.env.render_mode = "human"
-                self._render_init_if_needed()
+                self.env.clock.tick(60)  # Slower rendering for visualization
             else:
-                self.env.render_mode = None
+                self.env.clock.tick(2000)  # Faster rendering for training
                 
             # Collect trajectory and store in replay buffer
-            trajectory, episode_reward, reward_components = self.collect_trajectory()
+            trajectory, episode_reward, reward_components = self.collect_trajectory(episode)
             
             # Only update after we have enough samples
             losses = {"critic_loss": 0, "actor_loss": 0}
@@ -239,11 +238,6 @@ class TriplePendulumTrainer:
                 # Save model
                 self.save_models(f"models/checkpoint")
     
-    def _render_init_if_needed(self):
-        """Initialize rendering if it's not already initialized"""
-        if self.env.render_mode == "human" and self.env.screen is None:
-            self.env._render_init()
-            
     def save_models(self, path):
         torch.save(self.actor.state_dict(), path + '_actor.pth')
         torch.save(self.critic.state_dict(), path + '_critic.pth')

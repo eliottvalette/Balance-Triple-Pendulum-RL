@@ -5,9 +5,9 @@ class RewardManager:
         self.cart_position_weight = 0.20
         self.termination_penalty = 100.0
         self.alignement_weight = 0.1
-        self.upright_weight = 0.5
-        self.stability_weight = 0.5  # Weight for the stability reward
-        self.mse_weight = 0.3  # Weight for the MSE penalty
+        self.upright_weight = 0.05
+        self.stability_weight = 0.01  # Weight for the stability reward
+        self.mse_weight = 4.0  # Weight for the MSE penalty
         self.old_state = None
         self.length = 0.5  # Pendulum length
         self.consecutive_upright_steps = 0  # Track consecutive steps with pendulum upright
@@ -16,13 +16,12 @@ class RewardManager:
         self.max_exponential = 5.0  # Maximum exponential multiplier
         self.old_points_positions = None
         self.cached_velocity = 0
-        # Define aim state as class attribute
-        self.aim_position_state = [0.0, 0.0, 0.0, -np.pi,
-                                 0.0, 0.0, -np.pi, 0.0,
-                                 0.0, -np.pi, 0.0, 0.0,
-                                 0.5, 0.5, 0.5, 0.16666667,
+        self.aim_position_state = [0.0, 0.0, 0.0, np.pi,
+                                 0.0, 0.0, np.pi, 0.0,
+                                 0.0, np.pi, 0.0, 0.0,
+                                 0.5, 0.5, 0.5, 0.41,
                                  0.5, 0.33333333, 0.5, 0.25,
-                                 0.0, 0.0, 0.25, 0.0]
+                                 0.0, 0.0, 0.0, 0.0]
 
     def calculate_reward(self, state, terminated, current_step):
         """
@@ -80,7 +79,7 @@ class RewardManager:
                 self.max_exponential
             )
         else:
-            exponential_multiplier = 0.38
+            exponential_multiplier = 0.5
 
         # Apply exponential multiplier to upright reward
         upright_reward *= exponential_multiplier
@@ -103,12 +102,9 @@ class RewardManager:
         mse_sum = 0
         # Handle non-angular components (positions and velocities)
         for i in range(len(state)):
-            if i in [3, 6, 9]:  # Indices for angles (th1, th2, th3)
-                # Use angle comparison for angular components
-                angle_diff = self.are_angles_equal(state[i], self.aim_position_state[i], np.pi) 
-                mse_sum += angle_diff ** 2
-            else:
-                # Regular MSE for non-angular components
+            if i in [3, 6, 9]: # angles
+                mse_sum += np.sqrt((abs(state[i]) - self.aim_position_state[i]) ** 2)
+            elif i in [0, 12, 13, 14, 15, 16, 17, 18, 19]: # positions
                 mse_sum += (state[i] - self.aim_position_state[i]) ** 2
         
         mse_penalty = self.mse_weight * (mse_sum / len(state))
@@ -132,20 +128,3 @@ class RewardManager:
             'mse_penalty': mse_penalty,
             'reward': reward
         }
-
-    def are_angles_equal(self, angle1, angle2, tolerance=1e-6):
-        """
-        Compare two angles considering their circular nature.
-        
-        Args:
-            angle1, angle2: angles to compare (in radians)
-            tolerance: acceptable difference between angles (default: 1e-6)
-        
-        Returns:
-            bool: True if angles are equivalent (modulo 2π)
-        """
-        # Normalize difference to [-π, π]
-        diff = (angle1 - angle2) % (2 * np.pi)
-        if diff > np.pi:
-            diff = diff - 2 * np.pi
-        return abs(diff) < tolerance 

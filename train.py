@@ -126,7 +126,7 @@ class TriplePendulumTrainer:
                 self.env.render(episode=episode)
             
             # Calculate custom reward and components
-            custom_reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty = self.reward_manager.calculate_reward(next_rich_state, terminated, num_steps)
+            custom_reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty = self.reward_manager.calculate_reward(next_rich_state, terminated, num_steps)
             reward_components = self.reward_manager.get_reward_components(next_rich_state, num_steps)
             
             # Normalize reward

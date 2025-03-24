@@ -19,7 +19,7 @@ class TriplePendulumEnv(gym.Env):
         # -----------------------
         # Environment parameters
         # -----------------------
-        self.gravity = 9.81 # Gravity (9.81)
+        self.gravity = 1.0 # Gravity (9.81)
         self.mass_cart = 1.0
         self.mass_pend1 = 0.1  # Mass of first pendulum
         self.mass_pend2 = 0.1  # Mass of second pendulum
@@ -108,14 +108,14 @@ class TriplePendulumEnv(gym.Env):
             0.0,                          # cart x
             0.0,                          # cart velocity
             0.0,                          # cart acceleration
-            np.random.uniform(-0.1, 0.1), # theta1 (vertical)
-            np.random.uniform(-0.1, 0.1), # theta_dot1 (vertical)
+            np.pi, # theta1 (vertical)
+            0.0, # theta_dot1 (vertical)
             0.0,                          # theta_ddot1 (vertical)
-            np.random.uniform(-0.1, 0.1), # theta2 (horizontal)
-            np.random.uniform(-0.1, 0.1), # theta_dot2
+            np.pi, # theta2 (horizontal)
+            0.0, # theta_dot2
             0.0,                          # theta_ddot2
-            np.random.uniform(-0.1, 0.1), # theta3
-            np.random.uniform(-0.1, 0.1), # theta_dot3
+            np.pi, # theta3
+            0.0, # theta_dot3
             0.0                           # theta_ddot3
         ]
 
@@ -365,9 +365,34 @@ class TriplePendulumEnv(gym.Env):
     def get_rich_state(self, state):
         """
         Get a rich state representation for the environment.
+        INDEX, VALUE, DESCRIPTION
+        0, x, cart position
+        1, x_dot, cart velocity
+        2, x_ddot, cart acceleration
+        3, th1, first pendulum angle
+        4, th1_dot, first pendulum velocity
+        5, th1_ddot, first pendulum acceleration
+        6, th2, second pendulum angle
+        7, th2_dot, second pendulum velocity
+        8, th2_ddot, second pendulum acceleration
+        9, th3, third pendulum angle
+        10, th3_dot, third pendulum velocity
+        11, th3_ddot, third pendulum acceleration
+        12, pivot1_x, first pivot position
+        13, pivot1_y, first pivot position
+        14, end1_x, first end position
+        15, end1_y, first end position
+        16, end2_x, second end position
+        17, end2_y, second end position
+        18, end3_x, third end position
+        19, end3_y, third end position
+        20, close_to_left, binary if cart is close to left edge of the screen
+        21, close_to_right, binary if cart is close to right edge of the screen
+        22, normalized_consecutive_upright_steps, normalized number of consecutive upright steps
+        23, is_long_upright, binary if number of consecutive upright steps is greater than 60
         
         Returns:
-            dict: A dictionary containing all relevant state variables and their values.
+            list: A list containing all relevant state variables.
         """
 
         # Create a copy of the state to avoid modifying state_for_simu
@@ -618,7 +643,8 @@ class TriplePendulumEnv(gym.Env):
                 {"name": "Base", "value": self.reward_components.get('reward', 0), "color": (100, 100, 200)},
                 {"name": "Upright", "value": self.reward_components.get('upright_reward', 0), "color": (80, 180, 80)},
                 {"name": "Position", "value": self.reward_components.get('x_penalty', 0), "color": (200, 80, 80)},
-                {"name": "Alignment", "value": self.reward_components.get('non_alignement_penalty', 0), "color": (180, 130, 80)}
+                {"name": "Alignment", "value": self.reward_components.get('non_alignement_penalty', 0), "color": (180, 130, 80)},
+                {"name": "MSE", "value": self.reward_components.get('mse_penalty', 0), "color": (180, 130, 80)}
             ]
             
             # Add stability penalty if it exists

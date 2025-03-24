@@ -15,7 +15,6 @@ class RewardManager:
         self.max_exponential = 5.0  # Maximum exponential multiplier
         self.old_points_positions = None
         self.cached_velocity = 0
-        self.old_cache_step = 0
 
     def calculate_reward(self, state, terminated, current_step):
         """
@@ -83,16 +82,12 @@ class RewardManager:
         angular_velocity_penalty = 0
 
         # Calculate velocity of points of the pendulum
-        if self.old_cache_step == 20 :
-            points_velocity = 10 * np.sqrt((end3_x - self.old_points_positions[4])**2 + (end3_y - self.old_points_positions[5])**2)
-            print(points_velocity)
-            self.cached_velocity = points_velocity
-            self.old_cache_step = 0
-        else :
+        points_velocity = (50 * (abs(end3_x - self.old_points_positions[6]) + abs(end3_y - self.old_points_positions[7]))) ** 0.2
+        if points_velocity == 0:
             points_velocity = self.cached_velocity
-            self.old_cache_step += 1
+        else:
+            self.cached_velocity = points_velocity
 
-        # save old points positions
         self.old_points_positions = [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y]
 
         stability_penalty = self.stability_weight * (angular_velocity_penalty + points_velocity)

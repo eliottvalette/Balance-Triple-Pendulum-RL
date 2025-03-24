@@ -79,6 +79,7 @@ class TriplePendulumEnv(gym.Env):
 
         # Internal state
         self.state_for_simu = None
+        self.consecutive_upright_steps = 0
 
         # Rendering
         self.render_mode = render_mode
@@ -364,10 +365,22 @@ class TriplePendulumEnv(gym.Env):
         close_to_left = (x < -2.4)
         close_to_right = (x > 2.4)
 
+        # Add consecutive upright steps
+        upright_reward_points = 0.2 * (2.25 - end1_y - end2_y - end3_y)
+        upright_reward_angles = 0.2 * (abs(th1) + abs(th2) + abs(th3))
+        upright_reward = upright_reward_points + upright_reward_angles
+        is_upright = (upright_reward > 1.4)
+        if is_upright:
+            self.consecutive_upright_steps += 1
+        else:
+            self.consecutive_upright_steps = 0
+        normalized_consecutive_upright_steps = min(self.consecutive_upright_steps / 100, 1)
+        is_long_upright = self.consecutive_upright_steps > 60
+
         # Create model-ready state (only include necessary information)
         model_state = np.concatenate([
             processed_state[:12],  # Original 12 state variables
-            [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y, close_to_left, close_to_right]  # Additional visual information
+            [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y, close_to_left, close_to_right, normalized_consecutive_upright_steps, is_long_upright]  # Additional visual information
         ])
 
         return model_state

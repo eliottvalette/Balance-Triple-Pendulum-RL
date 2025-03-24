@@ -6,13 +6,16 @@ class RewardManager:
         self.termination_penalty = 100.0
         self.alignement_weight = 0.1
         self.upright_weight = 0.2
-        self.stability_weight = 0.005  # Weight for the stability reward
+        self.stability_weight = 0.5  # Weight for the stability reward
         self.old_state = None
         self.length = 0.5  # Pendulum length
         self.consecutive_upright_steps = 0  # Track consecutive steps with pendulum upright
-        self.upright_threshold = 1.2  # Threshold for considering pendulum upright
-        self.exponential_base = 1.15  # Base for exponential reward
+        self.upright_threshold = 1.4  # Threshold for considering pendulum upright
+        self.exponential_base = 1.05  # Base for exponential reward
         self.max_exponential = 5.0  # Maximum exponential multiplier
+        self.old_points_positions = None
+        self.cached_velocity = 0
+        self.old_cache_step = 0
 
     def calculate_reward(self, state, terminated, current_step):
         """
@@ -37,6 +40,9 @@ class RewardManager:
         end1_x, end1_y = state[14:16]        # First end position
         end2_x, end2_y = state[16:18]        # Second end position
         end3_x, end3_y = state[18:20]        # Third end position
+
+        if self.old_points_positions is None :
+            self.old_points_positions = [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y]
         
         # x close to 0
         x_penalty = self.cart_position_weight * (abs(x)) **2
@@ -51,8 +57,6 @@ class RewardManager:
         upright_reward_angles = self.upright_weight * (abs(th1) + abs(th2) + abs(th3))
         upright_reward = upright_reward_points + upright_reward_angles
 
-
-
         # Check if pendulum is upright
         is_upright = (upright_reward > self.upright_threshold)
 
@@ -63,19 +67,35 @@ class RewardManager:
             self.consecutive_upright_steps = 0
 
         # Calculate exponential reward multiplier
-        exponential_multiplier = min(
-            self.exponential_base ** (self.consecutive_upright_steps / 20),  # Divide by 100 to make it grow more slowly
-            self.max_exponential
-        )
+        if self.consecutive_upright_steps > 60:
+            exponential_multiplier = min(
+                self.exponential_base ** (self.consecutive_upright_steps / 40),  # Divide by 100 to make it grow more slowly
+                self.max_exponential
+            )
+        else:
+            exponential_multiplier = 0.3
 
         # Apply exponential multiplier to upright reward
         upright_reward *= exponential_multiplier
 
-        # Stability reward: penalize high angular velocities and accelerations
+        # Stability reward: penalize high angular velocities and accelerations of points of the pendulum
         angular_velocity_penalty = (th1_dot**2 + th2_dot**2 + th3_dot**2) / 3.0
-        angular_accel_penalty = (th1_ddot**2 + th2_ddot**2 + th3_ddot**2) / 3.0
+        angular_velocity_penalty = 0
 
-        stability_penalty = self.stability_weight * (angular_velocity_penalty + angular_accel_penalty)
+        # Calculate velocity of points of the pendulum
+        if self.old_cache_step == 20 :
+            points_velocity = 10 * np.sqrt((end3_x - self.old_points_positions[4])**2 + (end3_y - self.old_points_positions[5])**2)
+            print(points_velocity)
+            self.cached_velocity = points_velocity
+            self.old_cache_step = 0
+        else :
+            points_velocity = self.cached_velocity
+            self.old_cache_step += 1
+
+        # save old points positions
+        self.old_points_positions = [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y]
+
+        stability_penalty = self.stability_weight * (angular_velocity_penalty + points_velocity)
 
         # Penalties are negative, rewards are positive
         reward = upright_reward - x_penalty - non_alignement_penalty - stability_penalty

@@ -34,7 +34,7 @@ class TriplePendulumTrainer:
         
         # Initialize models
         # Original state dimension is 12 (basic state) + 8 (visual information)
-        state_dim = 23
+        state_dim = 24
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim)
         self.critic = TriplePendulumCritic(state_dim, action_dim)

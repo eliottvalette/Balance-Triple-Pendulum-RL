@@ -19,7 +19,7 @@ class TriplePendulumEnv(gym.Env):
         # -----------------------
         # Environment parameters
         # -----------------------
-        self.gravity = 1.0 # Gravity (9.81)
+        self.gravity = 9.81 # Gravity (9.81)
         self.mass_cart = 1.0
         self.mass_pend1 = 0.1  # Mass of first pendulum
         self.mass_pend2 = 0.1  # Mass of second pendulum
@@ -27,7 +27,7 @@ class TriplePendulumEnv(gym.Env):
         self.length = 0.5
         self.cart_friction = 0.5
         self.pend_friction = 0.1
-        self.air_resistance = 100.0  # Increased air resistance for more realistic movement (0.5)
+        self.air_resistance = 0.5  # Increased air resistance for more realistic movement (0.5)
         
         # Reduce force magnitude
         self.force_mag = 20.0

@@ -79,7 +79,6 @@ class RewardManager:
 
         # Stability reward: penalize high angular velocities and accelerations of points of the pendulum
         angular_velocity_penalty = (th1_dot**2 + th2_dot**2 + th3_dot**2) / 3.0
-        angular_velocity_penalty = 0
 
         # Calculate velocity of points of the pendulum
         points_velocity = (50 * (abs(end3_x - self.old_points_positions[6]) + abs(end3_y - self.old_points_positions[7]))) ** 0.2

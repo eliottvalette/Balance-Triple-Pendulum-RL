@@ -7,6 +7,7 @@ class RewardManager:
         self.alignement_weight = 0.1
         self.upright_weight = 0.5
         self.stability_weight = 0.5  # Weight for the stability reward
+        self.mse_weight = 0.3  # Weight for the MSE penalty
         self.old_state = None
         self.length = 0.5  # Pendulum length
         self.consecutive_upright_steps = 0  # Track consecutive steps with pendulum upright
@@ -15,6 +16,13 @@ class RewardManager:
         self.max_exponential = 5.0  # Maximum exponential multiplier
         self.old_points_positions = None
         self.cached_velocity = 0
+        # Define aim state as class attribute
+        self.aim_position_state = [0.0, 0.0, 0.0, -np.pi,
+                                 0.0, 0.0, -np.pi, 0.0,
+                                 0.0, -np.pi, 0.0, 0.0,
+                                 0.5, 0.5, 0.5, 0.16666667,
+                                 0.5, 0.33333333, 0.5, 0.25,
+                                 0.0, 0.0, 0.25, 0.0]
 
     def calculate_reward(self, state, terminated, current_step):
         """
@@ -91,21 +99,53 @@ class RewardManager:
 
         stability_penalty = self.stability_weight * (angular_velocity_penalty + points_velocity)
 
-        # Penalties are negative, rewards are positive
-        reward = upright_reward - x_penalty - non_alignement_penalty - stability_penalty
+        # Calculate MSE penalty with special handling for angles
+        mse_sum = 0
+        # Handle non-angular components (positions and velocities)
+        for i in range(len(state)):
+            if i in [3, 6, 9]:  # Indices for angles (th1, th2, th3)
+                # Use angle comparison for angular components
+                angle_diff = self.are_angles_equal(state[i], self.aim_position_state[i], np.pi) 
+                mse_sum += angle_diff ** 2
+            else:
+                # Regular MSE for non-angular components
+                mse_sum += (state[i] - self.aim_position_state[i]) ** 2
         
+        mse_penalty = self.mse_weight * (mse_sum / len(state))
+
+        # Penalties are negative, rewards are positive
+        reward = upright_reward - x_penalty - non_alignement_penalty - stability_penalty - mse_penalty
+
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
             
-        return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty
+        return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty
 
     def get_reward_components(self, state, current_step):
-        reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty = self.calculate_reward(state, False, current_step)
+        reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty = self.calculate_reward(state, False, current_step)
         return {
             'x_penalty': x_penalty,
             'non_alignement_penalty': non_alignement_penalty,
             'upright_reward': upright_reward,
             'stability_penalty': stability_penalty,
+            'mse_penalty': mse_penalty,
             'reward': reward
-        } 
+        }
+
+    def are_angles_equal(self, angle1, angle2, tolerance=1e-6):
+        """
+        Compare two angles considering their circular nature.
+        
+        Args:
+            angle1, angle2: angles to compare (in radians)
+            tolerance: acceptable difference between angles (default: 1e-6)
+        
+        Returns:
+            bool: True if angles are equivalent (modulo 2π)
+        """
+        # Normalize difference to [-π, π]
+        diff = (angle1 - angle2) % (2 * np.pi)
+        if diff > np.pi:
+            diff = diff - 2 * np.pi
+        return abs(diff) < tolerance 

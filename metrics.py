@@ -43,7 +43,7 @@ class MetricsTracker:
         # Plot reward components
         ax = axes[0, 2]
         reward_components = ['upright_reward', 'x_penalty', 
-                           'non_alignement_penalty', 'stability_penalty']
+                           'non_alignement_penalty', 'stability_penalty', 'mse_penalty']
         for component in reward_components:
             if component in self.metrics:
                 ax.plot(self.metrics[component], label=component)

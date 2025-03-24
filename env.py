@@ -19,7 +19,7 @@ class TriplePendulumEnv(gym.Env):
         # -----------------------
         # Environment parameters
         # -----------------------
-        self.gravity = 1.0 # Gravity (9.81)
+        self.gravity = 9.81 # Gravity (9.81)
         self.mass_cart = 1.0
         self.mass_pend1 = 0.1  # Mass of first pendulum
         self.mass_pend2 = 0.1  # Mass of second pendulum
@@ -108,10 +108,10 @@ class TriplePendulumEnv(gym.Env):
             0.0,                          # cart x
             0.0,                          # cart velocity
             0.0,                          # cart acceleration
-            np.random.uniform(-0.1, 0.1), # theta1
-            np.random.uniform(-0.1, 0.1), # theta_dot1
-            0.0,                          # theta_ddot1
-            np.random.uniform(-0.1, 0.1), # theta2
+            np.random.uniform(-0.1, 0.1), # theta1 (vertical)
+            np.random.uniform(-0.1, 0.1), # theta_dot1 (vertical)
+            0.0,                          # theta_ddot1 (vertical)
+            np.random.uniform(-0.1, 0.1), # theta2 (horizontal)
             np.random.uniform(-0.1, 0.1), # theta_dot2
             0.0,                          # theta_ddot2
             np.random.uniform(-0.1, 0.1), # theta3

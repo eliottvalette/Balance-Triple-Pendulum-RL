@@ -5,7 +5,7 @@ class RewardManager:
         self.cart_position_weight = 0.20
         self.termination_penalty = 100.0
         self.alignement_weight = 0.1
-        self.upright_weight = 0.05
+        self.upright_weight = 0.15
         self.stability_weight = 0.01  # Weight for the stability reward
         self.mse_weight = 4.0  # Weight for the MSE penalty
         self.old_state = None

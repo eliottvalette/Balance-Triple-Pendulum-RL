@@ -10,44 +10,80 @@ class TriplePendulumActor(nn.Module):
         # Add layer normalization for input
         self.input_norm = nn.LayerNorm(state_dim)
         
-        # Initialize with orthogonal weights and zero bias for first layer
+        # First layer
         self.fc1 = nn.Linear(state_dim, hidden_dim)
         nn.init.orthogonal_(self.fc1.weight, gain=1.414)
         nn.init.constant_(self.fc1.bias, 0)
-        
-        # Layer normalization after first layer
         self.norm1 = nn.LayerNorm(hidden_dim)
         
-        # Initialize with orthogonal weights and zero bias for second layer
+        # Second layer
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         nn.init.orthogonal_(self.fc2.weight, gain=1.414)
         nn.init.constant_(self.fc2.bias, 0)
-        
-        # Layer normalization after second layer
         self.norm2 = nn.LayerNorm(hidden_dim)
         
-        # Initialize with orthogonal weights and zero bias for output layer
-        self.fc3 = nn.Linear(hidden_dim, action_dim)
-        nn.init.orthogonal_(self.fc3.weight, gain=0.01)  # Smaller gain for output layer
+        # Third layer
+        self.fc3 = nn.Linear(hidden_dim, hidden_dim)
+        nn.init.orthogonal_(self.fc3.weight, gain=1.414)
         nn.init.constant_(self.fc3.bias, 0)
+        self.norm3 = nn.LayerNorm(hidden_dim)
+        
+        # Fourth layer
+        self.fc4 = nn.Linear(hidden_dim, hidden_dim // 2)
+        nn.init.orthogonal_(self.fc4.weight, gain=1.414)
+        nn.init.constant_(self.fc4.bias, 0)
+        self.norm4 = nn.LayerNorm(hidden_dim // 2)
+        
+        # Fifth layer
+        self.fc5 = nn.Linear(hidden_dim // 2, hidden_dim // 4)
+        nn.init.orthogonal_(self.fc5.weight, gain=1.414)
+        nn.init.constant_(self.fc5.bias, 0)
+        self.norm5 = nn.LayerNorm(hidden_dim // 4)
+        
+        # Output layer
+        self.fc_out = nn.Linear(hidden_dim // 4, action_dim)
+        nn.init.orthogonal_(self.fc_out.weight, gain=0.01)
+        nn.init.constant_(self.fc_out.bias, 0)
+        
+        # Dropout for regularization
+        self.dropout = nn.Dropout(p=0.1)
         
     def forward(self, x):
         # Normalize input
         x = self.input_norm(x)
         
-        # First layer with normalization
+        # First layer
         x = self.fc1(x)
         x = self.norm1(x)
         x = F.relu(x)
+        x = self.dropout(x)
         
-        # Second layer with normalization
+        # Second layer
         x = self.fc2(x)
         x = self.norm2(x)
         x = F.relu(x)
+        x = self.dropout(x)
         
-        # Output layer with tanh
+        # Third layer
         x = self.fc3(x)
-        return torch.tanh(x)  # Output between -1 and 1
+        x = self.norm3(x)
+        x = F.relu(x)
+        x = self.dropout(x)
+        
+        # Fourth layer
+        x = self.fc4(x)
+        x = self.norm4(x)
+        x = F.relu(x)
+        x = self.dropout(x)
+        
+        # Fifth layer
+        x = self.fc5(x)
+        x = self.norm5(x)
+        x = F.relu(x)
+        
+        # Output layer
+        x = self.fc_out(x)
+        return torch.tanh(x)
 
 class TriplePendulumCritic(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim=256):
@@ -56,26 +92,43 @@ class TriplePendulumCritic(nn.Module):
         # Add layer normalization for input
         self.input_norm = nn.LayerNorm(state_dim + action_dim)
         
-        # Initialize with orthogonal weights and zero bias for first layer
+        # First layer
         self.fc1 = nn.Linear(state_dim + action_dim, hidden_dim)
         nn.init.orthogonal_(self.fc1.weight, gain=1.414)
         nn.init.constant_(self.fc1.bias, 0)
-        
-        # Layer normalization after first layer
         self.norm1 = nn.LayerNorm(hidden_dim)
         
-        # Initialize with orthogonal weights and zero bias for second layer
+        # Second layer
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         nn.init.orthogonal_(self.fc2.weight, gain=1.414)
         nn.init.constant_(self.fc2.bias, 0)
-        
-        # Layer normalization after second layer
         self.norm2 = nn.LayerNorm(hidden_dim)
         
-        # Initialize with orthogonal weights and zero bias for output layer
-        self.fc3 = nn.Linear(hidden_dim, 1)
-        nn.init.orthogonal_(self.fc3.weight, gain=1)
+        # Third layer
+        self.fc3 = nn.Linear(hidden_dim, hidden_dim)
+        nn.init.orthogonal_(self.fc3.weight, gain=1.414)
         nn.init.constant_(self.fc3.bias, 0)
+        self.norm3 = nn.LayerNorm(hidden_dim)
+        
+        # Fourth layer
+        self.fc4 = nn.Linear(hidden_dim, hidden_dim // 2)
+        nn.init.orthogonal_(self.fc4.weight, gain=1.414)
+        nn.init.constant_(self.fc4.bias, 0)
+        self.norm4 = nn.LayerNorm(hidden_dim // 2)
+        
+        # Fifth layer
+        self.fc5 = nn.Linear(hidden_dim // 2, hidden_dim // 4)
+        nn.init.orthogonal_(self.fc5.weight, gain=1.414)
+        nn.init.constant_(self.fc5.bias, 0)
+        self.norm5 = nn.LayerNorm(hidden_dim // 4)
+        
+        # Output layer
+        self.fc_out = nn.Linear(hidden_dim // 4, 1)
+        nn.init.orthogonal_(self.fc_out.weight, gain=1)
+        nn.init.constant_(self.fc_out.bias, 0)
+        
+        # Dropout for regularization
+        self.dropout = nn.Dropout(p=0.1)
         
     def forward(self, state, action):
         x = torch.cat([state, action], dim=1)
@@ -83,16 +136,35 @@ class TriplePendulumCritic(nn.Module):
         # Normalize input
         x = self.input_norm(x)
         
-        # First layer with normalization
+        # First layer
         x = self.fc1(x)
         x = self.norm1(x)
         x = F.relu(x)
+        x = self.dropout(x)
         
-        # Second layer with normalization
+        # Second layer
         x = self.fc2(x)
         x = self.norm2(x)
         x = F.relu(x)
+        x = self.dropout(x)
+        
+        # Third layer
+        x = self.fc3(x)
+        x = self.norm3(x)
+        x = F.relu(x)
+        x = self.dropout(x)
+        
+        # Fourth layer
+        x = self.fc4(x)
+        x = self.norm4(x)
+        x = F.relu(x)
+        x = self.dropout(x)
+        
+        # Fifth layer
+        x = self.fc5(x)
+        x = self.norm5(x)
+        x = F.relu(x)
         
         # Output layer
-        x = self.fc3(x)
+        x = self.fc_out(x)
         return x 

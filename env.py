@@ -108,13 +108,13 @@ class TriplePendulumEnv(gym.Env):
             0.0,                          # cart x
             0.0,                          # cart velocity
             0.0,                          # cart acceleration
-            np.pi, # theta1 (vertical)
+            0.05, # theta1 (vertical)
             0.0, # theta_dot1 (vertical)
             0.0,                          # theta_ddot1 (vertical)
-            np.pi, # theta2 (horizontal)
+            0.05, # theta2 (horizontal)
             0.0, # theta_dot2
             0.0,                          # theta_ddot2
-            np.pi, # theta3
+            0.05, # theta3
             0.0, # theta_dot3
             0.0                           # theta_ddot3
         ]

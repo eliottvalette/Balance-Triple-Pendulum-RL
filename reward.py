@@ -5,7 +5,7 @@ class RewardManager:
         self.cart_position_weight = 0.10
         self.termination_penalty = 100.0
         self.alignement_weight = 0.1
-        self.upright_weight = 1.0
+        self.upright_weight = 2.0
         self.stability_weight = 0.005  # Weight for the stability reward
         self.old_state = None
         self.length = 0.5  # Pendulum length

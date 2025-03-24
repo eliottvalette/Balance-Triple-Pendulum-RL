@@ -19,7 +19,7 @@ class TriplePendulumEnv(gym.Env):
         # -----------------------
         # Environment parameters
         # -----------------------
-        self.gravity = 1.0
+        self.gravity = 1.0 # Gravity (9.81)
         self.mass_cart = 1.0
         self.mass_pend1 = 0.1  # Mass of first pendulum
         self.mass_pend2 = 0.1  # Mass of second pendulum
@@ -27,7 +27,7 @@ class TriplePendulumEnv(gym.Env):
         self.length = 0.5
         self.cart_friction = 0.5
         self.pend_friction = 0.1
-        self.air_resistance = 0.5  # Increased air resistance for more realistic movement
+        self.air_resistance = 100.0  # Increased air resistance for more realistic movement (0.5)
         
         # Reduce force magnitude
         self.force_mag = 20.0
@@ -99,18 +99,18 @@ class TriplePendulumEnv(gym.Env):
 
     def reset(self):
         self.state_for_simu = [
-            0.0,                        # cart x
-            0.0,                        # cart velocity
-            0.0,                        # cart acceleration
-            np.random.uniform(-1, 1),   # theta1
-            np.random.uniform(-0.2, 0.2), # theta_dot1
-            0.0,                        # theta_ddot1
-            np.random.uniform(-1, 1),   # theta2
-            np.random.uniform(-0.2, 0.2), # theta_dot2
-            0.0,                        # theta_ddot2
-            np.random.uniform(-1, 1),   # theta3
-            np.random.uniform(-0.2, 0.2), # theta_dot3
-            0.0                        # theta_ddot3
+            0.0,                          # cart x
+            0.0,                          # cart velocity
+            0.0,                          # cart acceleration
+            np.random.uniform(-0.1, 0.1), # theta1
+            np.random.uniform(-0.1, 0.1), # theta_dot1
+            0.0,                          # theta_ddot1
+            np.random.uniform(-0.1, 0.1), # theta2
+            np.random.uniform(-0.1, 0.1), # theta_dot2
+            0.0,                          # theta_ddot2
+            np.random.uniform(-0.1, 0.1), # theta3
+            np.random.uniform(-0.1, 0.1), # theta_dot3
+            0.0                           # theta_ddot3
         ]
 
         if self.render_mode == "human" and self.screen is None:
@@ -363,7 +363,7 @@ class TriplePendulumEnv(gym.Env):
         # Binary warning if close to the edge of the screen
         close_to_left = (x < -2.4)
         close_to_right = (x > 2.4)
-        
+
         # Create model-ready state (only include necessary information)
         model_state = np.concatenate([
             processed_state[:12],  # Original 12 state variables

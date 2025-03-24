@@ -1,5 +1,6 @@
 import gym
 import torch
+import pygame
 import numpy as np
 from env import TriplePendulumEnv
 from model import TriplePendulumActor, TriplePendulumCritic
@@ -197,9 +198,16 @@ class TriplePendulumTrainer:
             
             # Adjust clock speed based on episode number
             if episode % 100 == 0:
-                self.env.clock.tick(60)  # Slower rendering for visualization
-            else:
+                self.env.clock = pygame.time.Clock()
+                self.env.clock.tick(30)  # Slower rendering for visualization
+                self.env.render_mode = "human"
+            elif episode % 10 == 9:
+                self.env.clock = pygame.time.Clock()
                 self.env.clock.tick(2000)  # Faster rendering for training
+                self.env.render_mode = "human"
+            else:
+                self.env.clock = None
+                self.env.render_mode = None
                 
             # Collect trajectory and store in replay buffer
             trajectory, episode_reward, reward_components = self.collect_trajectory(episode)

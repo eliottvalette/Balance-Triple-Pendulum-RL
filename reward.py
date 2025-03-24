@@ -2,13 +2,17 @@ import numpy as np
 import random as rd
 class RewardManager:
     def __init__(self):
-        self.cart_position_weight = 0.10
+        self.cart_position_weight = 0.20
         self.termination_penalty = 100.0
         self.alignement_weight = 0.1
-        self.upright_weight = 2.0
+        self.upright_weight = 0.2
         self.stability_weight = 0.005  # Weight for the stability reward
         self.old_state = None
         self.length = 0.5  # Pendulum length
+        self.consecutive_upright_steps = 0  # Track consecutive steps with pendulum upright
+        self.upright_threshold = 1.2  # Threshold for considering pendulum upright
+        self.exponential_base = 1.15  # Base for exponential reward
+        self.max_exponential = 5.0  # Maximum exponential multiplier
 
     def calculate_reward(self, state, terminated, current_step):
         """
@@ -43,7 +47,29 @@ class RewardManager:
         # Uprightness of each node - negate p*_y values because in the physics simulation,
         # negative y means upward (which is what we want to reward)
         # The physics uses a reference frame where positive y is downward
-        upright_reward = self.upright_weight * (2.25 - end1_y - end2_y - end3_y)
+        upright_reward_points = self.upright_weight * (2.25 - end1_y - end2_y - end3_y)
+        upright_reward_angles = self.upright_weight * (abs(th1) + abs(th2) + abs(th3))
+        upright_reward = upright_reward_points + upright_reward_angles
+
+
+
+        # Check if pendulum is upright
+        is_upright = (upright_reward > self.upright_threshold)
+
+        # Update consecutive upright steps
+        if is_upright:
+            self.consecutive_upright_steps += 1
+        else:
+            self.consecutive_upright_steps = 0
+
+        # Calculate exponential reward multiplier
+        exponential_multiplier = min(
+            self.exponential_base ** (self.consecutive_upright_steps / 20),  # Divide by 100 to make it grow more slowly
+            self.max_exponential
+        )
+
+        # Apply exponential multiplier to upright reward
+        upright_reward *= exponential_multiplier
 
         # Stability reward: penalize high angular velocities and accelerations
         angular_velocity_penalty = (th1_dot**2 + th2_dot**2 + th3_dot**2) / 3.0

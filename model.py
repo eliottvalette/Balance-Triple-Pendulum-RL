@@ -47,8 +47,6 @@ class TriplePendulumActor(nn.Module):
         
         # Output layer with tanh
         x = self.fc3(x)
-        if rd.random() < 0.001:
-            print(x.mean())
         return torch.tanh(x)  # Output between -1 and 1
 
 class TriplePendulumCritic(nn.Module):

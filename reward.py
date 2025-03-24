@@ -5,13 +5,13 @@ class RewardManager:
         self.cart_position_weight = 0.20
         self.termination_penalty = 100.0
         self.alignement_weight = 0.1
-        self.upright_weight = 0.2
+        self.upright_weight = 0.5
         self.stability_weight = 0.5  # Weight for the stability reward
         self.old_state = None
         self.length = 0.5  # Pendulum length
         self.consecutive_upright_steps = 0  # Track consecutive steps with pendulum upright
-        self.upright_threshold = 1.4  # Threshold for considering pendulum upright
-        self.exponential_base = 1.05  # Base for exponential reward
+        self.upright_threshold = 1.3  # Threshold for considering pendulum upright
+        self.exponential_base = 1.15  # Base for exponential reward
         self.max_exponential = 5.0  # Maximum exponential multiplier
         self.old_points_positions = None
         self.cached_velocity = 0
@@ -68,11 +68,11 @@ class RewardManager:
         # Calculate exponential reward multiplier
         if self.consecutive_upright_steps > 60:
             exponential_multiplier = min(
-                self.exponential_base ** (self.consecutive_upright_steps / 40),  # Divide by 100 to make it grow more slowly
+                self.exponential_base ** (self.consecutive_upright_steps / 50),  # Divide by 100 to make it grow more slowly
                 self.max_exponential
             )
         else:
-            exponential_multiplier = 0.3
+            exponential_multiplier = 0.38
 
         # Apply exponential multiplier to upright reward
         upright_reward *= exponential_multiplier
@@ -81,7 +81,7 @@ class RewardManager:
         angular_velocity_penalty = (th1_dot**2 + th2_dot**2 + th3_dot**2) / 3.0
 
         # Calculate velocity of points of the pendulum
-        points_velocity = (50 * (abs(end3_x - self.old_points_positions[6]) + abs(end3_y - self.old_points_positions[7]))) ** 0.2
+        points_velocity = ((abs(end3_x - self.old_points_positions[6]) + abs(end3_y - self.old_points_positions[7]))) ** 0.2
         if points_velocity == 0:
             points_velocity = self.cached_velocity
         else:

@@ -46,7 +46,7 @@ class TriplePendulumTrainer:
         # Metrics tracking
         self.metrics = MetricsTracker()
         self.total_steps = 0
-        self.max_steps = 300  # Maximum steps per episode
+        self.max_steps = 500  # Maximum steps per episode
         
         # Exploration parameters
         self.noise_scale = 0.5  # Initial noise scale
@@ -262,7 +262,7 @@ if __name__ == "__main__":
         'num_episodes': 10000,
         'actor_lr': 3e-4,
         'critic_lr': 3e-4,
-        'gamma': 1.01,
+        'gamma': 0.99,
         'batch_size': 64,
         'hidden_dim': 256,
         'buffer_capacity': 100000,

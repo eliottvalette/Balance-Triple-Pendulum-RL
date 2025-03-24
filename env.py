@@ -27,7 +27,12 @@ class TriplePendulumEnv(gym.Env):
         self.length = 0.5
         self.cart_friction = 0.5
         self.pend_friction = 0.1
-        self.air_resistance = 0.5  # Increased air resistance for more realistic movement (0.5)
+        self.air_resistance = 0.5  # Base air resistance coefficient
+        self.air_density = 1.225  # kg/m^3 (density of air)
+        self.drag_coefficient = 0.47  # Drag coefficient for a sphere
+        self.reference_area = 0.01  # m^2 (reference area for drag calculation)
+        self.velocity_threshold = 5.0  # m/s (threshold for increased drag)
+        self.max_drag_coefficient = 2.0  # Maximum drag coefficient at high velocities
         
         # Reduce force magnitude
         self.force_mag = 20.0
@@ -226,15 +231,47 @@ class TriplePendulumEnv(gym.Env):
             v2_speed = np.sqrt(v2_x**2 + v2_y**2)
             v3_speed = np.sqrt(v3_x**2 + v3_y**2)
             
-            # Apply air resistance proportional to velocity squared for more realistic physics
-            air_resistance1 = -self.air_resistance * v1_speed**2 * np.array([v1_x/max(v1_speed, 1e-6), v1_y/max(v1_speed, 1e-6)])
-            air_resistance2 = -self.air_resistance * v2_speed**2 * np.array([v2_x/max(v2_speed, 1e-6), v2_y/max(v2_speed, 1e-6)])
-            air_resistance3 = -self.air_resistance * v3_speed**2 * np.array([v3_x/max(v3_speed, 1e-6), v3_y/max(v3_speed, 1e-6)])
+            # Calculate dynamic drag coefficient based on velocity
+            def get_drag_coefficient(velocity):
+                if velocity < self.velocity_threshold:
+                    return self.drag_coefficient
+                else:
+                    # Increase drag coefficient with velocity
+                    excess_velocity = velocity - self.velocity_threshold
+                    return min(self.drag_coefficient + (excess_velocity * 0.3), self.max_drag_coefficient)
             
-            # Convert air resistance to angular forces
-            th1_air = np.cross([0, 0, 1], [air_resistance1[0], air_resistance1[1], 0])[2] / self.length
-            th2_air = np.cross([0, 0, 1], [air_resistance2[0], air_resistance2[1], 0])[2] / self.length
-            th3_air = np.cross([0, 0, 1], [air_resistance3[0], air_resistance3[1], 0])[2] / self.length
+            # Calculate air resistance using the drag equation
+            def calculate_air_resistance(velocity, speed):
+                if speed < 1e-6:
+                    return np.zeros(2)
+                drag_coef = get_drag_coefficient(speed)
+                # F = 1/2 * ρ * v^2 * Cd * A
+                force_magnitude = 0.5 * self.air_density * speed**2 * drag_coef * self.reference_area
+                # Apply force in opposite direction of velocity
+                return -force_magnitude * np.array([velocity[0]/speed, velocity[1]/speed])
+            
+            # Apply air resistance to each node
+            air_resistance1 = calculate_air_resistance([v1_x, v1_y], v1_speed)
+            air_resistance2 = calculate_air_resistance([v2_x, v2_y], v2_speed)
+            air_resistance3 = calculate_air_resistance([v3_x, v3_y], v3_speed)
+            
+            # Convert air resistance to angular forces with increased effect
+            th1_air = np.cross([0, 0, 1], [air_resistance1[0], air_resistance1[1], 0])[2] / (self.length * 0.5)
+            th2_air = np.cross([0, 0, 1], [air_resistance2[0], air_resistance2[1], 0])[2] / (self.length * 0.5)
+            th3_air = np.cross([0, 0, 1], [air_resistance3[0], air_resistance3[1], 0])[2] / (self.length * 0.5)
+            
+            # Add additional angular damping at high velocities
+            def get_angular_damping(velocity):
+                if velocity < self.velocity_threshold:
+                    return 0.0
+                else:
+                    excess_velocity = velocity - self.velocity_threshold
+                    return excess_velocity * 0.2  # Linear increase in damping
+            
+            # Apply additional angular damping
+            th1_air -= get_angular_damping(v1_speed) * th1_dot
+            th2_air -= get_angular_damping(v2_speed) * th2_dot
+            th3_air -= get_angular_damping(v3_speed) * th3_dot
             
             # Pendulum angular accelerations with proper physics
             g = self.gravity

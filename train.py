@@ -34,7 +34,7 @@ class TriplePendulumTrainer:
         
         # Initialize models
         # Original state dimension is 12 (basic state) + 8 (visual information)
-        state_dim = 20
+        state_dim = 22
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim)
         self.critic = TriplePendulumCritic(state_dim, action_dim)
@@ -198,15 +198,12 @@ class TriplePendulumTrainer:
             
             # Adjust clock speed based on episode number
             if episode % 100 == 0:
-                self.env.clock = pygame.time.Clock()
-                self.env.clock.tick(30)  # Slower rendering for visualization
                 self.env.render_mode = "human"
+                self.env.tick = 60
             elif episode % 10 == 9:
-                self.env.clock = pygame.time.Clock()
-                self.env.clock.tick(2000)  # Faster rendering for training
                 self.env.render_mode = "human"
+                self.env.tick = 2000
             else:
-                self.env.clock = None
                 self.env.render_mode = None
                 
             # Collect trajectory and store in replay buffer

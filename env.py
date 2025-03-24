@@ -83,12 +83,13 @@ class TriplePendulumEnv(gym.Env):
         # Rendering
         self.render_mode = render_mode
         self.screen = None
-        self.clock = pygame.time.Clock()
         self.screen_width = 800
         self.screen_height = 600
         self.cart_y_pos = 300   # y-position of cart in the rendered view
         self.pixels_per_meter = 100
-        
+        self.tick = 30
+        self.clock = pygame.time.Clock()
+
         # Font for metrics display
         self.font = None
 
@@ -359,10 +360,14 @@ class TriplePendulumEnv(gym.Env):
         end2_x, end2_y = end2_x / self.screen_width, end2_y / self.screen_height
         end3_x, end3_y = end3_x / self.screen_width, end3_y / self.screen_height
 
+        # Binary warning if close to the edge of the screen
+        close_to_left = (x < -2.4)
+        close_to_right = (x > 2.4)
+        
         # Create model-ready state (only include necessary information)
         model_state = np.concatenate([
             processed_state[:12],  # Original 12 state variables
-            [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y]  # Additional visual information
+            [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y, close_to_left, close_to_right]  # Additional visual information
         ])
 
         return model_state
@@ -650,6 +655,8 @@ class TriplePendulumEnv(gym.Env):
                 bar_y += bar_spacing
 
         pygame.display.flip()
+        # Control frame rate
+        self.clock.tick(self.tick)
 
     def close(self):
         if self.screen is not None:
@@ -665,7 +672,6 @@ class TriplePendulumEnv(gym.Env):
         # Only create a new screen if it doesn't exist
         if self.screen is None:
             self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
-            self.clock = pygame.time.Clock()
             
             # Set up a nicer font if available
             try:

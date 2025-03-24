@@ -89,9 +89,9 @@ class TriplePendulumEnv(gym.Env):
         # Rendering
         self.render_mode = render_mode
         self.screen = None
-        self.screen_width = 800
-        self.screen_height = 600
-        self.cart_y_pos = 300   # y-position of cart in the rendered view
+        self.screen_width = 1000
+        self.screen_height = 800
+        self.cart_y_pos = self.screen_height // 2  # y-position of cart in the rendered view
         self.pixels_per_meter = 100
         self.tick = 30
         self.clock = pygame.time.Clock()
@@ -588,9 +588,13 @@ class TriplePendulumEnv(gym.Env):
         pygame.draw.rect(self.screen, (200, 200, 205), panel_rect, border_radius=10, width=2)
         
         # Draw reward panel at top right if we have reward components
+        reward_manager = RewardManager()
+        rich_state = self.get_rich_state(self.state_for_simu)
+        self.reward_components = reward_manager.get_reward_components(rich_state, 0)
+        
         if self.reward_components:
             reward_panel_width = 300
-            reward_panel_height = 180
+            reward_panel_height = 240
             reward_panel_x = self.screen_width - reward_panel_width - 10
             reward_panel_y = 10
             reward_panel_rect = pygame.Rect(reward_panel_x, reward_panel_y, reward_panel_width, reward_panel_height)

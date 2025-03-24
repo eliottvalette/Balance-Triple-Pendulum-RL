@@ -5,7 +5,7 @@ import numpy as np
 from gym import spaces
 import pygame
 import math
-
+from reward import RewardManager
 class TriplePendulumEnv(gym.Env):
     """
     Custom Gym environment for controlling a cart holding a triple pendulum,
@@ -19,7 +19,7 @@ class TriplePendulumEnv(gym.Env):
         # -----------------------
         # Environment parameters
         # -----------------------
-        self.gravity = 1.0 # Gravity (9.81)
+        self.gravity = 0.01
         self.mass_cart = 1.0
         self.mass_pend1 = 0.1  # Mass of first pendulum
         self.mass_pend2 = 0.1  # Mass of second pendulum
@@ -439,10 +439,20 @@ class TriplePendulumEnv(gym.Env):
         normalized_consecutive_upright_steps = min(self.consecutive_upright_steps / 100, 1)
         is_long_upright = self.consecutive_upright_steps > 60
 
+        # MSE with aim position
+        reward_manager = RewardManager()
+        mse_sum = 0
+        for i in range(len(state)):
+            if i in [3, 6, 9]: # angles
+                mse_sum += np.sqrt((abs(state[i]) - reward_manager.aim_position_state[i]) ** 2)
+            elif i in [0, 12, 13, 14, 15, 16, 17, 18, 19] :
+                mse_sum += (state[i] - reward_manager.aim_position_state[i]) ** 2
+
         # Create model-ready state (only include necessary information)
         model_state = np.concatenate([
             processed_state[:12],  # Original 12 state variables
-            [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y, close_to_left, close_to_right, normalized_consecutive_upright_steps, is_long_upright]  # Additional visual information
+            [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y, close_to_left, close_to_right, normalized_consecutive_upright_steps, is_long_upright],  # Additional visual information 
+            [mse_sum]
         ])
 
         return model_state

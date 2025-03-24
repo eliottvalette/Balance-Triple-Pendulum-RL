@@ -4,9 +4,9 @@ class RewardManager:
     def __init__(self):
         self.cart_position_weight = 0.20
         self.termination_penalty = 100.0
-        self.alignement_weight = 0.1
-        self.upright_weight = 0.15
-        self.stability_weight = 0.01  # Weight for the stability reward
+        self.alignement_weight = 0.5
+        self.upright_weight = 0.1
+        self.stability_weight = 0.1  # Weight for the stability reward
         self.mse_weight = 4.0  # Weight for the MSE penalty
         self.old_state = None
         self.length = 0.5  # Pendulum length
@@ -104,20 +104,21 @@ class RewardManager:
         for i in range(len(state)):
             if i in [3, 6, 9]: # angles
                 mse_sum += np.sqrt((abs(state[i]) - self.aim_position_state[i]) ** 2)
-            elif i in [0, 12, 13, 14, 15, 16, 17, 18, 19]: # positions
+            elif i in [0, 12, 13, 14, 15, 16, 17, 18, 19] :
                 mse_sum += (state[i] - self.aim_position_state[i]) ** 2
         
         mse_penalty = self.mse_weight * (mse_sum / len(state))
 
         # Penalties are negative, rewards are positive
         reward = upright_reward - x_penalty - non_alignement_penalty - stability_penalty - mse_penalty
+        reward /= 5
 
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
             
         return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty
-
+    
     def get_reward_components(self, state, current_step):
         reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty = self.calculate_reward(state, False, current_step)
         return {

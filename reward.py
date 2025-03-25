@@ -4,10 +4,10 @@ class RewardManager:
     def __init__(self):
         self.cart_position_weight = 0.20
         self.termination_penalty = 100.0
-        self.alignement_weight = 0.3
-        self.upright_weight = 0.1
+        self.alignement_weight = 1.0
+        self.upright_weight = 0.5
         self.stability_weight = 0.05  # Weight for the stability reward
-        self.mse_weight = 5.0  # Weight for the MSE penalty
+        self.mse_weight = 7.0  # Weight for the MSE penalty
         self.old_state = None
         self.length = 0.5  # Pendulum length
         self.consecutive_upright_steps = 0  # Track consecutive steps with pendulum upright
@@ -61,7 +61,7 @@ class RewardManager:
         # The physics uses a reference frame where positive y is downward
         upright_reward_points = self.upright_weight * (2.25 - end1_y - end2_y - end3_y)
         upright_reward_angles = self.upright_weight * (abs(th1) + abs(th2) + abs(th3))
-        upright_reward = upright_reward_points + upright_reward_angles
+        upright_reward = upright_reward_points + upright_reward_angles - 2.5
 
         # Check if pendulum is upright
         is_upright = (upright_reward > self.upright_threshold)

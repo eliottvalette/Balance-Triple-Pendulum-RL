@@ -448,20 +448,27 @@ class TriplePendulumEnv(gym.Env):
         normalized_consecutive_upright_steps = min(self.consecutive_upright_steps / 100, 1)
         is_long_upright = self.consecutive_upright_steps > 60
 
-        # MSE with aim position
-        reward_manager = RewardManager()
-        mse_sum = 0
-        for i in range(len(state)):
-            if i in [3, 6, 9]: # angles
-                mse_sum += np.sqrt((abs(state[i]) - reward_manager.aim_position_state[i]) ** 2)
-            elif i in [0, 12, 13, 14, 15, 16, 17, 18, 19] :
-                mse_sum += (state[i] - reward_manager.aim_position_state[i]) ** 2
+        # ADD reward components if Na, put 0
+        if self.reward_components:
+            reward = self.reward_components['reward']
+            upright_reward = self.reward_components['upright_reward']
+            x_penalty = self.reward_components['x_penalty']
+            non_alignement_penalty = self.reward_components['non_alignement_penalty']
+            stability_penalty = self.reward_components['stability_penalty']
+            mse_penalty = self.reward_components['mse_penalty']
+        else:
+            reward = 0
+            upright_reward = 0
+            x_penalty = 0
+            non_alignement_penalty = 0
+            stability_penalty = 0
+            mse_penalty = 0
 
         # Create model-ready state (only include necessary information)
         model_state = np.concatenate([
             processed_state[:12],  # Original 12 state variables
             [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y, close_to_left, close_to_right, normalized_consecutive_upright_steps, is_long_upright],  # Additional visual information 
-            [mse_sum]
+            [reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty]
         ])
 
         return model_state

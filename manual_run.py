@@ -14,7 +14,7 @@ obs, info = env.reset()
 # Track last direction for more responsive controls
 last_direction = 0
 # Force magnitude for manual control
-force_magnitude = 5.0
+force_magnitude = 20.0
 # Whether to apply stronger braking when direction changes
 strong_braking = True
 

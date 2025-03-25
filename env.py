@@ -6,6 +6,7 @@ from gym import spaces
 import pygame
 import math
 from reward import RewardManager
+import random as rd
 class TriplePendulumEnv(gym.Env):
     """
     Custom Gym environment for controlling a cart holding a triple pendulum,
@@ -19,7 +20,7 @@ class TriplePendulumEnv(gym.Env):
         # -----------------------
         # Environment parameters
         # -----------------------
-        self.gravity = 1.0
+        self.gravity = 0.001
         self.mass_cart = 1.0
         self.mass_pend1 = 0.1  # Mass of first pendulum
         self.mass_pend2 = 0.1  # Mass of second pendulum
@@ -108,13 +109,13 @@ class TriplePendulumEnv(gym.Env):
             0.0,                          # cart x
             0.0,                          # cart velocity
             0.0,                          # cart acceleration
-            np.pi, # theta1 (vertical)
+            0.0, # theta1 (vertical)
             0.0, # theta_dot1 (vertical)
             0.0,                          # theta_ddot1 (vertical)
-            np.pi, # theta2 (horizontal)
+            0.0, # theta2 (horizontal)
             0.0, # theta_dot2
             0.0,                          # theta_ddot2
-            np.pi, # theta3
+            0.0, # theta3
             0.0, # theta_dot3
             0.0                           # theta_ddot3
         ]
@@ -175,13 +176,21 @@ class TriplePendulumEnv(gym.Env):
         # Store initial state
         x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state_for_simu
         
+        # Detect direction change
+        direction_changed = (force > 0 and x_dot < 0) or (force < 0 and x_dot > 0)
+        
         # Total system mass calculation for proper momentum conservation
         total_mass = self.mass_cart + self.mass_pend1 + self.mass_pend2 + self.mass_pend3
         
         # Run multiple substeps for better stability
-        for _ in range(self.sub_steps):
+        for substep in range(self.sub_steps):
             # Unpack current state
             x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state_for_simu
+            
+            # If direction changed and this is the first substep, force velocity to zero
+            if direction_changed and substep == 0:
+                x_dot = x_dot * 0.6
+                x_ddot = x_ddot * 0.6
             
             # Calculate pendulum positions
             p1_x = x + self.length * np.sin(th1)

@@ -4,7 +4,7 @@ class RewardManager:
     def __init__(self):
         self.cart_position_weight = 0.20
         self.termination_penalty = 100.0
-        self.alignement_weight = 0.5
+        self.alignement_weight = 0.3
         self.upright_weight = 0.1
         self.stability_weight = 0.05  # Weight for the stability reward
         self.mse_weight = 5.0  # Weight for the MSE penalty

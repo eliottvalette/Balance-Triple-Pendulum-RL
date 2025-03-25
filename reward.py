@@ -6,8 +6,8 @@ class RewardManager:
         self.termination_penalty = 100.0
         self.alignement_weight = 0.5
         self.upright_weight = 0.1
-        self.stability_weight = 0.1  # Weight for the stability reward
-        self.mse_weight = 4.0  # Weight for the MSE penalty
+        self.stability_weight = 0.05  # Weight for the stability reward
+        self.mse_weight = 5.0  # Weight for the MSE penalty
         self.old_state = None
         self.length = 0.5  # Pendulum length
         self.consecutive_upright_steps = 0  # Track consecutive steps with pendulum upright
@@ -73,7 +73,7 @@ class RewardManager:
             self.consecutive_upright_steps = 0
 
         # Calculate exponential reward multiplier
-        if self.consecutive_upright_steps > 60:
+        if self.consecutive_upright_steps > 40:
             exponential_multiplier = min(
                 self.exponential_base ** (self.consecutive_upright_steps / 50),  # Divide by 100 to make it grow more slowly
                 self.max_exponential

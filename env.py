@@ -19,7 +19,7 @@ class TriplePendulumEnv(gym.Env):
         # -----------------------
         # Environment parameters
         # -----------------------
-        self.gravity = 0.01
+        self.gravity = 1.0
         self.mass_cart = 1.0
         self.mass_pend1 = 0.1  # Mass of first pendulum
         self.mass_pend2 = 0.1  # Mass of second pendulum
@@ -108,13 +108,13 @@ class TriplePendulumEnv(gym.Env):
             0.0,                          # cart x
             0.0,                          # cart velocity
             0.0,                          # cart acceleration
-            0.05, # theta1 (vertical)
+            np.pi, # theta1 (vertical)
             0.0, # theta_dot1 (vertical)
             0.0,                          # theta_ddot1 (vertical)
-            0.05, # theta2 (horizontal)
+            np.pi, # theta2 (horizontal)
             0.0, # theta_dot2
             0.0,                          # theta_ddot2
-            0.05, # theta3
+            np.pi, # theta3
             0.0, # theta_dot3
             0.0                           # theta_ddot3
         ]
@@ -457,7 +457,7 @@ class TriplePendulumEnv(gym.Env):
 
         return model_state
 
-    def render(self, episode = None):
+    def render(self, episode = None, epsilon = 0):
         if self.render_mode != "human":
             return
 
@@ -646,7 +646,8 @@ class TriplePendulumEnv(gym.Env):
             {"text": f"Angle 1: {th1_deg:.1f}°", "color": PENDULUM1_COLOR},
             {"text": f"Angle 2: {th2_deg:.1f}°", "color": PENDULUM2_COLOR},
             {"text": f"Angle 3: {th3_deg:.1f}°", "color": PENDULUM3_COLOR},
-            {"text": f"Episode: {episode if episode is not None else 'None'}", "color": TEXT_COLOR}
+            {"text": f"Episode: {episode if episode is not None else 'None'}", "color": TEXT_COLOR},
+            {"text": f"Epsilon: {epsilon*100:.2f}%", "color": TEXT_COLOR}
         ]
         
         # Add total reward to metrics panel

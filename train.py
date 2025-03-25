@@ -49,12 +49,9 @@ class TriplePendulumTrainer:
         self.max_steps = 500  # Maximum steps per episode
         
         # Exploration parameters
-        self.noise_scale = 0.5  # Initial noise scale
-        self.noise_decay = 0.9999  # Decay rate
-        self.min_noise = 0.01  # Minimum noise
         self.epsilon = 1.0  # Initial random action probability
         self.epsilon_decay = 0.995  # Epsilon decay rate
-        self.min_epsilon = 0.1  # Minimum epsilon
+        self.min_epsilon = 0.001  # Minimum epsilon
         
         # Replay buffer
         self.memory = ReplayBuffer(capacity=config['buffer_capacity'])
@@ -105,9 +102,6 @@ class TriplePendulumTrainer:
             else:
                 with torch.no_grad():
                     action = self.actor(state_tensor).squeeze().numpy()
-                    # Add exploration noise with decay
-                    noise = np.random.normal(0, self.noise_scale)
-                    action = np.clip(action + noise, -1, 1)
             
             # Scale action to environment range and ensure it's an array
             scaled_action = np.array([action * self.env.force_mag])
@@ -123,7 +117,7 @@ class TriplePendulumTrainer:
             
             # Render if rendering is enabled
             if self.env.render_mode == "human":
-                self.env.render(episode=episode)
+                self.env.render(episode=episode, epsilon=self.epsilon)
             
             # Calculate custom reward and components
             custom_reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty = self.reward_manager.calculate_reward(next_rich_state, terminated, num_steps)
@@ -145,7 +139,6 @@ class TriplePendulumTrainer:
                 break
             
         # Decay exploration parameters
-        self.noise_scale = max(self.min_noise, self.noise_scale * self.noise_decay)
         self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
             
         return trajectory, episode_reward, reward_components

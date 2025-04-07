@@ -35,7 +35,7 @@ class TriplePendulumTrainer:
         
         # Initialize models
         # Original state dimension is 12 (basic state) + 8 (visual information)
-        state_dim = 30
+        state_dim = 34
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim)
         self.critic = TriplePendulumCritic(state_dim, action_dim)
@@ -95,6 +95,9 @@ class TriplePendulumTrainer:
         reward_components = None
         num_steps = 0
         
+        # Réinitialiser le RewardManager
+        self.reward_manager.reset()
+        
         while not done and num_steps < self.max_steps:
             state_tensor = torch.FloatTensor(rich_state).unsqueeze(0)
             
@@ -137,7 +140,7 @@ class TriplePendulumTrainer:
             self.total_steps += 1
             num_steps += 1
 
-            if terminated:
+            if terminated or force_terminated:
                 break
             
         # Decay exploration parameters

@@ -13,12 +13,12 @@ class RewardManager:
         # -----------------------
         # Reward weights
         # -----------------------
-        self.cart_position_weight = 0.20
+        self.cart_position_weight = 0.10
         self.termination_penalty = 100.0
-        self.alignement_weight = 0.4
+        self.alignement_weight = 0.05
         self.upright_weight = 1.5
-        self.stability_weight = 0.02  # Weight for the stability reward
-        self.mse_weight = 5.0  # Weight for the MSE penalty
+        self.stability_weight = 0.008  # Weight for the stability reward
+        self.mse_weight = 1.0  # Weight for the MSE penalty
         
         # -----------------------
         # Upright tracking parameters
@@ -30,10 +30,11 @@ class RewardManager:
         self.have_been_upright_once = False
         self.came_back_down = False
         self.steps_double_down = 0
+        self.force_terminated = False
+        
         # -----------------------
         # State tracking
         # -----------------------
-        self.old_state = None
         self.old_points_positions = None
         self.cached_velocity = 0
         
@@ -139,8 +140,6 @@ class RewardManager:
         reward = upright_reward - x_penalty - non_alignement_penalty - stability_penalty - mse_penalty
         # reward = upright_reward - (x_penalty + non_alignement_penalty + stability_penalty + mse_penalty) * 0.01
 
-        reward /= 5
-
         if not self.have_been_upright_once and end_node_y < 0.5:
             self.have_been_upright_once = True
 
@@ -155,11 +154,13 @@ class RewardManager:
         if terminated:
             reward -= self.termination_penalty
 
-        force_terminated = False
-        if self.steps_double_down > 50:
-            force_terminated = True
-            
-        return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, force_terminated
+        self.force_terminated = False
+        if self.steps_double_down > 150:
+            self.force_terminated = True
+        
+        print(f'reward: {reward}, upright_reward: {upright_reward}, x_penalty: {x_penalty}, non_alignement_penalty: {non_alignement_penalty}, stability_penalty: {stability_penalty}, mse_penalty: {mse_penalty}, force_terminated: {self.force_terminated}')
+           
+        return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated
     
     def get_reward_components(self, state, current_step):
         reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, force_terminated = self.calculate_reward(state, False, current_step)
@@ -169,13 +170,16 @@ class RewardManager:
             'upright_reward': upright_reward,
             'stability_penalty': stability_penalty,
             'mse_penalty': mse_penalty,
-            'reward': reward
+            'reward': reward,
+            'force_terminated': force_terminated
         }
 
     def reset(self):
         """Reset the reward manager state"""
-        self.old_state = None
         self.old_points_positions = None
         self.consecutive_upright_steps = 0
         self.have_been_upright_once = False
+        self.came_back_down = False
+        self.steps_double_down = 0
+        self.force_terminated = False
         self.cached_velocity = 0

@@ -81,7 +81,7 @@ class TriplePendulumEnv(gym.Env):
             np.finfo(np.float32).max       # theta3_ddot
         ], dtype=np.float32)
 
-        self.observation_space = 21
+        self.observation_space = 34
 
         # Internal state
         self.state_for_simu = None
@@ -336,6 +336,10 @@ class TriplePendulumEnv(gym.Env):
         27, non_alignement_penalty, non alignement penalty
         28, stability_penalty, stability penalty
         29, mse_penalty, mse penalty
+        30, have_been_upright_once, binary if pendulum has been upright at least once
+        31, came_back_down, binary if pendulum has come back down after being upright
+        32, steps_double_down, number of steps since coming back down
+        33, force_terminated, binary if episode should be terminated
         Returns:
             list: A list containing all relevant state variables.
         """
@@ -400,11 +404,18 @@ class TriplePendulumEnv(gym.Env):
             stability_penalty = 0
             mse_penalty = 0
 
+        # Get reward manager state
+        have_been_upright_once = float(self.reward_manager.have_been_upright_once)
+        came_back_down = float(self.reward_manager.came_back_down)
+        steps_double_down = self.reward_manager.steps_double_down / 150.0  # Normalize to [0,1]
+        force_terminated = float(self.reward_manager.force_terminated)
+
         # Create model-ready state (only include necessary information)
         model_state = np.concatenate([
             processed_state[:12],  # Original 12 state variables
             [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y, close_to_left, close_to_right, normalized_consecutive_upright_steps, is_long_upright],  # Additional visual information 
-            [reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty]
+            [reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty],
+            [have_been_upright_once, came_back_down, steps_double_down, force_terminated]  # Reward manager state
         ])
 
         return model_state

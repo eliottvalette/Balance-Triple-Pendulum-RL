@@ -9,22 +9,23 @@ from reward import RewardManager
 import random as rd
 class TriplePendulumEnv(gym.Env):
     """
-    Custom Gym environment for controlling a cart holding a triple pendulum,
+    Custom Gym environment for controlling a cart holding a pendulum with configurable number of nodes,
     where the agent applies a horizontal force to stabilize the pendulum upright.
     """
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, render_mode=None):
+    def __init__(self, reward_manager : RewardManager, render_mode=None, num_nodes=3):
         super(TriplePendulumEnv, self).__init__()
+        self.num_nodes = num_nodes
 
         # -----------------------
         # Environment parameters
         # -----------------------
-        self.gravity = 0.001
+        self.gravity = 9.81
         self.mass_cart = 1.0
-        self.mass_pend1 = 0.1  # Mass of first pendulum
-        self.mass_pend2 = 0.1  # Mass of second pendulum
-        self.mass_pend3 = 0.1  # Mass of third pendulum
+        self.mass_pend1 = 0.2  # Mass of first pendulum
+        self.mass_pend2 = 0.2  # Mass of second pendulum
+        self.mass_pend3 = 0.2  # Mass of third pendulum
         self.length = 0.5
         self.cart_friction = 0.5
         self.pend_friction = 0.1
@@ -35,7 +36,6 @@ class TriplePendulumEnv(gym.Env):
         self.velocity_threshold = 5.0  # m/s (threshold for increased drag)
         self.max_drag_coefficient = 2.0  # Maximum drag coefficient at high velocities
         
-        # Reduce force magnitude
         self.force_mag = 20.0
         
         # Increase simulation substeps for better stability
@@ -90,8 +90,8 @@ class TriplePendulumEnv(gym.Env):
         # Rendering
         self.render_mode = render_mode
         self.screen = None
-        self.screen_width = 1000
-        self.screen_height = 800
+        self.screen_width = 800
+        self.screen_height = 700
         self.cart_y_pos = self.screen_height // 2  # y-position of cart in the rendered view
         self.pixels_per_meter = 100
         self.tick = 30
@@ -103,22 +103,16 @@ class TriplePendulumEnv(gym.Env):
         # Reward display
         self.current_reward = 0.0
         self.reward_components = {}
-
+        self.reward_manager = reward_manager
     def reset(self):
-        self.state_for_simu = [
-            0.0,                          # cart x
-            0.0,                          # cart velocity
-            0.0,                          # cart acceleration
-            0.0, # theta1 (vertical)
-            0.0, # theta_dot1 (vertical)
-            0.0,                          # theta_ddot1 (vertical)
-            0.0, # theta2 (horizontal)
-            0.0, # theta_dot2
-            0.0,                          # theta_ddot2
-            0.0, # theta3
-            0.0, # theta_dot3
-            0.0                           # theta_ddot3
-        ]
+        # Initialize state with zeros for all nodes
+        self.state_for_simu = [0.0] * 12  # 3 for cart + 9 for pendulums
+        
+        # Set initial angles for active nodes
+        for i in range(self.num_nodes):
+            self.state_for_simu[3 + i*3] = 0.0  # Initial angle
+            self.state_for_simu[4 + i*3] = 0.0  # Initial angular velocity
+            self.state_for_simu[5 + i*3] = 0.0  # Initial angular acceleration
 
         if self.render_mode == "human" and self.screen is None:
             self._render_init()
@@ -128,7 +122,7 @@ class TriplePendulumEnv(gym.Env):
         
         return observation, {}
 
-    def apply_constraints(self, x, th1, th2, th3):
+    def apply_constraints(self, x, *angles):
         """Applique les contraintes de distance entre les pendules"""
         l = self.length
         
@@ -136,218 +130,161 @@ class TriplePendulumEnv(gym.Env):
         p0 = np.array([x, 0])
         
         # Positions initiales des pendules
-        p1 = p0 + l * np.array([np.sin(th1), np.cos(th1)])
-        p2 = p1 + l * np.array([np.sin(th2), np.cos(th2)])
-        p3 = p2 + l * np.array([np.sin(th3), np.cos(th3)])
+        positions = [p0]
+        for i in range(len(angles)):
+            th = angles[i]
+            prev_pos = positions[-1]
+            new_pos = prev_pos + l * np.array([np.sin(th), np.cos(th)])
+            positions.append(new_pos)
         
         # Applique les contraintes plusieurs fois pour plus de stabilité
         for _ in range(self.constraint_iterations):
-            # Contrainte entre p0 et p1
-            diff = p1 - p0
-            dist = np.linalg.norm(diff)
-            if abs(dist - l) > 1e-6:
-                correction = (dist - l) / dist
-                p1 = p0 + diff * (1 - correction)
-            
-            # Contrainte entre p1 et p2
-            diff = p2 - p1
-            dist = np.linalg.norm(diff)
-            if abs(dist - l) > 1e-6:
-                correction = (dist - l) / dist
-                p2 = p1 + diff * (1 - correction)
-            
-            # Contrainte entre p2 et p3
-            diff = p3 - p2
-            dist = np.linalg.norm(diff)
-            if abs(dist - l) > 1e-6:
-                correction = (dist - l) / dist
-                p3 = p2 + diff * (1 - correction)
+            for i in range(1, len(positions)):
+                # Contrainte entre les positions i-1 et i
+                diff = positions[i] - positions[i-1]
+                dist = np.linalg.norm(diff)
+                if abs(dist - l) > 1e-6:
+                    correction = (dist - l) / dist
+                    positions[i] = positions[i-1] + diff * (1 - correction)
         
         # Calcule les nouveaux angles
-        th1_new = np.arctan2(p1[0] - p0[0], p1[1] - p0[1])
-        th2_new = np.arctan2(p2[0] - p1[0], p2[1] - p1[1])
-        th3_new = np.arctan2(p3[0] - p2[0], p3[1] - p2[1])
+        new_angles = []
+        for i in range(1, len(positions)):
+            diff = positions[i] - positions[i-1]
+            new_angles.append(np.arctan2(diff[0], diff[1]))
         
-        return th1_new, th2_new, th3_new
+        return new_angles
 
     def step(self, action):
         force = np.clip(action[0], -self.force_mag, self.force_mag)
         
         # Store initial state
-        x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state_for_simu
+        x, x_dot, x_ddot = self.state_for_simu[0:3]
+        pendulum_states = []
+        for i in range(self.num_nodes):
+            pendulum_states.append(self.state_for_simu[3 + i*3:6 + i*3])
         
         # Detect direction change
         direction_changed = (force > 0 and x_dot < 0) or (force < 0 and x_dot > 0)
         
         # Total system mass calculation for proper momentum conservation
-        total_mass = self.mass_cart + self.mass_pend1 + self.mass_pend2 + self.mass_pend3
+        total_mass = self.mass_cart
+        for i in range(self.num_nodes):
+            total_mass += getattr(self, f'mass_pend{i+1}')
         
         # Run multiple substeps for better stability
         for substep in range(self.sub_steps):
             # Unpack current state
-            x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state_for_simu
+            x, x_dot, x_ddot = self.state_for_simu[0:3]
+            pendulum_states = []
+            for i in range(self.num_nodes):
+                pendulum_states.append(self.state_for_simu[3 + i*3:6 + i*3])
             
             # If direction changed and this is the first substep, force velocity to zero
             if direction_changed and substep == 0:
                 x_dot = x_dot * 0.6
                 x_ddot = x_ddot * 0.6
             
-            # Calculate pendulum positions
-            p1_x = x + self.length * np.sin(th1)
-            p1_y = -self.length * np.cos(th1)
-            p2_x = p1_x + self.length * np.sin(th2)
-            p2_y = p1_y + self.length * np.cos(th2)
-            p3_x = p2_x + self.length * np.sin(th3)
-            p3_y = p2_y + self.length * np.cos(th3)
+            # Calculate pendulum positions and velocities
+            positions = []
+            velocities = []
+            p_x, p_y = x, 0
+            v_x, v_y = x_dot, 0
             
-            # Calculate pendulum velocities
-            v1_x = x_dot + self.length * th1_dot * np.cos(th1)
-            v1_y = self.length * th1_dot * np.sin(th1)
-            v2_x = v1_x + self.length * th2_dot * np.cos(th2)
-            v2_y = v1_y + self.length * th2_dot * np.sin(th2)
-            v3_x = v2_x + self.length * th3_dot * np.cos(th3)
-            v3_y = v2_y + self.length * th3_dot * np.sin(th3)
+            for i in range(self.num_nodes):
+                th, th_dot, th_ddot = pendulum_states[i]
+                p_x = p_x + self.length * np.sin(th)
+                p_y = p_y - self.length * np.cos(th)
+                positions.append((p_x, p_y))
+                
+                v_x = v_x + self.length * th_dot * np.cos(th)
+                v_y = v_y + self.length * th_dot * np.sin(th)
+                velocities.append((v_x, v_y))
             
             # Calculate forces from pendulum mass on cart
-            # Compute centripetal forces from pendulum rotations
-            f1_x = self.mass_pend1 * self.length * (th1_dot**2) * np.sin(th1)
-            f2_x = self.mass_pend2 * self.length * (th2_dot**2) * np.sin(th2)
-            f3_x = self.mass_pend3 * self.length * (th3_dot**2) * np.sin(th3)
+            net_force = force - self.cart_friction * x_dot
             
-            # Compute tangential forces from pendulum angular accelerations
-            f1_tang = self.mass_pend1 * self.length * th1_ddot * np.cos(th1)
-            f2_tang = self.mass_pend2 * self.length * th2_ddot * np.cos(th2)
-            f3_tang = self.mass_pend3 * self.length * th3_ddot * np.cos(th3)
-            
-            # Cart friction
-            friction = -self.cart_friction * x_dot
-            
-            # Total force on cart
-            net_force = force + friction + f1_x + f2_x + f3_x + f1_tang + f2_tang + f3_tang
+            for i in range(self.num_nodes):
+                th, th_dot, th_ddot = pendulum_states[i]
+                mass = getattr(self, f'mass_pend{i+1}')
+                
+                # Centripetal force
+                f_x = mass * self.length * (th_dot**2) * np.sin(th)
+                # Tangential force
+                f_tang = mass * self.length * th_ddot * np.cos(th)
+                
+                net_force += f_x + f_tang
             
             # Cart acceleration (F = ma)
-            # Include the effective mass of pendulums for momentum conservation
             x_ddot = net_force / total_mass
             
-            # Calculate pendulum joint forces (tension in the links)
-            # This is simplified - a full constraint-based system would be more accurate
-            tension1 = self.mass_pend1 * (self.gravity * np.sin(th1) + x_ddot * np.cos(th1))
-            tension2 = self.mass_pend2 * (self.gravity * np.sin(th2) + x_ddot * np.cos(th2))
-            tension3 = self.mass_pend3 * (self.gravity * np.sin(th3) + x_ddot * np.cos(th3))
-            
-            # Apply air resistance to each pendulum node
-            v1_speed = np.sqrt(v1_x**2 + v1_y**2)
-            v2_speed = np.sqrt(v2_x**2 + v2_y**2)
-            v3_speed = np.sqrt(v3_x**2 + v3_y**2)
-            
-            # Calculate dynamic drag coefficient based on velocity
-            def get_drag_coefficient(velocity):
-                if velocity < self.velocity_threshold:
-                    return self.drag_coefficient
-                else:
-                    # Increase drag coefficient with velocity
-                    excess_velocity = velocity - self.velocity_threshold
-                    return min(self.drag_coefficient + (excess_velocity * 0.3), self.max_drag_coefficient)
-            
-            # Calculate air resistance using the drag equation
-            def calculate_air_resistance(velocity, speed):
+            # Calculate pendulum angular accelerations
+            new_pendulum_states = []
+            for i in range(self.num_nodes):
+                th, th_dot, th_ddot = pendulum_states[i]
+                v_x, v_y = velocities[i]
+                
+                # Calculate air resistance
+                speed = np.sqrt(v_x**2 + v_y**2)
                 if speed < 1e-6:
-                    return np.zeros(2)
-                drag_coef = get_drag_coefficient(speed)
-                # F = 1/2 * ρ * v^2 * Cd * A
-                force_magnitude = 0.5 * self.air_density * speed**2 * drag_coef * self.reference_area
-                # Apply force in opposite direction of velocity
-                return -force_magnitude * np.array([velocity[0]/speed, velocity[1]/speed])
-            
-            # Apply air resistance to each node
-            air_resistance1 = calculate_air_resistance([v1_x, v1_y], v1_speed)
-            air_resistance2 = calculate_air_resistance([v2_x, v2_y], v2_speed)
-            air_resistance3 = calculate_air_resistance([v3_x, v3_y], v3_speed)
-            
-            # Convert air resistance to angular forces with increased effect
-            th1_air = np.cross([0, 0, 1], [air_resistance1[0], air_resistance1[1], 0])[2] / (self.length * 0.5)
-            th2_air = np.cross([0, 0, 1], [air_resistance2[0], air_resistance2[1], 0])[2] / (self.length * 0.5)
-            th3_air = np.cross([0, 0, 1], [air_resistance3[0], air_resistance3[1], 0])[2] / (self.length * 0.5)
-            
-            # Add additional angular damping at high velocities
-            def get_angular_damping(velocity):
-                if velocity < self.velocity_threshold:
-                    return 0.0
+                    air_resistance = np.zeros(2)
                 else:
-                    excess_velocity = velocity - self.velocity_threshold
-                    return excess_velocity * 0.2  # Linear increase in damping
-            
-            # Apply additional angular damping
-            th1_air -= get_angular_damping(v1_speed) * th1_dot
-            th2_air -= get_angular_damping(v2_speed) * th2_dot
-            th3_air -= get_angular_damping(v3_speed) * th3_dot
-            
-            # Pendulum angular accelerations with proper physics
-            g = self.gravity
-            
-            # First pendulum angular acceleration
-            th1_ddot = (-g * np.sin(th1) - x_ddot * np.cos(th1) + th1_air) / self.length
-            
-            # Second pendulum angular acceleration influenced by first pendulum
-            th2_ddot = (-g * np.sin(th2) - x_ddot * np.cos(th2) + th2_air) / self.length
-            
-            # Third pendulum angular acceleration influenced by second pendulum
-            th3_ddot = (-g * np.sin(th3) - x_ddot * np.cos(th3) + th3_air) / self.length
-            
-            # Add damping with momentum preservation
-            th1_ddot -= self.pend_friction * th1_dot
-            th2_ddot -= self.pend_friction * (th2_dot - th1_dot)  # Relative to first node
-            th3_ddot -= self.pend_friction * (th3_dot - th2_dot)  # Relative to second node
+                    drag_coef = self.drag_coefficient if speed < self.velocity_threshold else min(
+                        self.drag_coefficient + (speed - self.velocity_threshold) * 0.3,
+                        self.max_drag_coefficient
+                    )
+                    force_magnitude = 0.5 * self.air_density * speed**2 * drag_coef * self.reference_area
+                    air_resistance = -force_magnitude * np.array([v_x/speed, v_y/speed])
+                
+                # Convert air resistance to angular force
+                th_air = np.cross([0, 0, 1], [air_resistance[0], air_resistance[1], 0])[2] / (self.length * 0.5)
+                
+                # Add angular damping
+                if speed > self.velocity_threshold:
+                    th_air -= (speed - self.velocity_threshold) * 0.2 * th_dot
+                
+                # Calculate angular acceleration
+                th_ddot = (-self.gravity * np.sin(th) - x_ddot * np.cos(th) + th_air) / self.length
+                
+                # Add damping with momentum preservation
+                if i == 0:
+                    th_ddot -= self.pend_friction * th_dot
+                else:
+                    th_ddot -= self.pend_friction * (th_dot - pendulum_states[i-1][1])
+                
+                new_pendulum_states.append([th, th_dot, th_ddot])
             
             # Semi-implicit Euler integration
             dt = self.tau
             
             # Update velocities first
             x_dot_new = x_dot + x_ddot * dt
-            th1_dot_new = th1_dot + th1_ddot * dt
-            th2_dot_new = th2_dot + th2_ddot * dt
-            th3_dot_new = th3_dot + th3_ddot * dt
-            
-            # Apply maximum angular velocity limits to prevent unrealistic movement
-            max_angular_velocity = 15.0  # radians per second
-            th1_dot_new = np.clip(th1_dot_new, -max_angular_velocity, max_angular_velocity)
-            th2_dot_new = np.clip(th2_dot_new, -max_angular_velocity, max_angular_velocity)
-            th3_dot_new = np.clip(th3_dot_new, -max_angular_velocity, max_angular_velocity)
+            for i in range(self.num_nodes):
+                th, th_dot, th_ddot = new_pendulum_states[i]
+                th_dot_new = th_dot + th_ddot * dt
+                th_dot_new = np.clip(th_dot_new, -15.0, 15.0)  # Limit angular velocity
+                new_pendulum_states[i][1] = th_dot_new
             
             # Update positions
             x_new = x + x_dot_new * dt
-            th1_temp = th1 + th1_dot_new * dt
-            th2_temp = th2 + th2_dot_new * dt
-            th3_temp = th3 + th3_dot_new * dt
+            for i in range(self.num_nodes):
+                th, th_dot, th_ddot = new_pendulum_states[i]
+                new_pendulum_states[i][0] = th + th_dot * dt
             
             # Apply constraints to maintain rigid connections
-            th1_new, th2_new, th3_new = self.apply_constraints(x_new, th1_temp, th2_temp, th3_temp)
+            if self.num_nodes > 1:
+                th_list = [new_pendulum_states[i][0] for i in range(self.num_nodes)]
+                th_list = self.apply_constraints(x_new, *th_list)
+                for i in range(self.num_nodes):
+                    new_pendulum_states[i][0] = th_list[i]
             
-            # Recalculate pendulum positions and velocities with updated positions
-            p1_x = x_new + self.length * np.sin(th1_new)
-            p1_y = -self.length * np.cos(th1_new)
-            p2_x = p1_x + self.length * np.sin(th2_new)
-            p2_y = p1_y + self.length * np.cos(th2_new)
-            p3_x = p2_x + self.length * np.sin(th3_new)
-            p3_y = p2_y + self.length * np.cos(th3_new)
+            # Update state
+            self.state_for_simu[0] = x_new
+            self.state_for_simu[1] = x_dot_new
+            self.state_for_simu[2] = x_ddot
             
-            # Calculate pendulum velocities
-            v1_x = x_dot_new + self.length * th1_dot_new * np.cos(th1_new)
-            v1_y = self.length * th1_dot_new * np.sin(th1_new)
-            v2_x = v1_x + self.length * th2_dot_new * np.cos(th2_new)
-            v2_y = v1_y + self.length * th2_dot_new * np.sin(th2_new)
-            v3_x = v2_x + self.length * th3_dot_new * np.cos(th3_new)
-            v3_y = v2_y + self.length * th3_dot_new * np.sin(th3_new)
-            
-            # Update state with all information (only 12 core variables now)
-            self.state_for_simu = np.array([
-                x_new, x_dot_new, x_ddot,  # Cart state
-                th1_new, th1_dot_new, th1_ddot,  # First pendulum
-                th2_new, th2_dot_new, th2_ddot,  # Second pendulum
-                th3_new, th3_dot_new, th3_ddot   # Third pendulum
-            ], dtype=np.float32)
-        
-        x_new, x_dot_new = self.state_for_simu[0], self.state_for_simu[1]
+            for i in range(self.num_nodes):
+                self.state_for_simu[3 + i*3:6 + i*3] = new_pendulum_states[i]
         
         # Set velocity to zero at the boundary to prevent bouncing
         if (x_new == self.x_threshold and x_dot_new > 0) or (x_new == -self.x_threshold and x_dot_new < 0):
@@ -359,16 +296,10 @@ class TriplePendulumEnv(gym.Env):
 
         # Only terminate if velocity exceeds threshold
         terminated = bool(abs(x_dot_new) > self.x_dot_threshold or abs(x_new) >= 3)
-
-        # Check for NaN values in state
-        if np.isnan(np.sum(self.state_for_simu)):
-            print('state:', self.state_for_simu)
-            raise ValueError("Warning: NaN detected in state")
         
         # Create a copy of the state for the observation to avoid directly sharing state_for_simu
         observation = np.array(self.state_for_simu, dtype=np.float32)
         
-        # Return observation, reward, terminated, and info dictionary
         return observation, terminated
 
     def get_rich_state(self, state):
@@ -399,7 +330,12 @@ class TriplePendulumEnv(gym.Env):
         21, close_to_right, binary if cart is close to right edge of the screen
         22, normalized_consecutive_upright_steps, normalized number of consecutive upright steps
         23, is_long_upright, binary if number of consecutive upright steps is greater than 60
-        
+        24, reward, full combined reward
+        25, upright_reward, upright_reward
+        26, x_penalty, x penalty
+        27, non_alignement_penalty, non alignement penalty
+        28, stability_penalty, stability penalty
+        29, mse_penalty, mse penalty
         Returns:
             list: A list containing all relevant state variables.
         """
@@ -484,9 +420,11 @@ class TriplePendulumEnv(gym.Env):
         BACKGROUND_COLOR = (240, 240, 245)
         CART_COLOR = (50, 50, 60)
         TRACK_COLOR = (180, 180, 190)
-        PENDULUM1_COLOR = (220, 60, 60)
-        PENDULUM2_COLOR = (60, 180, 60)
-        PENDULUM3_COLOR = (60, 60, 220)
+        PENDULUM_COLORS = [
+            (220, 60, 60),   # Red for first pendulum
+            (60, 180, 60),   # Green for second pendulum
+            (60, 60, 220)    # Blue for third pendulum
+        ]
         TEXT_COLOR = (40, 40, 40)
         GRID_COLOR = (210, 210, 215)
         
@@ -525,7 +463,10 @@ class TriplePendulumEnv(gym.Env):
         )
 
         # Current state
-        x, x_dot, x_ddot, th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot = self.state_for_simu
+        x, x_dot, x_ddot = self.state_for_simu[0:3]
+        pendulum_states = []
+        for i in range(self.num_nodes):
+            pendulum_states.append(self.state_for_simu[3 + i*3:6 + i*3])
 
         # Convert cart x (meters) to pixels
         cart_x_px = int(self.screen_width / 2 + x * self.pixels_per_meter)
@@ -585,14 +526,14 @@ class TriplePendulumEnv(gym.Env):
             return end_x, end_y
 
         # Draw pendulum links
-        pivot1_x, pivot1_y = cart_x_px, cart_y_px - cart_h//2
-        end1_x, end1_y = draw_link(pivot1_x, pivot1_y, th1, PENDULUM1_COLOR)
-        end2_x, end2_y = draw_link(end1_x, end1_y, th2, PENDULUM2_COLOR)
-        end3_x, end3_y = draw_link(end2_x, end2_y, th3, PENDULUM3_COLOR)
+        pivot_x, pivot_y = cart_x_px, cart_y_px - cart_h//2
+        for i in range(self.num_nodes):
+            th = pendulum_states[i][0]
+            pivot_x, pivot_y = draw_link(pivot_x, pivot_y, th, PENDULUM_COLORS[i])
         
         # Draw final joint at the end of last pendulum
-        pygame.draw.circle(self.screen, (30, 30, 30), (int(end3_x), int(end3_y)), 7)
-        pygame.draw.circle(self.screen, (90, 90, 100), (int(end3_x), int(end3_y)), 5)
+        pygame.draw.circle(self.screen, (30, 30, 30), (int(pivot_x), int(pivot_y)), 7)
+        pygame.draw.circle(self.screen, (90, 90, 100), (int(pivot_x), int(pivot_y)), 5)
 
         # Draw info panel background (left panel for metrics)
         panel_width = 240
@@ -604,9 +545,8 @@ class TriplePendulumEnv(gym.Env):
         pygame.draw.rect(self.screen, (200, 200, 205), panel_rect, border_radius=10, width=2)
         
         # Draw reward panel at top right if we have reward components
-        reward_manager = RewardManager()
         rich_state = self.get_rich_state(self.state_for_simu)
-        self.reward_components = reward_manager.get_reward_components(rich_state, 0)
+        self.reward_components = self.reward_manager.get_reward_components(rich_state, 0)
         
         if self.reward_components:
             reward_panel_width = 300
@@ -637,7 +577,7 @@ class TriplePendulumEnv(gym.Env):
         
         # Title for the metrics panel
         title_font = pygame.font.Font(None, 28)
-        title = title_font.render("Triple Pendulum", True, (60, 60, 70))
+        title = title_font.render(f"{self.num_nodes}-Node Pendulum", True, (60, 60, 70))
         self.screen.blit(title, (panel_x + 10, panel_y + 10))
         
         # Draw separator
@@ -650,42 +590,24 @@ class TriplePendulumEnv(gym.Env):
         )
 
         # Convert angles to degrees for display
-        th1_deg = math.degrees(th1)
-        th2_deg = math.degrees(th2)
-        th3_deg = math.degrees(th3)
-
-
-        # Create metrics with colored indicators
         metrics = [
             {"text": f"Cart Position: {x:.2f}m", "color": TEXT_COLOR},
-            {"text": f"Cart Velocity: {x_dot:.2f}m/s", "color": TEXT_COLOR},
-            {"text": f"Angle 1: {th1_deg:.1f}°", "color": PENDULUM1_COLOR},
-            {"text": f"Angle 2: {th2_deg:.1f}°", "color": PENDULUM2_COLOR},
-            {"text": f"Angle 3: {th3_deg:.1f}°", "color": PENDULUM3_COLOR},
+            {"text": f"Cart Velocity: {x_dot:.2f}m/s", "color": TEXT_COLOR}
+        ]
+        
+        for i in range(self.num_nodes):
+            th = math.degrees(pendulum_states[i][0])
+            metrics.append({"text": f"Angle {i+1}: {th:.1f}°", "color": PENDULUM_COLORS[i]})
+        
+        metrics.extend([
             {"text": f"Episode: {episode if episode is not None else 'None'}", "color": TEXT_COLOR},
             {"text": f"Epsilon: {epsilon*100:.2f}%", "color": TEXT_COLOR}
-        ]
+        ])
         
         # Add total reward to metrics panel
         if self.reward_components:
             metrics.append({"text": f"Total Reward: {self.current_reward:.2f}", "color": (80, 80, 200)})
-            # Visualize reward components with bars
-            reward_components = [
-                {"name": "Base", "value": self.reward_components.get('reward', 0), "color": (100, 100, 200)},
-                {"name": "Upright", "value": self.reward_components.get('upright_reward', 0), "color": (80, 180, 80)},
-                {"name": "Position", "value": self.reward_components.get('x_penalty', 0), "color": (200, 80, 80)},
-                {"name": "Alignment", "value": self.reward_components.get('non_alignement_penalty', 0), "color": (180, 130, 80)},
-                {"name": "MSE", "value": self.reward_components.get('mse_penalty', 0), "color": (180, 130, 80)}
-            ]
-            
-            # Add stability penalty if it exists
-            if 'stability_penalty' in self.reward_components:
-                reward_components.append({"name": "Stability", "value": self.reward_components.get('stability_penalty', 0), "color": (150, 80, 150)})
-            
-            # Add velocity penalty if it exists
-            if 'x_dot_penalty' in self.reward_components:
-                reward_components.append({"name": "Velocity", "value": self.reward_components.get('x_dot_penalty', 0), "color": (180, 80, 180)})
-
+        
         # Display metrics in left panel
         for i, metric in enumerate(metrics):
             text = self.font.render(metric["text"], True, metric["color"])
@@ -707,6 +629,22 @@ class TriplePendulumEnv(gym.Env):
             
             max_bar_value = 3.0  # Scale for visualization
             
+            reward_components = [
+                {"name": "Base", "value": self.reward_components.get('reward', 0), "color": (100, 100, 200)},
+                {"name": "Upright", "value": self.reward_components.get('upright_reward', 0), "color": (80, 180, 80)},
+                {"name": "Position", "value": self.reward_components.get('x_penalty', 0), "color": (200, 80, 80)},
+                {"name": "Alignment", "value": self.reward_components.get('non_alignement_penalty', 0), "color": (180, 130, 80)},
+                {"name": "MSE", "value": self.reward_components.get('mse_penalty', 0), "color": (180, 130, 80)}
+            ]
+            
+            # Add stability penalty if it exists
+            if 'stability_penalty' in self.reward_components:
+                reward_components.append({"name": "Stability", "value": self.reward_components.get('stability_penalty', 0), "color": (150, 80, 150)})
+            
+            # Add velocity penalty if it exists
+            if 'x_dot_penalty' in self.reward_components:
+                reward_components.append({"name": "Velocity", "value": self.reward_components.get('x_dot_penalty', 0), "color": (180, 80, 180)})
+
             for comp in reward_components:
                 name_text = self.font.render(comp["name"], True, TEXT_COLOR)
                 self.screen.blit(name_text, (reward_panel_x + 15, bar_y))

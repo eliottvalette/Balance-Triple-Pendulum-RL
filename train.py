@@ -29,12 +29,12 @@ class ReplayBuffer:
 class TriplePendulumTrainer:
     def __init__(self, config):
         self.config = config
-        self.env = TriplePendulumEnv(render_mode="human")  # Enable rendering from the start
         self.reward_manager = RewardManager()
+        self.env = TriplePendulumEnv(reward_manager=self.reward_manager, render_mode="human", num_nodes=config['num_nodes'])  # Enable rendering from the start
         
         # Initialize models
         # Original state dimension is 12 (basic state) + 8 (visual information)
-        state_dim = 25
+        state_dim = 30
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim)
         self.critic = TriplePendulumCritic(state_dim, action_dim)
@@ -70,7 +70,8 @@ class TriplePendulumTrainer:
         self.env._render_init()
         
         # Load models
-        self.load_models()
+        if config['load_models']:
+            self.load_models()
     
     def normalize_reward(self, reward):
         # Update running statistics
@@ -192,7 +193,7 @@ class TriplePendulumTrainer:
             # Adjust clock speed based on episode number
             if episode % 100 == 0:
                 self.env.render_mode = "human"
-                self.env.tick = 60
+                self.env.tick = 30
             elif episode % 10 == 9:
                 self.env.render_mode = "human"
                 self.env.tick = 2000
@@ -252,14 +253,16 @@ class TriplePendulumTrainer:
 
 if __name__ == "__main__":
     config = {
-        'num_episodes': 10000,
+        'num_episodes': 10_000,
         'actor_lr': 3e-4,
         'critic_lr': 3e-4,
         'gamma': 0.99,
         'batch_size': 64,
         'hidden_dim': 256,
         'buffer_capacity': 100000,
-        'updates_per_episode': 10
+        'updates_per_episode': 10,
+        'load_models': False,
+        'num_nodes': 1
     }
     
     trainer = TriplePendulumTrainer(config)

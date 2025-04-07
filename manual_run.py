@@ -5,8 +5,8 @@ from env import TriplePendulumEnv
 from reward import RewardManager
 
 # Create the environment with rendering
-env = TriplePendulumEnv(render_mode="human")
 reward_manager = RewardManager()
+env = TriplePendulumEnv(render_mode="human", reward_manager=reward_manager, num_nodes=1)
 
 # Reset the environment and get initial observation
 obs, info = env.reset()
@@ -14,7 +14,7 @@ obs, info = env.reset()
 # Track last direction for more responsive controls
 last_direction = 0
 # Force magnitude for manual control
-force_magnitude = 20.0
+force_magnitude = 10.0
 # Whether to apply stronger braking when direction changes
 strong_braking = True
 
@@ -61,6 +61,7 @@ while True:
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_SPACE:
                 obs, info = env.reset()
+                reward_manager.reset()  # Reset reward manager state
             # Adjust force magnitude with up/down arrows
             elif event.key == pygame.K_UP:
                 force_magnitude = min(force_magnitude + 1.0, 20.0)
@@ -79,9 +80,9 @@ while True:
     obs, terminated = env.step(action)
     rich_obs = env.get_rich_state(obs)
     
-    # Calculate and display reward
-    reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty = reward_manager.calculate_reward(rich_obs, terminated, 0)
+    # Calculate and display reward - only calculate once
     reward_components = reward_manager.get_reward_components(rich_obs, 0)
+    reward = reward_components['reward']
     
     # Update the environment's display with reward information
     env.current_reward = reward
@@ -95,5 +96,6 @@ while True:
     
     if terminated:
         obs, info = env.reset()
+        reward_manager.reset()  # Reset reward manager state
 
 env.close()

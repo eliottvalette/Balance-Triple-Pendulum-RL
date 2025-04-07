@@ -4,17 +4,18 @@ class RewardManager:
     def __init__(self):
         self.cart_position_weight = 0.20
         self.termination_penalty = 100.0
-        self.alignement_weight = 1.0
-        self.upright_weight = 0.5
-        self.stability_weight = 0.05  # Weight for the stability reward
-        self.mse_weight = 7.0  # Weight for the MSE penalty
+        self.alignement_weight = 0.4
+        self.upright_weight = 1.5
+        self.stability_weight = 0.02  # Weight for the stability reward
+        self.mse_weight = 5.0  # Weight for the MSE penalty
         self.old_state = None
         self.length = 0.5  # Pendulum length
         self.consecutive_upright_steps = 0  # Track consecutive steps with pendulum upright
-        self.upright_threshold = 1.3  # Threshold for considering pendulum upright
+        self.upright_threshold = 0.50  # Threshold for considering pendulum upright
         self.exponential_base = 1.15  # Base for exponential reward
         self.max_exponential = 5.0  # Maximum exponential multiplier
         self.old_points_positions = None
+        self.have_been_upright_once = False
         self.cached_velocity = 0
         self.aim_position_state = [0.0, 0.0, 0.0, np.pi,
                                  0.0, 0.0, np.pi, 0.0,
@@ -47,7 +48,7 @@ class RewardManager:
         end2_x, end2_y = state[16:18]        # Second end position
         end3_x, end3_y = state[18:20]        # Third end position
 
-        if self.old_points_positions is None :
+        if self.old_points_positions is None:
             self.old_points_positions = [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y]
         
         # x close to 0
@@ -60,11 +61,11 @@ class RewardManager:
         # negative y means upward (which is what we want to reward)
         # The physics uses a reference frame where positive y is downward
         upright_reward_points = self.upright_weight * (2.25 - end1_y - end2_y - end3_y)
-        upright_reward_angles = self.upright_weight * (abs(th1) + abs(th2) + abs(th3))
+        upright_reward_angles = self.upright_weight * (abs(th1) + abs(th2) + abs(th3)) * 0.2
         upright_reward = upright_reward_points + upright_reward_angles - 2.5
 
         # Check if pendulum is upright
-        is_upright = (upright_reward > self.upright_threshold)
+        is_upright = (state[19] < self.upright_threshold)
 
         # Update consecutive upright steps
         if is_upright:
@@ -104,14 +105,22 @@ class RewardManager:
         for i in range(len(state)):
             if i in [3, 6, 9]: # angles
                 mse_sum += np.sqrt((abs(state[i]) - self.aim_position_state[i]) ** 2)
-            elif i in [0, 12, 13, 14, 15, 16, 17, 18, 19] :
+            elif i in [0, 12, 13, 14, 15, 16, 17, 18, 19] : # absolute positions
                 mse_sum += (state[i] - self.aim_position_state[i]) ** 2
         
         mse_penalty = self.mse_weight * (mse_sum / len(state))
 
         # Penalties are negative, rewards are positive
-        reward = upright_reward - x_penalty - non_alignement_penalty - stability_penalty - mse_penalty
+        # reward = upright_reward - x_penalty - non_alignement_penalty - stability_penalty - mse_penalty
+        reward = upright_reward - (x_penalty + non_alignement_penalty + stability_penalty + mse_penalty) * 0.01
+
         reward /= 5
+
+        if not self.have_been_upright_once and state[19] < 0.5:
+            self.have_been_upright_once = True
+        
+        if self.have_been_upright_once and state[19] > 0.5:
+            reward = -10
 
         # Apply termination penalty
         if terminated:
@@ -129,3 +138,11 @@ class RewardManager:
             'mse_penalty': mse_penalty,
             'reward': reward
         }
+
+    def reset(self):
+        """Reset the reward manager state"""
+        self.old_state = None
+        self.old_points_positions = None
+        self.consecutive_upright_steps = 0
+        self.have_been_upright_once = False
+        self.cached_velocity = 0

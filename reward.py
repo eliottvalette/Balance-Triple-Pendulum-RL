@@ -1,22 +1,45 @@
 import numpy as np
 import random as rd
+from config import config
+
 class RewardManager:
     def __init__(self):
+        # -----------------------
+        # Configuration
+        # -----------------------
+        self.num_nodes = config['num_nodes']
+        self.length = 0.5  # Pendulum length
+        
+        # -----------------------
+        # Reward weights
+        # -----------------------
         self.cart_position_weight = 0.20
         self.termination_penalty = 100.0
         self.alignement_weight = 0.4
         self.upright_weight = 1.5
         self.stability_weight = 0.02  # Weight for the stability reward
         self.mse_weight = 5.0  # Weight for the MSE penalty
-        self.old_state = None
-        self.length = 0.5  # Pendulum length
+        
+        # -----------------------
+        # Upright tracking parameters
+        # -----------------------
+        self.upright_threshold = 0.60  # Threshold for considering pendulum upright
         self.consecutive_upright_steps = 0  # Track consecutive steps with pendulum upright
-        self.upright_threshold = 0.50  # Threshold for considering pendulum upright
         self.exponential_base = 1.15  # Base for exponential reward
         self.max_exponential = 5.0  # Maximum exponential multiplier
-        self.old_points_positions = None
         self.have_been_upright_once = False
+        self.came_back_down = False
+        self.steps_double_down = 0
+        # -----------------------
+        # State tracking
+        # -----------------------
+        self.old_state = None
+        self.old_points_positions = None
         self.cached_velocity = 0
+        
+        # -----------------------
+        # Target state
+        # -----------------------
         self.aim_position_state = [0.0, 0.0, 0.0, np.pi,
                                  0.0, 0.0, np.pi, 0.0,
                                  0.0, np.pi, 0.0, 0.0,
@@ -48,6 +71,8 @@ class RewardManager:
         end2_x, end2_y = state[16:18]        # Second end position
         end3_x, end3_y = state[18:20]        # Third end position
 
+        end_node_y = state[13 + self.num_nodes * 2]
+
         if self.old_points_positions is None:
             self.old_points_positions = [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y]
         
@@ -65,7 +90,7 @@ class RewardManager:
         upright_reward = upright_reward_points + upright_reward_angles - 2.5
 
         # Check if pendulum is upright
-        is_upright = (state[19] < self.upright_threshold)
+        is_upright = (end_node_y < self.upright_threshold)
 
         # Update consecutive upright steps
         if is_upright:
@@ -111,25 +136,33 @@ class RewardManager:
         mse_penalty = self.mse_weight * (mse_sum / len(state))
 
         # Penalties are negative, rewards are positive
-        # reward = upright_reward - x_penalty - non_alignement_penalty - stability_penalty - mse_penalty
-        reward = upright_reward - (x_penalty + non_alignement_penalty + stability_penalty + mse_penalty) * 0.01
+        reward = upright_reward - x_penalty - non_alignement_penalty - stability_penalty - mse_penalty
+        # reward = upright_reward - (x_penalty + non_alignement_penalty + stability_penalty + mse_penalty) * 0.01
 
         reward /= 5
 
-        if not self.have_been_upright_once and state[19] < 0.5:
+        if not self.have_been_upright_once and end_node_y < 0.5:
             self.have_been_upright_once = True
+
+        if self.have_been_upright_once and end_node_y > 0.5:
+            self.came_back_down = True
         
-        if self.have_been_upright_once and state[19] > 0.5:
+        if self.have_been_upright_once and self.came_back_down:
             reward = -10
+            self.steps_double_down += 1
 
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
+
+        force_terminated = False
+        if self.steps_double_down > 50:
+            force_terminated = True
             
-        return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty
+        return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, force_terminated
     
     def get_reward_components(self, state, current_step):
-        reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty = self.calculate_reward(state, False, current_step)
+        reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, force_terminated = self.calculate_reward(state, False, current_step)
         return {
             'x_penalty': x_penalty,
             'non_alignement_penalty': non_alignement_penalty,

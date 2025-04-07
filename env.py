@@ -21,7 +21,7 @@ class TriplePendulumEnv(gym.Env):
         # -----------------------
         # Environment parameters
         # -----------------------
-        self.gravity = 9.81
+        self.gravity = 1.0
         self.mass_cart = 1.0
         self.mass_pend1 = 0.2  # Mass of first pendulum
         self.mass_pend2 = 0.2  # Mass of second pendulum

@@ -3,10 +3,11 @@ import sys
 import numpy as np
 from env import TriplePendulumEnv
 from reward import RewardManager
+from config import config
 
 # Create the environment with rendering
 reward_manager = RewardManager()
-env = TriplePendulumEnv(render_mode="human", reward_manager=reward_manager, num_nodes=1)
+env = TriplePendulumEnv(render_mode="human", reward_manager=reward_manager, num_nodes=config['num_nodes'])
 
 # Reset the environment and get initial observation
 obs, info = env.reset()

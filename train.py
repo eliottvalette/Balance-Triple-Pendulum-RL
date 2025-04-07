@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import os
 import random
 from collections import deque
+from config import config
 
 class ReplayBuffer:
     def __init__(self, capacity=10000):
@@ -121,7 +122,7 @@ class TriplePendulumTrainer:
                 self.env.render(episode=episode, epsilon=self.epsilon)
             
             # Calculate custom reward and components
-            custom_reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty = self.reward_manager.calculate_reward(next_rich_state, terminated, num_steps)
+            custom_reward, _, _, _, _, _, force_terminated = self.reward_manager.calculate_reward(next_rich_state, terminated, num_steps)
             reward_components = self.reward_manager.get_reward_components(next_rich_state, num_steps)
             
             # Normalize reward
@@ -251,19 +252,6 @@ class TriplePendulumTrainer:
             self.actor_optimizer.load_state_dict(torch.load('models/checkpoint_actor_optimizer.pth', weights_only=True))
             self.critic_optimizer.load_state_dict(torch.load('models/checkpoint_critic_optimizer.pth', weights_only=True))
 
-if __name__ == "__main__":
-    config = {
-        'num_episodes': 10_000,
-        'actor_lr': 3e-4,
-        'critic_lr': 3e-4,
-        'gamma': 0.99,
-        'batch_size': 64,
-        'hidden_dim': 256,
-        'buffer_capacity': 100000,
-        'updates_per_episode': 10,
-        'load_models': False,
-        'num_nodes': 1
-    }
-    
+if __name__ == "__main__":    
     trainer = TriplePendulumTrainer(config)
     trainer.train() 

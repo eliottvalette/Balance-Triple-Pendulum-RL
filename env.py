@@ -104,13 +104,15 @@ class TriplePendulumEnv(gym.Env):
         self.current_reward = 0.0
         self.reward_components = {}
         self.reward_manager = reward_manager
+
+
     def reset(self):
         # Initialize state with zeros for all nodes
         self.state_for_simu = [0.0] * 12  # 3 for cart + 9 for pendulums
         
         # Set initial angles for active nodes
         for i in range(self.num_nodes):
-            self.state_for_simu[3 + i*3] = 0.0  # Initial angle
+            self.state_for_simu[3 + i*3] = rd.uniform(-0.5, 0.5)  # Initial angle
             self.state_for_simu[4 + i*3] = 0.0  # Initial angular velocity
             self.state_for_simu[5 + i*3] = 0.0  # Initial angular acceleration
 

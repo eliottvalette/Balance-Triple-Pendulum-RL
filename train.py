@@ -34,11 +34,11 @@ class TriplePendulumTrainer:
         self.env = TriplePendulumEnv(reward_manager=self.reward_manager, render_mode="human", num_nodes=config['num_nodes'])  # Enable rendering from the start
         
         # Initialize models
-        # Original state dimension is 12 (basic state) + 8 (visual information)
-        state_dim = 34
+        state_dim = 34 * config['seq_length']
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim)
         self.critic = TriplePendulumCritic(state_dim, action_dim)
+        self.seq_state = []
         
         # Optimizers
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=config['actor_lr'])
@@ -98,15 +98,26 @@ class TriplePendulumTrainer:
         # Réinitialiser le RewardManager
         self.reward_manager.reset()
         
+        # Initialiser seq_state comme une liste vide
+        self.seq_state = []
+        
         while not done and num_steps < self.max_steps:
             state_tensor = torch.FloatTensor(rich_state).unsqueeze(0)
+            while len(self.seq_state) < self.config['seq_length'] : # Remplir la sequence avec des les mêmes états au debut de l'episode
+                self.seq_state.append(state_tensor)
+
+            # Garder une sequence de longueur fixe en enlevant le premier element et en ajoutant le nouveau
+            self.seq_state.pop(0)
+            self.seq_state.append(state_tensor)
             
             # Epsilon-greedy exploration
             if np.random.random() < self.epsilon:
                 action = np.random.uniform(-1, 1)  # Random action
             else:
                 with torch.no_grad():
-                    action = self.actor(state_tensor).squeeze().numpy()
+                    # Concatène les états de la séquence
+                    seq_state_tensor = torch.cat(self.seq_state, dim=1).squeeze(0)
+                    action = self.actor(seq_state_tensor).squeeze().numpy()
             
             # Scale action to environment range and ensure it's an array
             scaled_action = np.array([action * self.env.force_mag])
@@ -132,9 +143,19 @@ class TriplePendulumTrainer:
             normalized_reward = self.normalize_reward(custom_reward)
             
             # Store transition in replay buffer with normalized reward
-            self.memory.push(rich_state, action, normalized_reward, next_rich_state, terminated)
+            next_rich_state_tensor = torch.FloatTensor(next_rich_state).unsqueeze(0)  # Convert to tensor
             
-            trajectory.append((rich_state, action, custom_reward, next_rich_state, terminated))
+            # Construire le prochain état de séquence
+            next_seq = self.seq_state[1:] + [next_rich_state_tensor]
+            next_seq_state = torch.cat(next_seq, dim=1).squeeze(0)
+            
+            # Construire l'état de séquence actuel
+            current_seq_state = torch.cat(self.seq_state, dim=1).squeeze(0)
+            
+            # Stocker dans le buffer de replay
+            self.memory.push(current_seq_state, action, normalized_reward, next_seq_state, terminated)
+            
+            trajectory.append((next_seq_state, action, custom_reward, next_seq_state, terminated))
             episode_reward += custom_reward
             rich_state = next_rich_state
             self.total_steps += 1
@@ -162,11 +183,20 @@ class TriplePendulumTrainer:
         next_states = torch.FloatTensor(next_states)
         dones = torch.FloatTensor(dones).unsqueeze(-1)
         
+        # Reshape states to handle sequence properly
+        batch_size = states.shape[0]
+        seq_length = self.config['seq_length']
+        state_dim = 34  # Dimension of a single state
+        
+        # Reshape states from [batch_size, seq_length, state_dim] to [batch_size, seq_length*state_dim]
+        states_reshaped = torch.cat([states[i] for i in range(batch_size)], dim=0).view(batch_size, -1)
+        next_states_reshaped = torch.cat([next_states[i] for i in range(batch_size)], dim=0).view(batch_size, -1)
+        
         # Update critic
-        current_q = self.critic(states, actions)
+        current_q = self.critic(states_reshaped, actions)
         with torch.no_grad():
-            next_actions = self.actor(next_states)
-            target_q = rewards + (1 - dones) * self.config['gamma'] * self.critic(next_states, next_actions)
+            next_actions = self.actor(next_states_reshaped)
+            target_q = rewards + (1 - dones) * self.config['gamma'] * self.critic(next_states_reshaped, next_actions)
         
         critic_loss = F.mse_loss(current_q, target_q)
         self.critic_optimizer.zero_grad()
@@ -178,7 +208,7 @@ class TriplePendulumTrainer:
         # Update actor - we want to maximize the critic output (Q-value)
         # Since optimizers perform minimization by default, we use negative sign to turn maximization into minimization
         # This is correct for DDPG: we want the actor to choose actions that maximize Q-values
-        actor_loss = -self.critic(states, self.actor(states)).mean()
+        actor_loss = -self.critic(states_reshaped, self.actor(states_reshaped)).mean()
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         # Add gradient clipping for actor

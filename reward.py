@@ -15,15 +15,15 @@ class RewardManager:
         # -----------------------
         self.cart_position_weight = 0.10
         self.termination_penalty = 100.0
-        self.alignement_weight = 0.05
-        self.upright_weight = 1.5
-        self.stability_weight = 0.008  # Weight for the stability reward
-        self.mse_weight = 1.0  # Weight for the MSE penalty
+        self.alignement_weight = 0.15
+        self.upright_weight = 3
+        self.stability_weight = 0.02  # Weight for the stability reward
+        self.mse_weight = 0.5  # Weight for the MSE penalty
         
         # -----------------------
         # Upright tracking parameters
         # -----------------------
-        self.upright_threshold = 0.60  # Threshold for considering pendulum upright
+        self.upright_threshold = 0.45  # Threshold for considering pendulum upright
         self.consecutive_upright_steps = 0  # Track consecutive steps with pendulum upright
         self.exponential_base = 1.15  # Base for exponential reward
         self.max_exponential = 5.0  # Maximum exponential multiplier
@@ -86,7 +86,7 @@ class RewardManager:
         # Uprightness of each node - negate p*_y values because in the physics simulation,
         # negative y means upward (which is what we want to reward)
         # The physics uses a reference frame where positive y is downward
-        upright_reward_points = self.upright_weight * (2.25 - end1_y - end2_y - end3_y)
+        upright_reward_points = self.upright_weight * (1.25 - end1_y - end2_y - end3_y)
         upright_reward_angles = self.upright_weight * (abs(th1) + abs(th2) + abs(th3)) * 0.2
         upright_reward = upright_reward_points + upright_reward_angles - 2.5
 
@@ -140,10 +140,10 @@ class RewardManager:
         reward = upright_reward - x_penalty - non_alignement_penalty - stability_penalty - mse_penalty
         # reward = upright_reward - (x_penalty + non_alignement_penalty + stability_penalty + mse_penalty) * 0.01
 
-        if not self.have_been_upright_once and end_node_y < 0.5:
+        if not self.have_been_upright_once and end_node_y < self.upright_threshold:
             self.have_been_upright_once = True
 
-        if self.have_been_upright_once and end_node_y > 0.5:
+        if self.have_been_upright_once and end_node_y > self.upright_threshold:
             self.came_back_down = True
         
         if self.have_been_upright_once and self.came_back_down:
@@ -157,9 +157,7 @@ class RewardManager:
         self.force_terminated = False
         if self.steps_double_down > 150:
             self.force_terminated = True
-        
-        print(f'reward: {reward}, upright_reward: {upright_reward}, x_penalty: {x_penalty}, non_alignement_penalty: {non_alignement_penalty}, stability_penalty: {stability_penalty}, mse_penalty: {mse_penalty}, force_terminated: {self.force_terminated}')
-           
+                   
         return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated
     
     def get_reward_components(self, state, current_step):

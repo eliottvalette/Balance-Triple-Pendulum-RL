@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import random as rd
 
 class TriplePendulumActor(nn.Module):
-    def __init__(self, state_dim, action_dim, hidden_dim=256):
+    def __init__(self, state_dim, action_dim, hidden_dim=512):
         super(TriplePendulumActor, self).__init__()
         
         # Add layer normalization for input

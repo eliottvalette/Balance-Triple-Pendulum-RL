@@ -23,6 +23,13 @@ class TriplePendulumEnv:
         self.current_state = None
         self.current_time = 0.0
 
+        # Variables pour l'animation
+        self.applied_force = 0.0
+        self.target_force = 0.0
+        self.force_increment = 0.3
+        self.force_smoothing = 0.1
+        self.current_frame = 0
+
         # -----------------------------
         # Modèle symbolique
         # -----------------------------
@@ -116,44 +123,10 @@ class TriplePendulumEnv:
         ))
         self.current_state = state.copy()  # On stocke l'état courant
         self.current_time = 0.0            # Réinitialisation du temps courant
+        self.dt = 0.01
         return state
-
-    def step(self, action):
-        """
-        Effectue un pas de simulation en intégrant avec la méthode d'Euler.
-        action : valeur de la force à appliquer (peut être directement le résultat du contrôleur)
-        """
-        dx = self.rhs(self.current_state, self.current_time, self.parameter_vals, lambda x: action)
-        new_state = self.current_state + self.dt * dx
-        self.current_state = new_state
-        self.current_time += self.dt
-
-        # Condition de fin (par exemple, après 10 secondes)
-        done = self.current_time >= 10.0
-
-        # Calcul de la récompense (placeholder, à adapter avec votre logique)
-        reward = 0.0
-        info = {}
-        return new_state, reward, done, info
-
-    def simulate(self, controller=None, max_steps=1000):
-        """
-        Simulation d'un épisode complet en utilisant des appels successifs à step.
-        Retourne les instants et les états enregistrés.
-        """
-        state = self.reset()
-        states = [state]
-        t = [self.current_time]
-        for _ in range(max_steps):
-            action = controller(state) if controller else 0.0
-            state, reward, done, info = self.step(action)
-            states.append(state)
-            t.append(self.current_time)
-            if done:
-                break
-        return np.array(t), np.vstack(states)
-
-    def animate_pendulum(self, t, states, length, title='Pendulum'):
+    
+    def animate_pendulum(self, steps, states, length, action = None, manual_mode=True, title='Pendulum'):
         num_joints = states.shape[1] // 2
         fig = plt.figure(facecolor='#F0F0F5')
         cart_width, cart_height = 0.4, 0.2
@@ -214,31 +187,26 @@ class TriplePendulumEnv:
                                  markeredgecolor='#1E1E28',
                                  markerfacecolor='#5A5A64')
 
-        applied_force = 0.0
-        force_increment = 0.3
-        target_force = 0.0
-        force_smoothing = 0.1
-        current_frame = 0
-
         def handle_key_press(event):
-            nonlocal target_force, states, current_frame
-            if event.key == 'left':
-                target_force = -force_increment
-            elif event.key == 'right':
-                target_force = force_increment
-            elif event.key == ' ':
-                target_force = 0.0
-                states[current_frame] = self.reset()
-                for i in range(current_frame + 1, len(states)):
-                    states[i] = states[current_frame]
+            if manual_mode:
+                if event.key == 'left':
+                    self.target_force = -self.force_increment
+                elif event.key == 'right':
+                    self.target_force = self.force_increment
+                elif event.key == ' ':
+                    self.target_force = 0.0
+                    states[self.current_frame] = self.reset()
+                    for i in range(self.current_frame + 1, len(states)):
+                        states[i] = states[self.current_frame]
 
         def handle_key_release(event):
-            nonlocal target_force
-            if event.key in ['left', 'right']:
-                target_force = 0.0
+            if manual_mode:
+                if event.key in ['left', 'right']:
+                    self.target_force = 0.0
 
-        fig.canvas.mpl_connect('key_press_event', handle_key_press)
-        fig.canvas.mpl_connect('key_release_event', handle_key_release)
+        if manual_mode:
+            fig.canvas.mpl_connect('key_press_event', handle_key_press)
+            fig.canvas.mpl_connect('key_release_event', handle_key_release)
 
         def initialize_animation():
             time_display.set_text('')
@@ -247,14 +215,13 @@ class TriplePendulumEnv:
             pendulum_line.set_data([], [])
             return time_display, cart, highlight, pendulum_line
 
-        def update_animation(frame):
-            nonlocal states, applied_force, current_frame
-            current_frame = frame
-            if frame < len(t) - 1:
-                applied_force += force_smoothing * (target_force - applied_force)
+        def step(frame):
+            self.current_frame = frame
+            if frame < steps - 1:
+                self.applied_force += self.force_smoothing * (self.target_force - self.applied_force)
                 current_state = states[frame]
-                time_step = t[frame+1] - t[frame]
-                next_state = current_state + self.rhs(current_state, t[frame], self.parameter_vals, lambda x: applied_force) * time_step
+                time_step = self.dt
+                next_state = current_state + self.rhs(current_state, frame*self.dt, self.parameter_vals, lambda x: self.applied_force) * time_step
                 cart_position = next_state[0]
                 if cart_position - cart_width/2 < xmin:
                     next_state[0] = xmin + cart_width/2
@@ -264,7 +231,7 @@ class TriplePendulumEnv:
                     next_state[num_joints] = 0
                 states[frame+1] = next_state
 
-            time_display.set_text(f'time = {t[frame]:.2f}\nforce = {applied_force:.2f}')
+            time_display.set_text(f'time = {frame*self.dt:.2f}\nforce = {self.applied_force:.2f}')
             cart.set_xy((states[frame, 0] - cart_width/2, -cart_height/2))
             highlight.set_xy((states[frame, 0] - cart_width/2 + 0.02, -cart_height/2 + 0.02))
 
@@ -279,9 +246,12 @@ class TriplePendulumEnv:
             pendulum_line.set_data(x_positions, y_positions)
             return time_display, cart, highlight, pendulum_line
 
-        anim = animation.FuncAnimation(fig, update_animation, frames=len(t),
-                                       init_func=initialize_animation, interval=20, blit=True)
-        plt.show()
+        # --- Boucle manuelle pour plus de contrôle ---
+        initialize_animation()
+        for frame in range(steps):
+            step(frame)
+            plt.pause(0.02)
+        return
 
     def get_state(self):
         # Renvoie l'état numérique courant
@@ -298,17 +268,18 @@ class TriplePendulumEnv:
 if __name__ == "__main__":
     env = TriplePendulumEnv()
     
+    # --- INITIALISATION ---
     state = env.reset()
     states = [state]
-    t = [env.current_time]
     max_steps = 500
     for _ in range(max_steps):
         action = 0.0
-        state, reward, done, info = env.step(action)
+        dx = env.rhs(state, env.current_time, env.parameter_vals, lambda x: action)
+        env.current_time += env.dt
+        state = state + dx * env.dt  # Mise à jour de l'état par Euler
         states.append(state)
-        t.append(env.current_time)
-        if done:
-            break
+    # --- FIN INITIALISATION ---
+    
     states = np.vstack(states)
-    env.animate_pendulum(np.array(t), states, env.arm_length, title='Simulation step-by-step')
-
+    while True:
+        env.animate_pendulum(steps=max_steps, states=states, length=env.arm_length, title='Simulation step-by-step')

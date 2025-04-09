@@ -2,7 +2,7 @@ import gym
 import torch
 import pygame
 import numpy as np
-from depricated.tp_env_v1 import TriplePendulumEnv
+from tp_env import TriplePendulumEnv  # Assurez-vous que le chemin d'import correspond à la nouvelle version
 from model import TriplePendulumActor, TriplePendulumCritic
 from reward import RewardManager
 from metrics import MetricsTracker
@@ -31,14 +31,17 @@ class TriplePendulumTrainer:
     def __init__(self, config):
         self.config = config
         self.reward_manager = RewardManager()
-        self.env = TriplePendulumEnv(reward_manager=self.reward_manager, render_mode="human", num_nodes=config['num_nodes'])  # Enable rendering from the start
+        self.env = TriplePendulumEnv(reward_manager=self.reward_manager, render_mode="human", num_nodes=config['num_nodes'])
+        self.force_mag = config.get('force_mag', 10.0)
         
-        # Initialize models
-        state_dim = 34 * config['seq_length']
+        # Dimension d'un état unique (construit à partir de reset() ou get_state())
+        state_size = len(self.env.get_state())
+        # L'état d'entrée au modèle est la concaténation d'une séquence d'états
+        state_dim = state_size * config['seq_length']
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim)
         self.critic = TriplePendulumCritic(state_dim, action_dim)
-        self.seq_state = []
+        self.seq_state = []  # Pour stocker une séquence d'états
         
         # Optimizers
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=config['actor_lr'])
@@ -47,12 +50,12 @@ class TriplePendulumTrainer:
         # Metrics tracking
         self.metrics = MetricsTracker()
         self.total_steps = 0
-        self.max_steps = 500  # Maximum steps per episode
+        self.max_steps = 500  # Maximum steps par épisode
         
         # Exploration parameters
-        self.epsilon = 1.0  # Initial random action probability
-        self.epsilon_decay = 0.995  # Epsilon decay rate
-        self.min_epsilon = 0.001  # Minimum epsilon
+        self.epsilon = 1.0         # Probabilité d'action aléatoire initiale
+        self.epsilon_decay = 0.995 # Décroissance d'epsilon
+        self.min_epsilon = 0.001     # Valeur minimale d'epsilon
         
         # Replay buffer
         self.memory = ReplayBuffer(capacity=config['buffer_capacity'])
@@ -61,34 +64,31 @@ class TriplePendulumTrainer:
         self.reward_scale = 1.0
         self.reward_running_mean = 0
         self.reward_running_std = 1
-        self.reward_alpha = 0.001  # For running statistics update
+        self.reward_alpha = 0.001  # Pour la mise à jour des statistiques
         
-        # Create directories for saving results
+        # Création des dossiers pour sauvegarder les résultats
         os.makedirs('results', exist_ok=True)
         os.makedirs('models', exist_ok=True)
-
-        # Initialize rendering
+        
+        # Initialisation du rendu si nécessaire
         self.env._render_init()
         
-        # Load models
+        # Chargement des modèles si demandé
         if config['load_models']:
             self.load_models()
     
     def normalize_reward(self, reward):
-        # Update running statistics
+        # Mise à jour des statistiques sur les rewards
         self.reward_running_mean = (1 - self.reward_alpha) * self.reward_running_mean + self.reward_alpha * reward
         self.reward_running_std = (1 - self.reward_alpha) * self.reward_running_std + self.reward_alpha * abs(reward - self.reward_running_mean)
-        
-        # Avoid division by zero
         std = max(self.reward_running_std, 1e-6)
-        
-        # Normalize and scale
         normalized_reward = (reward - self.reward_running_mean) / std
         return normalized_reward * self.reward_scale
 
     def collect_trajectory(self, episode):
-        state, _ = self.env.reset()
-        rich_state = self.env.get_rich_state(state)
+        # Dans la nouvelle version, reset() renvoie directement l'état initial
+        state = self.env.reset()
+        rich_state = self.env.get_state()  # On peut ici considérer get_state() comme le "rich state"
         done = False
         trajectory = []
         episode_reward = 0
@@ -98,177 +98,148 @@ class TriplePendulumTrainer:
         # Réinitialiser le RewardManager
         self.reward_manager.reset()
         
-        # Initialiser seq_state comme une liste vide
+        # Initialiser la séquence d'états avec l'état initial répété pour atteindre la longueur requise
         self.seq_state = []
+        state_tensor = torch.FloatTensor(rich_state).unsqueeze(0)
+        for _ in range(self.config['seq_length']):
+            self.seq_state.append(state_tensor)
         
         while not done and num_steps < self.max_steps:
+            # Construire la séquence d'états courante (concatenation horizontale)
             state_tensor = torch.FloatTensor(rich_state).unsqueeze(0)
-            while len(self.seq_state) < self.config['seq_length'] : # Remplir la sequence avec des les mêmes états au debut de l'episode
-                self.seq_state.append(state_tensor)
-
-            # Garder une sequence de longueur fixe en enlevant le premier element et en ajoutant le nouveau
+            # Mise à jour de la séquence : retirer le plus ancien et ajouter l'état courant
             self.seq_state.pop(0)
             self.seq_state.append(state_tensor)
             
-            # Epsilon-greedy exploration
+            # Exploration epsilon-greedy
             if np.random.random() < self.epsilon:
-                action = np.random.uniform(-1, 1)  # Random action
+                action = np.random.uniform(-1, 1)  # Action aléatoire
             else:
                 with torch.no_grad():
-                    # Concatène les états de la séquence
                     seq_state_tensor = torch.cat(self.seq_state, dim=1).squeeze(0)
                     action = self.actor(seq_state_tensor).squeeze().numpy()
             
-            # Scale action to environment range and ensure it's an array
-            scaled_action = np.array([action * self.env.force_mag])
+            # Mise à l'échelle de l'action : dans la nouvelle version, on travaille avec la force directement
+            scaled_action = action * self.force_mag
             
-            # Take step in environment
-            next_state, terminated = self.env.step(scaled_action)
-            next_rich_state = self.env.get_rich_state(next_state)
-
-            # Check for NaN values in state
-            if np.isnan(np.sum(next_rich_state)):
-                print('state:', next_rich_state)
-                raise ValueError("Warning: NaN detected in state")
+            # --- Mise à jour manuelle de la simulation ---
+            # Calculer la dérivée d'état via rhs, puis intégrer par Euler
+            dx = self.env.rhs(rich_state, self.env.current_time, self.env.parameter_vals, lambda x: scaled_action)
+            next_state = rich_state + self.env.dt * dx
+            self.env.current_time += self.env.dt
+            self.env.current_state = next_state
             
-            # Render if rendering is enabled
+            # Condition terminale (exemple : position du chariot ou angles trop importants)
+            # Le nouvel état est structuré comme : [position, angle(s), vitesse(s)]
+            done = (abs(next_state[0]) > 2.4) or (np.any(np.abs(next_state[1:self.env.n+1]) > np.pi))
+            next_rich_state = next_state
+            
+            # Si le rendu est activé, il est possible d'appeler animate_pendulum ou un rendu simplifié ici
             if self.env.render_mode == "human":
-                self.env.render(episode=episode, epsilon=self.epsilon)
+                # Vous pouvez appeler ici une méthode de rendu légère si besoin.
+                pass
             
-            # Calculate custom reward and components
-            custom_reward, _, _, _, _, _, force_terminated = self.reward_manager.calculate_reward(next_rich_state, terminated, num_steps)
+            # Calculer la reward via le RewardManager
+            custom_reward, _, _, _, _, _, force_terminated = self.reward_manager.calculate_reward(next_rich_state, done, num_steps)
             reward_components = self.reward_manager.get_reward_components(next_rich_state, num_steps)
-            
-            # Normalize reward
             normalized_reward = self.normalize_reward(custom_reward)
             
-            # Store transition in replay buffer with normalized reward
-            next_rich_state_tensor = torch.FloatTensor(next_rich_state).unsqueeze(0)  # Convert to tensor
-            
-            # Construire le prochain état de séquence
-            next_seq = self.seq_state[1:] + [next_rich_state_tensor]
+            # Préparer l'état séquentiel suivant
+            next_state_tensor = torch.FloatTensor(next_rich_state).unsqueeze(0)
+            # Si la séquence n'est pas encore pleine (devrait être remplie au reset), on l'actualise
+            next_seq = self.seq_state[1:] + [next_state_tensor]
+            if len(next_seq) > self.config['seq_length']:
+                next_seq = next_seq[-self.config['seq_length']:]
             next_seq_state = torch.cat(next_seq, dim=1).squeeze(0)
             
-            # Construire l'état de séquence actuel
+            # Concaténer l'état de la séquence actuel (déjà construit) et le stocker dans le buffer
             current_seq_state = torch.cat(self.seq_state, dim=1).squeeze(0)
+            self.memory.push(current_seq_state.numpy(), action, normalized_reward, next_seq_state.numpy(), done)
             
-            # Stocker dans le buffer de replay
-            self.memory.push(current_seq_state, action, normalized_reward, next_seq_state, terminated)
-            
-            trajectory.append((next_seq_state, action, custom_reward, next_seq_state, terminated))
+            trajectory.append((current_seq_state, action, custom_reward, next_seq_state, done))
             episode_reward += custom_reward
             rich_state = next_rich_state
             self.total_steps += 1
             num_steps += 1
 
-            if terminated or force_terminated:
+            if done or force_terminated:
                 break
             
-        # Decay exploration parameters
+        # Décroissance de l'exploration
         self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
-            
         return trajectory, episode_reward, reward_components
     
     def update_networks(self):
         if len(self.memory) < self.config['batch_size']:
-            return {"critic_loss": 0, "actor_loss": 0}  # Not enough samples yet
-
-        # Sample batch from replay buffer
+            return {"critic_loss": 0, "actor_loss": 0}  # Pas assez d'exemples
+        
+        # Échantillonnage du batch depuis le replay buffer
         states, actions, rewards, next_states, dones = self.memory.sample(self.config['batch_size'])
-
-        # Convert to tensors
+        
+        # Conversion en tenseurs
         states = torch.FloatTensor(states)
         actions = torch.FloatTensor(actions).unsqueeze(-1)
         rewards = torch.FloatTensor(rewards).unsqueeze(-1)
         next_states = torch.FloatTensor(next_states)
         dones = torch.FloatTensor(dones).unsqueeze(-1)
         
-        # Reshape states to handle sequence properly
-        batch_size = states.shape[0]
-        seq_length = self.config['seq_length']
-        state_dim = 34  # Dimension of a single state
+        # Ici, les états sont déjà des vecteurs concaténés de taille state_dim * seq_length
+        states_reshaped = states  # forme : [batch_size, state_dim * seq_length]
+        next_states_reshaped = next_states
         
-        # Reshape states from [batch_size, seq_length, state_dim] to [batch_size, seq_length*state_dim]
-        states_reshaped = torch.cat([states[i] for i in range(batch_size)], dim=0).view(batch_size, -1)
-        next_states_reshaped = torch.cat([next_states[i] for i in range(batch_size)], dim=0).view(batch_size, -1)
-        
-        # Update critic
+        # Mise à jour du critic
         current_q = self.critic(states_reshaped, actions)
         with torch.no_grad():
             next_actions = self.actor(next_states_reshaped)
             target_q = rewards + (1 - dones) * self.config['gamma'] * self.critic(next_states_reshaped, next_actions)
-        
         critic_loss = F.mse_loss(current_q, target_q)
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
-        # Add gradient clipping for critic
         torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=1.0)
         self.critic_optimizer.step()
         
-        # Update actor - we want to maximize the critic output (Q-value)
-        # Since optimizers perform minimization by default, we use negative sign to turn maximization into minimization
-        # This is correct for DDPG: we want the actor to choose actions that maximize Q-values
+        # Mise à jour de l'actor (maximiser la Q-valeur estimée)
         actor_loss = -self.critic(states_reshaped, self.actor(states_reshaped)).mean()
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
-        # Add gradient clipping for actor
         torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
         self.actor_optimizer.step()
         
-        return {
-            'critic_loss': critic_loss.item(),
-            'actor_loss': actor_loss.item()
-        }
+        return {"critic_loss": critic_loss.item(), "actor_loss": actor_loss.item()}
     
     def train(self):
         for episode in range(self.config['num_episodes']):
             print(f"Episode {episode} started")
             
-            # Adjust clock speed based on episode number
+            # Pour le rendu, on peut éventuellement ajuster render_mode ou la cadence
             if episode % 100 == 0:
                 self.env.render_mode = "human"
-                self.env.tick = 30
-            elif episode % 10 == 9:
-                self.env.render_mode = "human"
-                self.env.tick = 2000
             else:
                 self.env.render_mode = None
                 
-            # Collect trajectory and store in replay buffer
             trajectory, episode_reward, reward_components = self.collect_trajectory(episode)
             
-            # Only update after we have enough samples
+            # Mettre à jour les réseaux seulement si le buffer est suffisamment rempli
             losses = {"critic_loss": 0, "actor_loss": 0}
             if len(self.memory) >= self.config['batch_size']:
-                # Perform multiple updates per episode
                 for _ in range(self.config['updates_per_episode']):
                     update_losses = self.update_networks()
-                    # Accumulate losses for reporting
                     losses['critic_loss'] += update_losses['critic_loss']
                     losses['actor_loss'] += update_losses['actor_loss']
-                
-                # Average the losses
                 losses['critic_loss'] /= self.config['updates_per_episode']
                 losses['actor_loss'] /= self.config['updates_per_episode']
             
-            # Track metrics
+            # Suivi des métriques
             self.metrics.add_metric('episode_reward', episode_reward)
             self.metrics.add_metric('actor_loss', losses['actor_loss'])
             self.metrics.add_metric('critic_loss', losses['critic_loss'])
-            
-            # Track reward components
             for component_name, value in reward_components.items():
                 self.metrics.add_metric(component_name, value)
             
-            # Periodic display and saving
             if episode % 100 == 99:
                 avg_reward = self.metrics.get_moving_average('episode_reward')
                 print(f"Episode {episode}, Avg Reward: {avg_reward:.2f}")
-                
-                # Save graphs
                 self.metrics.plot_metrics(f'results/metrics.png')
-                
-                # Save model
                 self.save_models(f"models/checkpoint")
     
     def save_models(self, path):
@@ -276,15 +247,8 @@ class TriplePendulumTrainer:
         torch.save(self.critic.state_dict(), path + '_critic.pth')
         torch.save(self.actor_optimizer.state_dict(), path + '_actor_optimizer.pth')
         torch.save(self.critic_optimizer.state_dict(), path + '_critic_optimizer.pth')
-
+    
     def load_models(self):
         if os.path.exists('models/checkpoint_actor.pth'):
             print("Loading models")
-            self.actor.load_state_dict(torch.load('models/checkpoint_actor.pth', weights_only=True))
-            self.critic.load_state_dict(torch.load('models/checkpoint_critic.pth', weights_only=True))
-            self.actor_optimizer.load_state_dict(torch.load('models/checkpoint_actor_optimizer.pth', weights_only=True))
-            self.critic_optimizer.load_state_dict(torch.load('models/checkpoint_critic_optimizer.pth', weights_only=True))
-
-if __name__ == "__main__":    
-    trainer = TriplePendulumTrainer(config)
-    trainer.train() 
+            self.actor.load_state_dict(torch.load('models/check

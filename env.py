@@ -21,7 +21,7 @@ class TriplePendulumEnv(gym.Env):
         # -----------------------
         # Environment parameters
         # -----------------------
-        self.gravity = 1.0
+        self.gravity = 0.1
         self.mass_cart = 1.0
         self.mass_pend1 = 0.2  # Mass of first pendulum
         self.mass_pend2 = 0.2  # Mass of second pendulum
@@ -111,8 +111,9 @@ class TriplePendulumEnv(gym.Env):
         self.state_for_simu = [0.0] * 12  # 3 for cart + 9 for pendulums
         
         # Set initial angles for active nodes
+        rd_angle = rd.uniform(-1, 1)
         for i in range(self.num_nodes):
-            self.state_for_simu[3 + i*3] = rd.uniform(-0.5, 0.5)  # Initial angle
+            self.state_for_simu[3 + i*3] = rd_angle  # Initial angle
             self.state_for_simu[4 + i*3] = 0.0  # Initial angular velocity
             self.state_for_simu[5 + i*3] = 0.0  # Initial angular acceleration
 

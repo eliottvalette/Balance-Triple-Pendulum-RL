@@ -40,7 +40,10 @@ Pa0 = Particle('Pa0', P0, m[0])
 frames = [I]
 points = [P0]
 particles = [Pa0]
-forces = [(P0, f * I.x - m[0] * g * I.y)]
+# Définir les forces comme des tuples (Point, Vector)
+force_cart = f * I.x
+weight_cart = -m[0] * g * I.y
+forces = [(P0, force_cart + weight_cart)]
 kindiffs = [q[0].diff(t) - u[0]]
 
 for i in range(n):
@@ -55,11 +58,15 @@ for i in range(n):
     Pai = Particle(f'Pa{i + 1}', Pi, m[i + 1])
     particles.append(Pai)
 
-    forces.append((Pi, -m[i + 1] * g * I.y))
+    # Définir la force de poids comme un tuple (Point, Vector)
+    weight = -m[i + 1] * g * I.y
+    forces.append((Pi, weight))
     kindiffs.append(q[i + 1].diff(t) - u[i + 1])
 
 kane = KanesMethod(I, q_ind=q, u_ind=u, kd_eqs=kindiffs)
-fr, frstar = kane.kanes_equations(forces, particles)
+# Passer les forces et les particules séparément
+fr = kane._form_fr(forces)
+frstar = kane._form_frstar(particles)
 
 # -----------------------------
 # Numeric evaluation

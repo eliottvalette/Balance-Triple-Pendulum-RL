@@ -1,7 +1,7 @@
 import pygame
 import sys
 import numpy as np
-from tp_env import TriplePendulumEnv
+from tp_env_old import TriplePendulumEnv
 from reward import RewardManager
 from config import config
 

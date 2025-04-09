@@ -8,10 +8,11 @@ from numpy import pi, cos, sin, hstack, zeros, linspace, ones, array, matrix, ar
 from sympy import symbols, Dummy, lambdify
 from sympy.physics.mechanics import ReferenceFrame, Point, Particle, KanesMethod, dynamicsymbols
 import control
-
+from reward import RewardManager
 class TriplePendulumEnvNew:
-    def __init__(self, n=3, arm_length=1./3, bob_mass=0.01/3, friction_coefficient=0.1):
-        self.n = n
+    def __init__(self, reward_manager : RewardManager = None, num_nodes=3, arm_length=1./3, bob_mass=0.01/3, friction_coefficient=0.1):
+        self.reward_manager = reward_manager
+        self.n = num_nodes
         self.arm_length = arm_length
         self.bob_mass = bob_mass
         self.friction_coefficient = friction_coefficient
@@ -19,12 +20,12 @@ class TriplePendulumEnvNew:
         # -----------------------------
         # Symbolic Model
         # -----------------------------
-        self.q = dynamicsymbols(f'q:{n + 1}')  # Generalized coordinates
-        self.u = dynamicsymbols(f'u:{n + 1}')  # Generalized speeds
+        self.q = dynamicsymbols(f'q:{num_nodes + 1}')  # Generalized coordinates
+        self.u = dynamicsymbols(f'u:{num_nodes + 1}')  # Generalized speeds
         self.f = dynamicsymbols('f')           # Force applied to the cart
 
-        self.m = symbols(f'm:{n + 1}')         # Masses
-        self.l = symbols(f'l:{n}')             # Lengths
+        self.m = symbols(f'm:{num_nodes + 1}')         # Masses
+        self.l = symbols(f'l:{num_nodes}')             # Lengths
         self.g, self.t = symbols('g t')        # Gravity and time
 
         self._setup_symbolic_model()
@@ -179,15 +180,21 @@ class TriplePendulumEnvNew:
         force_increment = 0.3
         target_force = 0.0
         force_smoothing = 0.1
+        current_frame = 0  # Ajout d'une variable pour suivre le frame courant
 
         def handle_key_press(event):
-            nonlocal target_force
+            nonlocal target_force, states, current_frame
             if event.key == 'left':
                 target_force = -force_increment
             elif event.key == 'right':
                 target_force = force_increment
             elif event.key == ' ':
                 target_force = 0.0
+                # Réinitialiser l'état
+                states[current_frame] = self.reset()
+                # Réinitialiser les états suivants
+                for i in range(current_frame + 1, len(states)):
+                    states[i] = states[current_frame]
 
         def handle_key_release(event):
             nonlocal target_force
@@ -205,7 +212,8 @@ class TriplePendulumEnvNew:
             return time_display, cart, highlight, pendulum_line
 
         def update_animation(frame):
-            nonlocal states, applied_force
+            nonlocal states, applied_force, current_frame
+            current_frame = frame  # Mise à jour du frame courant
             if frame < len(t) - 1:
                 applied_force += force_smoothing * (target_force - applied_force)
                 
@@ -267,6 +275,16 @@ class TriplePendulumEnvNew:
             return float(dot(K, equilibrium_point - x))
 
         return lqr_controller
+
+    def reset(self):
+        position_initiale_chariot = 0.0
+        angles_initiaux = -pi / 2
+        vitesses_initiales = 1e-3
+        return hstack((
+            position_initiale_chariot,
+            angles_initiaux * ones(len(self.q) - 1),
+            vitesses_initiales * ones(len(self.u))
+        ))
 
 # Exemple d'utilisation
 if __name__ == "__main__":

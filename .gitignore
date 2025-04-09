@@ -29,3 +29,6 @@ results/
 
 # Environment variables
 .env
+
+# <Forked repos
+physics_guide/

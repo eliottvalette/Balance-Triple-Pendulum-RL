@@ -15,7 +15,7 @@ class RewardManager:
         # -----------------------
         self.cart_position_weight = 0.30
         self.termination_penalty = 10_000
-        self.alignement_weight = 3.0
+        self.alignement_weight = 2.0
         self.upright_weight = 1.5
         self.stability_weight = 0.02  # Weight for the stability reward
         self.mse_weight = 0.5  # Weight for the MSE penalty
@@ -120,7 +120,8 @@ class RewardManager:
             exponential_multiplier = 0.5
 
         # Apply exponential multiplier to upright reward
-        upright_reward *= exponential_multiplier
+        if upright_reward > 0:
+            upright_reward *= exponential_multiplier
 
         # ----------------------- STABILITY REWARD -----------------------
         angular_velocity_penalty = (th1_dot**2 + th2_dot**2 + th3_dot**2) / 3.0

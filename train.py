@@ -2,7 +2,7 @@ import gym
 import torch
 import pygame
 import numpy as np
-from env import TriplePendulumEnv
+from tp_env import TriplePendulumEnv
 from model import TriplePendulumActor, TriplePendulumCritic
 from reward import RewardManager
 from metrics import MetricsTracker

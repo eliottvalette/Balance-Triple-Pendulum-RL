@@ -15,7 +15,7 @@ class RewardManager:
         # -----------------------
         self.cart_position_weight = 0.30
         self.termination_penalty = 10_000
-        self.alignement_weight = 0.30
+        self.alignement_weight = 3.0
         self.upright_weight = 1.5
         self.stability_weight = 0.02  # Weight for the stability reward
         self.mse_weight = 0.5  # Weight for the MSE penalty
@@ -91,17 +91,7 @@ class RewardManager:
         x_penalty = self.cart_position_weight * (abs(x)) **2
 
         # ----------------------- ANGLES ALIGNEMENT REWARD -----------------------
-        non_alignement_penalty = self.alignement_weight * (np.sin(th1-th2) + np.sin(th2-th3)) / np.pi
-        if self.old_alignement_penalty is not None and abs(non_alignement_penalty - self.old_alignement_penalty) > 0.2:
-            print(f"old_angles: {self.old_angles}")
-            print(f"new_angles: {th1}, {th2}, {th3}")
-            print(f"old_alignement_penalty: {self.old_alignement_penalty}")
-            print(f"non_alignement_penalty: {non_alignement_penalty}")
-            print(f"sin(th1-th2): {np.sin(th1-th2)}")
-            print(f"sin(th2-th3): {np.sin(th2-th3)}")
-            raise ValueError(f"Alignement penalty is too high: {non_alignement_penalty} - {self.old_alignement_penalty}")
-        self.old_angles = [th1, th2, th3]
-        self.old_alignement_penalty = non_alignement_penalty
+        non_alignement_penalty = self.alignement_weight * (((1 - np.cos(th1 - th2)) + (1 - np.cos(th2 - th3))) / 2)
 
         # ----------------------- UPRIGHTNESS REWARD -----------------------
         # Uprightness of each node - negate p*_y values because in the physics simulation,

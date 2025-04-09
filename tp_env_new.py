@@ -1,104 +1,167 @@
-# Importation des bibliothèques nécessaires
 import numpy as np
-import pygame
-from scipy.linalg import solve_continuous_are
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+from matplotlib import animation
+from scipy.integrate import odeint
+from numpy.linalg import solve, matrix_rank
+from numpy import pi, cos, sin, hstack, zeros, linspace, ones, array, matrix, around, dot
+from sympy import symbols, Dummy, lambdify
+from sympy.physics.mechanics import ReferenceFrame, Point, Particle, KanesMethod, dynamicsymbols
 
-# Initialisation de Pygame
-pygame.init()
+import control
 
-# Paramètres de la fenêtre
-WIDTH, HEIGHT = 1200, 800
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-clock = pygame.time.Clock()
+# -----------------------------
+# Parameters
+# -----------------------------
+n = 3  # Triple pendulum
+arm_length = 1. / n
+bob_mass = 0.01 / n
 
-# Matrices du système (issues du papier)
-A = np.array([
-    [0, 1, 0, 0, 0, 0, 0, 0],
-    [0, -12.4928, -2.0824, -2.2956, 0, 0, 0, 0],
-    [0, 0, 0, 1, 0, 0, 0, 0],
-    [0, -67.1071, -65.2564, -71.9704, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 1, 0, 0],
-    [0, -144.5482, -394.2536, -272.1049, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0, 1],
-    [0, -300.4564, -512.8310, -258.9198, 0, 0, 0, 0]
-])
-B = np.array([[0], [3.651], [0], [10.012], [0], [3.716], [0], [7.720]])
+# -----------------------------
+# Symbolic Model
+# -----------------------------
+q = dynamicsymbols(f'q:{n + 1}')  # Generalized coordinates
+u = dynamicsymbols(f'u:{n + 1}')  # Generalized speeds
+f = dynamicsymbols('f')           # Force applied to the cart
 
-# Poids du LQR (issus du papier)
-Q = np.diag([700, 0, 3000, 0, 3000, 0, 3000, 0])
-R = np.array([[1]])
+m = symbols(f'm:{n + 1}')         # Masses
+l = symbols(f'l:{n}')             # Lengths
+g, t = symbols('g t')             # Gravity and time
 
-# Calcul du gain LQR
-P = solve_continuous_are(A, B, Q, R)
-K = np.linalg.inv(R) @ B.T @ P
+I = ReferenceFrame('I')
+O = Point('O')
+O.set_vel(I, 0)
 
-# État initial
-state = np.zeros((8, 1))
-state[2, 0] = 0.05  # Petit angle initial pour theta1
-state[4, 0] = 0.05  # theta2
-state[6, 0] = 0.05  # theta3
+P0 = Point('P0')
+P0.set_pos(O, q[0] * I.x)
+P0.set_vel(I, u[0] * I.x)
+Pa0 = Particle('Pa0', P0, m[0])
 
-# Fonction de mise à jour de l'état (Euler explicite pour la simplicité)
-def update(state, force, dt):
-    u = -K @ state + force
-    state_dot = A @ state + B * u
-    return state + state_dot * dt
+frames = [I]
+points = [P0]
+particles = [Pa0]
+forces = [(P0, f * I.x - m[0] * g * I.y)]
+kindiffs = [q[0].diff(t) - u[0]]
 
-# Fonction d'affichage
-def draw(state):
-    screen.fill((255, 255, 255))
-    
-    # Transformation d'échelle pour affichage
-    cart_x = WIDTH // 2 + int(state[0, 0] * 200)
-    cart_y = HEIGHT // 2
+for i in range(n):
+    Bi = I.orientnew(f'B{i}', 'Axis', [q[i + 1], I.z])
+    Bi.set_ang_vel(I, u[i + 1] * I.z)
+    frames.append(Bi)
 
-    # Dessin du chariot
-    pygame.draw.rect(screen, (0, 0, 0), (cart_x - 50, cart_y - 20, 100, 40))
-    
-    # Paramètres des pendules
-    l1, l2, l3 = 150, 100, 75  # Longueurs graphiques des pendules
-    
-    # Calcul des positions
-    theta1 = state[2, 0]
-    theta2 = state[4, 0]
-    theta3 = state[6, 0]
-    
-    p1 = (cart_x + l1 * np.sin(theta1), cart_y - l1 * np.cos(theta1))
-    p2 = (p1[0] + l2 * np.sin(theta2), p1[1] - l2 * np.cos(theta2))
-    p3 = (p2[0] + l3 * np.sin(theta3), p2[1] - l3 * np.cos(theta3))
-    
-    # Dessin des pendules
-    pygame.draw.line(screen, (255, 0, 0), (cart_x, cart_y), p1, 5)
-    pygame.draw.line(screen, (0, 255, 0), p1, p2, 5)
-    pygame.draw.line(screen, (0, 0, 255), p2, p3, 5)
-    
-    pygame.draw.circle(screen, (0, 0, 0), (int(p1[0]), int(p1[1])), 10)
-    pygame.draw.circle(screen, (0, 0, 0), (int(p2[0]), int(p2[1])), 10)
-    pygame.draw.circle(screen, (0, 0, 0), (int(p3[0]), int(p3[1])), 10)
-    
-    pygame.display.flip()
+    Pi = points[-1].locatenew(f'P{i + 1}', l[i] * Bi.x)
+    Pi.v2pt_theory(points[-1], I, Bi)
+    points.append(Pi)
 
-# Boucle principale
-running = True
-while running:
-    dt = clock.tick(60) / 1000.0  # 60 FPS
-    
-    force = 0.0
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-    
-    # Contrôle clavier
-    keys = pygame.key.get_pressed()
-    if keys[pygame.K_LEFT]:
-        force = -50.0
-    if keys[pygame.K_RIGHT]:
-        force = 50.0
-    
-    # Mise à jour de l'état
-    state = update(state, force, dt)
-    
-    # Affichage
-    draw(state)
+    Pai = Particle(f'Pa{i + 1}', Pi, m[i + 1])
+    particles.append(Pai)
 
-pygame.quit()
+    forces.append((Pi, -m[i + 1] * g * I.y))
+    kindiffs.append(q[i + 1].diff(t) - u[i + 1])
+
+kane = KanesMethod(I, q_ind=q, u_ind=u, kd_eqs=kindiffs)
+fr, frstar = kane.kanes_equations(forces, particles)
+
+# -----------------------------
+# Numeric evaluation
+# -----------------------------
+parameters = [g, m[0]]
+parameter_vals = [9.81, bob_mass]
+
+for i in range(n):
+    parameters += [l[i], m[i + 1]]
+    parameter_vals += [arm_length, bob_mass]
+
+dynamic = q + u
+dynamic.append(f)
+dummy_symbols = [Dummy() for _ in dynamic]
+dummy_dict = dict(zip(dynamic, dummy_symbols))
+kindiff_dict = kane.kindiffdict()
+
+M = kane.mass_matrix_full.subs(kindiff_dict).subs(dummy_dict)
+F = kane.forcing_full.subs(kindiff_dict).subs(dummy_dict)
+
+M_func = lambdify(dummy_symbols + parameters, M)
+F_func = lambdify(dummy_symbols + parameters, F)
+
+def rhs(x, t, args, controller=None):
+    u_input = controller(x) if controller else 0.0
+    arguments = hstack((x, u_input, args))
+    dx = array(solve(M_func(*arguments), F_func(*arguments))).T[0]
+    return dx
+
+# -----------------------------
+# Initial condition & simulation
+# -----------------------------
+x0 = hstack((0, pi / 2 * ones(len(q) - 1), 1e-3 * ones(len(u))))
+t_span = linspace(0, 10, 1000)
+y = odeint(rhs, x0, t_span, args=(parameter_vals,))
+
+# -----------------------------
+# Animation
+# -----------------------------
+def animate_pendulum(t, states, length, title='Pendulum'):
+    numpoints = states.shape[1] // 2
+    fig = plt.figure()
+    cart_width, cart_height = 0.4, 0.2
+    xmin = around(states[:, 0].min() - cart_width, 1)
+    xmax = around(states[:, 0].max() + cart_width, 1)
+
+    ax = plt.axes(xlim=(xmin, xmax), ylim=(-1.1, 1.1), aspect='equal')
+    ax.set_title(title)
+
+    time_text = ax.text(0.04, 0.9, '', transform=ax.transAxes)
+    rect = Rectangle([states[0, 0] - cart_width / 2.0, -cart_height / 2],
+                     cart_width, cart_height, fill=True, color='red', ec='black')
+    ax.add_patch(rect)
+
+    line, = ax.plot([], [], lw=2, marker='o', markersize=6)
+
+    def init():
+        time_text.set_text('')
+        rect.set_xy((0.0, 0.0))
+        line.set_data([], [])
+        return time_text, rect, line
+
+    def animate(i):
+        time_text.set_text(f'time = {t[i]:.2f}')
+        rect.set_xy((states[i, 0] - cart_width / 2.0, -cart_height / 2))
+        x = hstack((states[i, 0], zeros(numpoints - 1)))
+        y = zeros(numpoints)
+        for j in range(1, numpoints):
+            x[j] = x[j - 1] + length * cos(states[i, j])
+            y[j] = y[j - 1] + length * sin(states[i, j])
+        line.set_data(x, y)
+        return time_text, rect, line
+
+    anim = animation.FuncAnimation(fig, animate, frames=len(t),
+                                   init_func=init, interval=20, blit=True)
+    plt.show()
+
+animate_pendulum(t_span, y, arm_length, title='Open-loop dynamics')
+
+# -----------------------------
+# Controller (LQR)
+# -----------------------------
+equilibrium_point = hstack((0, pi / 2 * ones(len(q) - 1), zeros(len(u))))
+equilibrium_dict = dict(zip(q + u, equilibrium_point))
+parameter_dict = dict(zip(parameters, parameter_vals))
+
+f_A_lin, f_B_lin, _ = kane.linearize()
+f_A_lin = f_A_lin.subs(parameter_dict).subs(equilibrium_dict)
+f_B_lin = f_B_lin.subs(parameter_dict).subs(equilibrium_dict)
+m_mat = kane.mass_matrix_full.subs(parameter_dict).subs(equilibrium_dict)
+
+A = matrix(m_mat.inv() * f_A_lin)
+B = matrix(m_mat.inv() * f_B_lin)
+
+assert matrix_rank(control.ctrb(A, B)) == A.shape[0]
+
+K, _, _ = control.lqr(A, B, ones(A.shape), 1)
+
+def lqr_controller(x):
+    return float(dot(K, equilibrium_point - x))
+
+# Simulate with controller
+y_closed = odeint(rhs, x0, t_span, args=(parameter_vals, lqr_controller))
+
+animate_pendulum(t_span, y_closed, arm_length, title='Closed-loop control')

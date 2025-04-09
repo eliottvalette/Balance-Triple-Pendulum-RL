@@ -2,7 +2,7 @@ import gym
 import torch
 import pygame
 import numpy as np
-from tp_env_old import TriplePendulumEnv
+from depricated.tp_env_v1 import TriplePendulumEnv
 from model import TriplePendulumActor, TriplePendulumCritic
 from reward import RewardManager
 from metrics import MetricsTracker

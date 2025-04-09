@@ -1,9 +1,7 @@
-# tp_env_new.py
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib import animation
-from scipy.integrate import odeint
 from numpy.linalg import solve, matrix_rank
 from numpy import pi, cos, sin, hstack, zeros, linspace, ones, array, matrix, around, dot
 from sympy import symbols, Dummy, lambdify
@@ -11,25 +9,30 @@ from sympy.physics.mechanics import ReferenceFrame, Point, Particle, KanesMethod
 import control
 from reward import RewardManager
 
-class TriplePendulumEnvNew:
-    def __init__(self, reward_manager : RewardManager = None, render_mode = None, num_nodes=3, arm_length=1./3, bob_mass=0.01/3, friction_coefficient=0.1):
+class TriplePendulumEnv:
+    def __init__(self, reward_manager: RewardManager = None, render_mode=None, num_nodes=3, arm_length=1./3, bob_mass=0.01/3, friction_coefficient=0.1):
         self.reward_manager = reward_manager
         self.render_mode = render_mode
         self.n = num_nodes
         self.arm_length = arm_length
         self.bob_mass = bob_mass
         self.friction_coefficient = friction_coefficient
-        
-        # -----------------------------
-        # Symbolic Model
-        # -----------------------------
-        self.q = dynamicsymbols(f'q:{num_nodes + 1}')  # Generalized coordinates
-        self.u = dynamicsymbols(f'u:{num_nodes + 1}')  # Generalized speeds
-        self.f = dynamicsymbols('f')           # Force applied to the cart
 
-        self.m = symbols(f'm:{num_nodes + 1}')         # Masses
-        self.l = symbols(f'l:{num_nodes}')             # Lengths
-        self.g, self.t = symbols('g t')        # Gravity and time
+        # Paramètre de simulation pas-à-pas
+        self.dt = 0.01  # Durée d'un pas de simulation
+        self.current_state = None
+        self.current_time = 0.0
+
+        # -----------------------------
+        # Modèle symbolique
+        # -----------------------------
+        self.q = dynamicsymbols(f'q:{num_nodes + 1}')  # Coordonnées généralisées
+        self.u = dynamicsymbols(f'u:{num_nodes + 1}')  # Vitesses généralisées
+        self.f = dynamicsymbols('f')                    # Force appliquée au chariot
+
+        self.m = symbols(f'm:{num_nodes + 1}')          # Masses
+        self.l = symbols(f'l:{num_nodes}')              # Longueurs
+        self.g, self.t = symbols('g t')                 # Gravité et temps
 
         self._setup_symbolic_model()
         self._setup_numeric_evaluation()
@@ -47,7 +50,7 @@ class TriplePendulumEnvNew:
         frames = [I]
         points = [P0]
         particles = [Pa0]
-        
+
         force_cart = self.f * I.x
         weight_cart = -self.m[0] * self.g * I.y
         friction_cart = -self.friction_coefficient * self.u[0] * I.x
@@ -98,92 +101,124 @@ class TriplePendulumEnvNew:
     def rhs(self, x, t, args, controller=None):
         u_input = controller(x) if controller else 0.0
         arguments = hstack((x, u_input, args))
-        dx = array(solve(self.M_func(*arguments), self.F_func(*arguments))).T[0]
+        dx = np.array(solve(self.M_func(*arguments), self.F_func(*arguments))).T[0]
         return dx
 
-    def simulate(self, controller=None, t_span=None, x0=None):
-        if t_span is None:
-            t_span = linspace(0, 10, 1000)
-        
-        if x0 is None:
-            position_initiale_chariot = 0.0
-            angles_initiaux = -pi / 2
-            vitesses_initiales = 1e-3
-            x0 = hstack((
-                position_initiale_chariot,
-                angles_initiaux * ones(len(self.q) - 1),
-                vitesses_initiales * ones(len(self.u))
-            ))
+    def reset(self):
+        # Initialisation de l'état
+        position_initiale_chariot = 0.0
+        angles_initiaux = -pi / 2
+        vitesses_initiales = 1e-3
+        state = hstack((
+            position_initiale_chariot,
+            angles_initiaux * ones(len(self.q) - 1),
+            vitesses_initiales * ones(len(self.u))
+        ))
+        self.current_state = state.copy()  # On stocke l'état courant
+        self.current_time = 0.0            # Réinitialisation du temps courant
+        return state
 
-        y = odeint(self.rhs, x0, t_span, args=(self.parameter_vals, controller))
-        return t_span, y
+    def step(self, action):
+        """
+        Effectue un pas de simulation en intégrant avec la méthode d'Euler.
+        action : valeur de la force à appliquer (peut être directement le résultat du contrôleur)
+        """
+        dx = self.rhs(self.current_state, self.current_time, self.parameter_vals, lambda x: action)
+        new_state = self.current_state + self.dt * dx
+        self.current_state = new_state
+        self.current_time += self.dt
+
+        # Condition de fin (par exemple, après 10 secondes)
+        done = self.current_time >= 10.0
+
+        # Calcul de la récompense (placeholder, à adapter avec votre logique)
+        reward = 0.0
+        info = {}
+        return new_state, reward, done, info
+
+    def simulate(self, controller=None, max_steps=1000):
+        """
+        Simulation d'un épisode complet en utilisant des appels successifs à step.
+        Retourne les instants et les états enregistrés.
+        """
+        state = self.reset()
+        states = [state]
+        t = [self.current_time]
+        for _ in range(max_steps):
+            action = controller(state) if controller else 0.0
+            state, reward, done, info = self.step(action)
+            states.append(state)
+            t.append(self.current_time)
+            if done:
+                break
+        return np.array(t), np.vstack(states)
 
     def animate_pendulum(self, t, states, length, title='Pendulum'):
         num_joints = states.shape[1] // 2
         fig = plt.figure(facecolor='#F0F0F5')
         cart_width, cart_height = 0.4, 0.2
-        
+
         window_width = 4.0
-        xmin = -window_width/2
-        xmax = window_width/2
-        
+        xmin = -window_width / 2
+        xmax = window_width / 2
+
         ax = plt.axes(xlim=(xmin, xmax), ylim=(-1.1, 1.1), aspect='equal')
         ax.set_title(title, color='#3C3C46', fontsize=12, pad=20)
-        
+
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         ax.spines['bottom'].set_visible(False)
         ax.spines['left'].set_visible(False)
         ax.set_xticks([])
         ax.set_yticks([])
-        
+
         BACKGROUND_COLOR = '#F0F0F5'
         CART_COLOR = '#32323C'
         TRACK_COLOR = '#B4B4BE'
         PENDULUM_COLORS = ['#DC3C3C', '#3CB43C', '#3C3CDC']
-        
+
         fig.patch.set_facecolor(BACKGROUND_COLOR)
         ax.set_facecolor(BACKGROUND_COLOR)
-        
-        for x in np.arange(xmin, xmax + 0.5, 0.5):
-            ax.axvline(x=x, color='#D2D2D7', linestyle='-', alpha=0.3)
-        for y in np.arange(-1, 1.1, 0.5):
-            ax.axhline(y=y, color='#D2D2D7', linestyle='-', alpha=0.3)
-        
-        track = Rectangle([xmin, -cart_height/2 - 0.05], 
-                         window_width, 0.05, 
-                         facecolor=TRACK_COLOR, edgecolor='none')
+
+        for x_val in np.arange(xmin, xmax + 0.5, 0.5):
+            ax.axvline(x=x_val, color='#D2D2D7', linestyle='-', alpha=0.3)
+        for y_val in np.arange(-1, 1.1, 0.5):
+            ax.axhline(y=y_val, color='#D2D2D7', linestyle='-', alpha=0.3)
+
+        track = Rectangle([xmin, -cart_height / 2 - 0.05],
+                          window_width, 0.05,
+                          facecolor=TRACK_COLOR, edgecolor='none')
         ax.add_patch(track)
-        
-        ax.plot([0], [-cart_height/2 - 0.025], '|', 
+
+        ax.plot([0], [-cart_height / 2 - 0.025], '|',
                 color='#64646E', markersize=10, markeredgewidth=2)
-        
+
         time_display = ax.text(0.04, 0.9, '', transform=ax.transAxes,
-                              color='#3C3C46', fontsize=10)
-        
+                               color='#3C3C46', fontsize=10)
+
         cart = Rectangle([states[0, 0] - cart_width/2, -cart_height/2],
-                        cart_width, cart_height,
-                        facecolor=CART_COLOR, edgecolor='none')
+                         cart_width, cart_height,
+                         facecolor=CART_COLOR, edgecolor='none')
         ax.add_patch(cart)
-        
+
         highlight = Rectangle([states[0, 0] - cart_width/2 + 0.02, -cart_height/2 + 0.02],
-                             cart_width - 0.04, cart_height/3,
-                             facecolor='#50505A', edgecolor='none')
+                              cart_width - 0.04, cart_height / 3,
+                              facecolor='#50505A', edgecolor='none')
         ax.add_patch(highlight)
-        
-        pendulum_line, = ax.plot([], [], 
-                                color=PENDULUM_COLORS[0], 
-                                linewidth=4, 
-                                marker='o',
-                                markersize=8,
-                                markeredgecolor='#1E1E28',
-                                markerfacecolor='#5A5A64')
-        
+
+        pendulum_line, = ax.plot([], [],
+                                 color=PENDULUM_COLORS[0],
+                                 linewidth=4,
+                                 marker='o',
+                                 markersize=8,
+                                 markeredgecolor='#1E1E28',
+                                 markerfacecolor='#5A5A64')
+
         applied_force = 0.0
         force_increment = 0.3
         target_force = 0.0
         force_smoothing = 0.1
-        current_frame = 0  # Ajout d'une variable pour suivre le frame courant
+        current_frame = 0
 
         def handle_key_press(event):
             nonlocal target_force, states, current_frame
@@ -193,9 +228,7 @@ class TriplePendulumEnvNew:
                 target_force = force_increment
             elif event.key == ' ':
                 target_force = 0.0
-                # Réinitialiser l'état
                 states[current_frame] = self.reset()
-                # Réinitialiser les états suivants
                 for i in range(current_frame + 1, len(states)):
                     states[i] = states[current_frame]
 
@@ -216,15 +249,12 @@ class TriplePendulumEnvNew:
 
         def update_animation(frame):
             nonlocal states, applied_force, current_frame
-            current_frame = frame  # Mise à jour du frame courant
+            current_frame = frame
             if frame < len(t) - 1:
                 applied_force += force_smoothing * (target_force - applied_force)
-                
                 current_state = states[frame]
                 time_step = t[frame+1] - t[frame]
-                
                 next_state = current_state + self.rhs(current_state, t[frame], self.parameter_vals, lambda x: applied_force) * time_step
-                
                 cart_position = next_state[0]
                 if cart_position - cart_width/2 < xmin:
                     next_state[0] = xmin + cart_width/2
@@ -232,84 +262,53 @@ class TriplePendulumEnvNew:
                 elif cart_position + cart_width/2 > xmax:
                     next_state[0] = xmax - cart_width/2
                     next_state[num_joints] = 0
-                    
                 states[frame+1] = next_state
 
             time_display.set_text(f'time = {t[frame]:.2f}\nforce = {applied_force:.2f}')
-            
             cart.set_xy((states[frame, 0] - cart_width/2, -cart_height/2))
             highlight.set_xy((states[frame, 0] - cart_width/2 + 0.02, -cart_height/2 + 0.02))
-            
+
             x_positions = hstack((states[frame, 0], zeros(num_joints - 1)))
             y_positions = zeros(num_joints)
             for joint in range(1, num_joints):
                 x_positions[joint] = x_positions[joint - 1] + length * cos(states[frame, joint])
                 y_positions[joint] = y_positions[joint - 1] + length * sin(states[frame, joint])
-            
             current_angle = states[frame, 1]
             color_index = min(2, int(abs(current_angle) / (pi/2)))
             pendulum_line.set_color(PENDULUM_COLORS[color_index])
             pendulum_line.set_data(x_positions, y_positions)
-            
             return time_display, cart, highlight, pendulum_line
 
         anim = animation.FuncAnimation(fig, update_animation, frames=len(t),
-                                     init_func=initialize_animation, interval=20, blit=True)
+                                       init_func=initialize_animation, interval=20, blit=True)
         plt.show()
 
-    def create_lqr_controller(self):
-        equilibrium_point = hstack((0, pi / 2 * ones(len(self.q) - 1), zeros(len(self.u))))
-        equilibrium_dict = dict(zip(self.q + self.u, equilibrium_point))
-        parameter_dict = dict(zip([self.g] + list(self.m) + list(self.l), self.parameter_vals))
-
-        f_A_lin, f_B_lin, _ = self.kane.linearize()
-        f_A_lin = f_A_lin.subs(parameter_dict).subs(equilibrium_dict)
-        f_B_lin = f_B_lin.subs(parameter_dict).subs(equilibrium_dict)
-        m_mat = self.kane.mass_matrix_full.subs(parameter_dict).subs(equilibrium_dict)
-
-        A = matrix(m_mat.inv() * f_A_lin)
-        B = matrix(m_mat.inv() * f_B_lin)
-
-        assert matrix_rank(control.ctrb(A, B)) == A.shape[0]
-
-        K, _, _ = control.lqr(A, B, ones(A.shape), 1)
-
-        def lqr_controller(x):
-            return float(dot(K, equilibrium_point - x))
-
-        return lqr_controller
-
-    def reset(self):
-        position_initiale_chariot = 0.0
-        angles_initiaux = -pi / 2
-        vitesses_initiales = 1e-3
-        return hstack((
-            position_initiale_chariot,
-            angles_initiaux * ones(len(self.q) - 1),
-            vitesses_initiales * ones(len(self.u))
-        ))
-    
     def get_state(self):
-        '''
-        Get the current state of the environment
-        '''
-        state = []
-        for i in range(len(self.q)):
-            state.append(self.q[i])
-        for i in range(len(self.u)):
-            state.append(self.u[i])
-        state.append(self.f)
-        return state
+        # Renvoie l'état numérique courant
+        if self.current_state is not None:
+            return self.current_state
+        else:
+            return self.reset()
 
-# Exemple d'utilisation
+    def _render_init(self):
+        # Méthode optionnelle pour initialiser le rendu si besoin
+        pass
+
+# Exemple d'utilisation en mode step-by-step et avec contrôle LQR
 if __name__ == "__main__":
-    env = TriplePendulumEnvNew()
+    env = TriplePendulumEnv()
     
-    # Simulation sans contrôleur
-    t_span, y = env.simulate()
-    env.animate_pendulum(t_span, y, env.arm_length, title='Contrôle manuel du pendule')
-    
-    # Simulation avec contrôleur LQR
-    lqr_controller = env.create_lqr_controller()
-    t_span, y_closed = env.simulate(controller=lqr_controller)
-    env.animate_pendulum(t_span, y_closed, env.arm_length, title='Closed-loop control')
+    state = env.reset()
+    states = [state]
+    t = [env.current_time]
+    max_steps = 500
+    for _ in range(max_steps):
+        action = 0.0
+        state, reward, done, info = env.step(action)
+        states.append(state)
+        t.append(env.current_time)
+        if done:
+            break
+    states = np.vstack(states)
+    env.animate_pendulum(np.array(t), states, env.arm_length, title='Simulation step-by-step')
+

@@ -1,7 +1,7 @@
 import pygame
 import sys
 import numpy as np
-from tp_env_old import TriplePendulumEnv
+from depricated.tp_env_v1 import TriplePendulumEnv
 from reward import RewardManager
 from config import config
 
@@ -10,7 +10,7 @@ reward_manager = RewardManager()
 env = TriplePendulumEnv(render_mode="human", reward_manager=reward_manager, num_nodes=config['num_nodes'])
 
 # Reset the environment and get initial observation
-obs, info = env.reset()
+obs = env.reset()
 
 # Track last direction for more responsive controls
 last_direction = 0

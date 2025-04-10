@@ -98,7 +98,7 @@ class RewardManager:
         # The physics uses a reference frame where positive y is downward
         upright_reward_points = self.upright_weight * (y1 + y2 + y3)
         upright_reward_angles = self.upright_weight * (np.sin(q1) + np.sin(q2) + np.sin(q3)) * 0.2 
-        upright_reward = upright_reward_points + upright_reward_angles - 2.5
+        upright_reward = upright_reward_points + upright_reward_angles
 
         # Check if pendulum is upright
         is_upright = (end_node_y > self.upright_threshold)

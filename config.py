@@ -8,7 +8,7 @@ config = {
     'buffer_capacity': 100000,
     'updates_per_episode': 10,
     'load_models': False,
-    'num_nodes': 3,
+    'num_nodes': 1,
     'seq_length': 3,
     'gravity': 0.81
 }

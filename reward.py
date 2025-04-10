@@ -18,12 +18,12 @@ class RewardManager:
         self.alignement_weight = 2.0
         self.upright_weight = 1.5
         self.stability_weight = 0.02  # Weight for the stability reward
-        self.mse_weight = 0.5  # Weight for the MSE penalty
+        self.mse_weight = 0.0  # Weight for the MSE penalty
         
         # -----------------------
         # Upright tracking parameters
         # -----------------------
-        self.upright_threshold = 0.45  # Threshold for considering pendulum upright
+        self.upright_threshold = 0.20  # Threshold for considering pendulum upright
         self.consecutive_upright_steps = 0  # Track consecutive steps with pendulum upright
         self.exponential_base = 1.15  # Base for exponential reward
         self.max_exponential = 3.0  # Maximum exponential multiplier
@@ -96,12 +96,12 @@ class RewardManager:
         # Uprightness of each node - negate p*_y values because in the physics simulation,
         # negative y means upward (which is what we want to reward)
         # The physics uses a reference frame where positive y is downward
-        upright_reward_points = self.upright_weight * (1.25 - y1 - y2 - y3)
-        upright_reward_angles = self.upright_weight * (abs(q1) + abs(q2) + abs(q3)) * 0.2
+        upright_reward_points = self.upright_weight * (y1 + y2 + y3)
+        upright_reward_angles = self.upright_weight * (np.sin(q1) + np.sin(q2) + np.sin(q3)) * 0.2 
         upright_reward = upright_reward_points + upright_reward_angles - 2.5
 
         # Check if pendulum is upright
-        is_upright = (end_node_y < self.upright_threshold)
+        is_upright = (end_node_y > self.upright_threshold)
 
         # Update consecutive upright steps
         if is_upright:
@@ -126,7 +126,7 @@ class RewardManager:
         angular_velocity_penalty = (u1**2 + u2**2 + u3**2) / 3.0
 
         # ----------------------- POINTS VELOCITY -----------------------
-        points_velocity = ((abs(x3 - self.old_points_positions[6]) + abs(y3 - self.old_points_positions[7]))) ** 0.2
+        points_velocity = ((abs(x3 - self.old_points_positions[4]) + abs(y3 - self.old_points_positions[5]))) ** 0.2
         if points_velocity == 0:
             points_velocity = self.cached_velocity
         else:
@@ -151,10 +151,10 @@ class RewardManager:
         reward = upright_reward - x_penalty - non_alignement_penalty - stability_penalty - mse_penalty
         # reward = upright_reward - (x_penalty + non_alignement_penalty + stability_penalty + mse_penalty) * 0.01
 
-        if not self.have_been_upright_once and end_node_y < self.upright_threshold:
+        if not self.have_been_upright_once and end_node_y > self.upright_threshold:
             self.have_been_upright_once = True
 
-        if self.have_been_upright_once and end_node_y > self.upright_threshold:
+        if self.have_been_upright_once and end_node_y < self.upright_threshold:
             self.came_back_down = True
         
         if self.have_been_upright_once and self.came_back_down:

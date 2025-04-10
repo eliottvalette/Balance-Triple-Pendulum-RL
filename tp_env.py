@@ -4,13 +4,13 @@ from numpy.linalg import solve
 from numpy import pi, cos, sin, hstack, zeros, ones
 from sympy import symbols, Dummy, lambdify
 from sympy.physics.mechanics import ReferenceFrame, Point, Particle, KanesMethod, dynamicsymbols
+from config import config
 import sys
 
-GRAVITY = 9.81
-
+GRAVITY = config['gravity']
 
 class TriplePendulumEnv:
-    def __init__(self, reward_manager=None, render_mode=None, num_nodes=1, arm_length=1./3, bob_mass=0.01/3, friction_coefficient=0.1):
+    def __init__(self, reward_manager=None, render_mode=None, num_nodes=config['num_nodes'], arm_length=1./3, bob_mass=0.01/3, friction_coefficient=0.1):
         self.reward_manager = reward_manager
         self.render_mode = render_mode
         self.n = num_nodes
@@ -181,7 +181,7 @@ class TriplePendulumEnv:
         if self.n == 1:
             adapted_state = [non_adapted_state[0], non_adapted_state[1], 0, 0, non_adapted_state[2], 0, 0, non_adapted_state[3]]
         elif self.n == 2:
-            adapted_state = [non_adapted_state[0], non_adapted_state[1], non_adapted_state[2], 0, non_adapted_state[3], non_adapted_state[4], 0, non_adapted_state[6]]
+            adapted_state = [non_adapted_state[0], non_adapted_state[1], non_adapted_state[2], 0, non_adapted_state[3], non_adapted_state[4], 0, non_adapted_state[5]]
         elif self.n == 3:
             adapted_state = non_adapted_state
         
@@ -256,7 +256,7 @@ class TriplePendulumEnv:
         
         return self.get_state()
         
-    def render(self):
+    def render(self, episode=0, epsilon=0):
         """
         Affiche l'état actuel du pendule.
         """
@@ -323,7 +323,7 @@ class TriplePendulumEnv:
             pygame.draw.circle(self.screen, (90, 90, 100), (end_x, end_y), 8)
             pygame.draw.circle(self.screen, (30, 30, 40), (end_x, end_y), 8, 1)
         
-        # Afficher les infos
+        # Afficher les infos de base
         time_text = self.font.render(f'time = {self.current_time:.2f}', True, self.TEXT_COLOR)
         force_text = self.font.render(f'force = {self.applied_force:.2f}', True, self.TEXT_COLOR)
         info_text = self.font.render('Utilisez les flèches gauche/droite pour appliquer une force', True, self.TEXT_COLOR)
@@ -331,6 +331,128 @@ class TriplePendulumEnv:
         self.screen.blit(time_text, (20, 20))
         self.screen.blit(force_text, (20, 45))
         self.screen.blit(info_text, (20, self.height - 30))
+        
+        # Afficher les composants de récompense si le reward_manager est disponible
+        if self.reward_manager is not None:
+            state = self.get_state()
+            
+            if state is not None:
+                # Récupérer les composants de récompense
+                reward_components = self.reward_manager.get_reward_components(state, 0)
+                
+                # Dessiner un conteneur pour les récompenses
+                reward_panel_width = 300
+                reward_panel_height = 240
+                reward_panel_x = self.width - reward_panel_width - 10
+                reward_panel_y = 10
+                
+                # Fond du conteneur avec bordure arrondie
+                pygame.draw.rect(self.screen, (230, 230, 235), 
+                                pygame.Rect(reward_panel_x, reward_panel_y, reward_panel_width, reward_panel_height),
+                                border_radius=10)
+                pygame.draw.rect(self.screen, (200, 200, 205), 
+                                pygame.Rect(reward_panel_x, reward_panel_y, reward_panel_width, reward_panel_height),
+                                border_radius=10, width=2)
+                
+                # Titre du conteneur
+                title_font = pygame.font.Font(None, 28)
+                title_text = title_font.render('Composants de Récompense', True, (60, 60, 70))
+                self.screen.blit(title_text, (reward_panel_x + 10, reward_panel_y + 10))
+                
+                # Séparateur
+                pygame.draw.line(
+                    self.screen, 
+                    (200, 200, 205), 
+                    (reward_panel_x + 10, reward_panel_y + 40), 
+                    (reward_panel_x + reward_panel_width - 10, reward_panel_y + 40), 
+                    2
+                )
+                
+                # Configuration des barres de récompense
+                bar_y = reward_panel_y + 50
+                bar_width = reward_panel_width - 40
+                bar_height = 16
+                bar_spacing = 28
+                max_bar_value = 3.0  # Échelle pour la visualisation
+                
+                # Définir les composants de récompense avec leurs couleurs spécifiques
+                reward_components_display = [
+                    {"name": "Base", "value": reward_components.get('reward', 0), "color": (100, 100, 200)},
+                    {"name": "Upright", "value": reward_components.get('upright_reward', 0), "color": (80, 180, 80)},
+                    {"name": "Position", "value": reward_components.get('x_penalty', 0), "color": (200, 80, 80)},
+                    {"name": "Alignment", "value": reward_components.get('non_alignement_penalty', 0), "color": (180, 130, 80)},
+                    {"name": "MSE", "value": reward_components.get('mse_penalty', 0), "color": (180, 130, 80)}
+                ]
+                
+                # Ajouter stability_penalty s'il existe
+                if 'stability_penalty' in reward_components:
+                    reward_components_display.append({"name": "Stability", "value": reward_components.get('stability_penalty', 0), "color": (150, 80, 150)})
+                
+                # Ajouter x_dot_penalty s'il existe
+                if 'x_dot_penalty' in reward_components:
+                    reward_components_display.append({"name": "Velocity", "value": reward_components.get('x_dot_penalty', 0), "color": (180, 80, 180)})
+                
+                # Dessiner les barres de récompense
+                for comp in reward_components_display:
+                    # Nom du composant
+                    name_text = self.font.render(comp["name"], True, (60, 60, 70))
+                    self.screen.blit(name_text, (reward_panel_x + 15, bar_y))
+                    
+                    # Calculer le point central pour la barre (point zéro)
+                    center_x = reward_panel_x + 100 + (bar_width - 130) / 2
+                    usable_width = bar_width - 130
+                    
+                    # Barre de fond
+                    pygame.draw.rect(
+                        self.screen,
+                        (220, 220, 225),
+                        pygame.Rect(center_x - usable_width/2, bar_y + 5, usable_width, bar_height),
+                        border_radius=4
+                    )
+                    
+                    # Ligne centrale pour marquer le zéro
+                    pygame.draw.line(
+                        self.screen, 
+                        (150, 150, 155), 
+                        (center_x, bar_y + 3), 
+                        (center_x, bar_y + bar_height + 7), 
+                        2
+                    )
+                    
+                    # Barre de valeur
+                    value = comp["value"]
+                    
+                    if value != 0:
+                        if value > 0:
+                            bar_length = min(value / max_bar_value * (usable_width/2), usable_width/2)
+                            bar_x = center_x
+                            bar_color = comp["color"]
+                        else:
+                            bar_length = min(abs(value) / max_bar_value * (usable_width/2), usable_width/2)
+                            bar_x = center_x - bar_length
+                            bar_color = (200, 90, 90)  # Rouge pour les valeurs négatives
+                        
+                        # S'assurer que la longueur de la barre est toujours valide et d'au moins 1 pixel
+                        bar_length = max(1, int(bar_length))
+                        
+                        pygame.draw.rect(
+                            self.screen,
+                            bar_color,
+                            pygame.Rect(int(bar_x), int(bar_y + 5), bar_length, bar_height),
+                            border_radius=4
+                        )
+                    
+                    # Afficher la valeur à droite
+                    value_text = self.font.render(f"{value:.2f}", True, (60, 60, 70))
+                    self.screen.blit(value_text, (reward_panel_x + bar_width - 30, bar_y + 5))
+                    
+                    bar_y += bar_spacing
+                
+                # Afficher informations sur l'épisode
+                episode_text = self.font.render(f'Episode: {episode}', True, self.TEXT_COLOR)
+                epsilon_text = self.font.render(f'Epsilon: {epsilon:.4f}', True, self.TEXT_COLOR)
+                self.screen.blit(episode_text, (20, 70))
+                self.screen.blit(epsilon_text, (20, 95))
         
         pygame.display.flip()
         self.clock.tick(60)
@@ -350,6 +472,14 @@ class TriplePendulumEnv:
         self._init_pygame()
         pygame.display.set_caption(title)
         
+        # Créer un RewardManager si aucun n'est disponible
+        if self.reward_manager is None:
+            try:
+                from reward import RewardManager
+                self.reward_manager = RewardManager()
+            except ImportError:
+                print("ATTENTION: Impossible d'importer RewardManager. Les récompenses ne seront pas affichées.")
+        
         if self.current_state is None:
             self.reset()
         
@@ -357,11 +487,15 @@ class TriplePendulumEnv:
         target_force = 0.0
         force_smoothing = 0.1
         running = True
+        episode = 0
+        epsilon = 1.0
         
         while running:
             if self.num_steps >= max_steps:
                 self.reset()
                 self.num_steps = 0
+                episode += 1
+                epsilon *= 0.995  # Simuler une décroissance d'epsilon
             # Gestion des événements
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -393,6 +527,14 @@ class TriplePendulumEnv:
                             print(f'[x3, y3]: [{state[12]:.2f}, {state[13]:.2f}]')
                         print('------- Fin des details -------')
                         
+                        # Afficher également les composants de récompense si disponibles
+                        if self.reward_manager is not None:
+                            reward_components = self.reward_manager.get_reward_components(state, self.num_steps)
+                            print('------- Composants de récompense -------')
+                            for component, value in reward_components.items():
+                                print(f'{component}: {value:.4f}')
+                            print('------- Fin des composants de récompense -------')
+                        
                 elif event.type == pygame.KEYUP:
                     if event.key in [pygame.K_LEFT, pygame.K_RIGHT]:
                         target_force = 0.0
@@ -401,8 +543,8 @@ class TriplePendulumEnv:
             self.applied_force += force_smoothing * (target_force - self.applied_force)
             self.step(self.applied_force)
             
-            # Rendu
-            if not self.render():
+            # Rendu avec informations sur l'épisode et epsilon
+            if not self.render(episode=episode, epsilon=epsilon):
                 break
 
             self.num_steps += 1

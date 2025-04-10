@@ -9,5 +9,6 @@ config = {
     'updates_per_episode': 10,
     'load_models': False,
     'num_nodes': 3,
-    'seq_length': 3
+    'seq_length': 3,
+    'gravity': 0.81
 }

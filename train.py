@@ -31,13 +31,13 @@ class TriplePendulumTrainer:
     def __init__(self, config):
         self.config = config
         self.reward_manager = RewardManager()
-        # Initialiser l'environnement avec les paramètres reconnus
-        self.env = TriplePendulumEnv(reward_manager=self.reward_manager, render_mode="human")
+        self.env = TriplePendulumEnv(reward_manager=self.reward_manager, render_mode="human", num_nodes=config['num_nodes'])  # Enable rendering from the start
         
         # Initialize models
         # Ajustement de la dimension d'état en fonction de l'environnement réel
         # Ici, la dimension est basée sur la taille de l'état retourné par reset()
-        initial_state = self.env.reset()
+        self.env.reset()
+        initial_state = self.env.get_state()
         state_dim = len(initial_state) * config['seq_length']
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim)
@@ -93,7 +93,7 @@ class TriplePendulumTrainer:
 
     def collect_trajectory(self, episode):
         state = self.env.reset()
-        state = self.env.get_state(state)
+        state = self.env.get_state()
         done = False
         trajectory = []
         episode_reward = 0
@@ -192,8 +192,6 @@ class TriplePendulumTrainer:
         
         # Reshape states to handle sequence properly
         batch_size = states.shape[0]
-        seq_length = self.config['seq_length']
-        state_dim = 34  # Dimension of a single state
         
         # Reshape states from [batch_size, seq_length, state_dim] to [batch_size, seq_length*state_dim]
         states_reshaped = torch.cat([states[i] for i in range(batch_size)], dim=0).view(batch_size, -1)

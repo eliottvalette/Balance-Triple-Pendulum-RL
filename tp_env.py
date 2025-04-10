@@ -55,6 +55,9 @@ class TriplePendulumEnv:
         self.PENDULUM_COLORS = [(220, 60, 60), (60, 180, 60), (60, 60, 220)]
         self.TEXT_COLOR = (60, 60, 70)
         self.GRID_COLOR = (210, 210, 215)
+    
+    def _render_init(self):
+        self._init_pygame()
 
     def _setup_symbolic_model(self):
         I = ReferenceFrame('I')
@@ -157,11 +160,32 @@ class TriplePendulumEnv:
     def get_state(self):
         """
         Renvoie l'état courant du système.
+        self.current_state: [x, 
+        x: position du chariot
+        q1, q2, q3: angles des pendules
+        u1, u2, u3: vitesses angulaires des pendules
+        f: force appliquée au chariot
         
         Returns:
-            np.array: L'état actuel du système
+            np.array: L'état actuel du système avec les positions x,y de chaque noeud
         """
-        return self.current_state
+        # Calculer les positions x et y de tous les noeuds
+        num_joints = len(self.q)
+        x_positions = np.hstack((self.current_state[0], np.zeros(num_joints - 1)))
+        y_positions = np.zeros(num_joints)
+        
+        for joint in range(1, num_joints):
+            x_positions[joint] = x_positions[joint - 1] + self.arm_length * np.cos(self.current_state[joint])
+            y_positions[joint] = y_positions[joint - 1] + self.arm_length * np.sin(self.current_state[joint])
+        
+        # Ajouter les positions x et y à l'état
+        state_with_positions = np.hstack((
+            self.current_state,
+            x_positions,
+            y_positions
+        ))
+        
+        return state_with_positions
 
     def step(self, action=0.0):
         """
@@ -316,7 +340,8 @@ class TriplePendulumEnv:
                     elif event.key == pygame.K_SPACE:
                         target_force = 0.0
                         self.reset()
-                    elif event.key == pygame.K_ESCAPE:
+                    elif event.key == pygame.K_s:
+                        print('state:')
                         print(self.get_state())
                 elif event.type == pygame.KEYUP:
                     if event.key in [pygame.K_LEFT, pygame.K_RIGHT]:

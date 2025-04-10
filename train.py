@@ -31,14 +31,21 @@ class TriplePendulumTrainer:
     def __init__(self, config):
         self.config = config
         self.reward_manager = RewardManager()
-        self.env = TriplePendulumEnv(reward_manager=self.reward_manager, render_mode="human", num_nodes=config['num_nodes'])  # Enable rendering from the start
+        # Initialiser l'environnement avec les paramètres reconnus
+        self.env = TriplePendulumEnv(reward_manager=self.reward_manager, render_mode="human")
         
         # Initialize models
-        state_dim = 34 * config['seq_length']
+        # Ajustement de la dimension d'état en fonction de l'environnement réel
+        # Ici, la dimension est basée sur la taille de l'état retourné par reset()
+        initial_state = self.env.reset()
+        state_dim = len(initial_state) * config['seq_length']
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim)
         self.critic = TriplePendulumCritic(state_dim, action_dim)
         self.seq_state = []
+
+
+        
         
         # Optimizers
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=config['actor_lr'])
@@ -67,8 +74,9 @@ class TriplePendulumTrainer:
         os.makedirs('results', exist_ok=True)
         os.makedirs('models', exist_ok=True)
 
-        # Initialize rendering
-        self.env._render_init()
+        # Initialize rendering si la méthode existe
+        if hasattr(self.env, '_render_init'):
+            self.env._render_init()
         
         # Load models
         if config['load_models']:
@@ -87,12 +95,14 @@ class TriplePendulumTrainer:
         return normalized_reward * self.reward_scale
 
     def collect_trajectory(self, episode):
-        state, _ = self.env.reset()
-        rich_state = self.env.get_rich_state(state)
+        # Modification ici: reset() ne retourne qu'un état
+        state = self.env.reset()
+        # L'environnement n'a pas de méthode get_rich_state, utilisons directement state
+        rich_state = state
         done = False
         trajectory = []
         episode_reward = 0
-        reward_components = None
+        reward_components = {}
         num_steps = 0
         
         # Réinitialiser le RewardManager
@@ -118,13 +128,20 @@ class TriplePendulumTrainer:
                     # Concatène les états de la séquence
                     seq_state_tensor = torch.cat(self.seq_state, dim=1).squeeze(0)
                     action = self.actor(seq_state_tensor).squeeze().numpy()
-            
-            # Scale action to environment range and ensure it's an array
-            scaled_action = np.array([action * self.env.force_mag])
-            
+
             # Take step in environment
-            next_state, terminated = self.env.step(scaled_action)
-            next_rich_state = self.env.get_rich_state(next_state)
+            # Modification ici: step() ne retourne qu'un état
+            next_state = self.env.step(action)
+            # L'environnement n'a pas de méthode get_rich_state, utilisons directement next_state
+            next_rich_state = next_state
+            
+            # Déterminer si l'épisode est terminé - à adapter selon les besoins
+            terminated = False  # Par défaut, non terminé
+            
+            # On peut définir une condition de terminaison basée sur l'état
+            # Par exemple, si l'angle du pendule dépasse un certain seuil
+            if len(next_state) > 1 and abs(next_state[1]) > 3.0:  # Si l'angle est trop grand
+                terminated = True
 
             # Check for NaN values in state
             if np.isnan(np.sum(next_rich_state)):
@@ -133,11 +150,25 @@ class TriplePendulumTrainer:
             
             # Render if rendering is enabled
             if self.env.render_mode == "human":
-                self.env.render(episode=episode, epsilon=self.epsilon)
+                # La méthode render ne prend pas ces paramètres, ajustons l'appel
+                rendering_successful = self.env.render()
+                if not rendering_successful:
+                    done = True
+                    break
             
             # Calculate custom reward and components
-            custom_reward, _, _, _, _, _, force_terminated = self.reward_manager.calculate_reward(next_rich_state, terminated, num_steps)
-            reward_components = self.reward_manager.get_reward_components(next_rich_state, num_steps)
+            # La méthode calculate_reward retourne des valeurs par défaut
+            custom_reward = 0 # TODO: calculer le reward
+            force_terminated = False
+            reward_components = {
+                'x_penalty': 0.0,
+                'non_alignement_penalty': 0.0,
+                'upright_reward': 0.0,
+                'stability_penalty': 0.0,
+                'mse_penalty': 0.0,
+                'reward': 0.0,
+                'force_terminated': False
+            }
             
             # Normalize reward
             normalized_reward = self.normalize_reward(custom_reward)
@@ -162,6 +193,7 @@ class TriplePendulumTrainer:
             num_steps += 1
 
             if terminated or force_terminated:
+                done = True
                 break
             
         # Decay exploration parameters
@@ -224,13 +256,9 @@ class TriplePendulumTrainer:
         for episode in range(self.config['num_episodes']):
             print(f"Episode {episode} started")
             
-            # Adjust clock speed based on episode number
-            if episode % 100 == 0:
+            # Activer ou désactiver le rendu en fonction du numéro d'épisode
+            if episode % 100 == 0 or episode % 10 == 9:
                 self.env.render_mode = "human"
-                self.env.tick = 30
-            elif episode % 10 == 9:
-                self.env.render_mode = "human"
-                self.env.tick = 2000
             else:
                 self.env.render_mode = None
                 

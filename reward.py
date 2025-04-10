@@ -59,48 +59,45 @@ class RewardManager:
         Calculate the reward based on the current state and termination status.
         
         Args:
-            state (tuple): A tuple containing:
-                - Cart state: x, x_dot, x_ddot (indices 0-2)
-                - Pendulum states: th1, th1_dot, th1_ddot, th2, th2_dot, th2_ddot, th3, th3_dot, th3_ddot (indices 3-11)
-                - Pendulum node positions: pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y (indices 12-19)
+            state: [x, q1, q2, q3, u1, u2, u3, f, x1, y1, x2, y2, x3, y3]
             terminated (bool): Whether the episode has terminated due to constraints violation
         
         Returns:
             float: The calculated reward value
         """
-        return 0, 0, 0, 0, 0, 0, False
-        '''
         # ----------------------- SET UPS -----------------------
-        x, x_dot, x_ddot = state[0:3]  # Cart state
-        th1, th1_dot, th1_ddot = state[3:6]  # First pendulum angles and derivatives
-        th2, th2_dot, th2_ddot = state[6:9]  # Second pendulum angles and derivatives
-        th3, th3_dot, th3_ddot = state[9:12] # Third pendulum angles and derivatives
-        pivot1_x, pivot1_y = state[12:14]    # First pivot position
-        end1_x, end1_y = state[14:16]        # First end position
-        end2_x, end2_y = state[16:18]        # Second end position
-        end3_x, end3_y = state[18:20]        # Third end position
+        x = state[0]
+        q1 = state[1]
+        q2 = state[2]
+        q3 = state[3]
+        u1 = state[4]
+        u2 = state[5]
+        u3 = state[6]
+        f = state[7]
+        x1 = state[8]
+        y1 = state[9]
+        x2 = state[10]
+        y2 = state[11]
+        x3 = state[12]
+        y3 = state[13]
 
-        if self.num_nodes == 2:
-            end3_x, end3_y = 0, 0
-            th3, th3_dot, th3_ddot = 0, 0, 0
-
-        end_node_y = state[13 + self.num_nodes * 2]
+        end_node_y = y3 if self.num_nodes == 3 else y2 if self.num_nodes == 2 else y1
 
         if self.old_points_positions is None:
-            self.old_points_positions = [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y]
+            self.old_points_positions = [x1, y1, x2, y2, x3, y3]
         
         # ----------------------- CART POSITION REWARD -----------------------
         x_penalty = self.cart_position_weight * (abs(x)) **2
 
         # ----------------------- ANGLES ALIGNEMENT REWARD -----------------------
-        non_alignement_penalty = self.alignement_weight * (((1 - np.cos(th1 - th2)) + (1 - np.cos(th2 - th3))) / 2)
+        non_alignement_penalty = self.alignement_weight * (((1 - np.cos(q1 - q2)) + (1 - np.cos(q2 - q3))) / 2)
 
         # ----------------------- UPRIGHTNESS REWARD -----------------------
         # Uprightness of each node - negate p*_y values because in the physics simulation,
         # negative y means upward (which is what we want to reward)
         # The physics uses a reference frame where positive y is downward
-        upright_reward_points = self.upright_weight * (1.25 - end1_y - end2_y - end3_y)
-        upright_reward_angles = self.upright_weight * (abs(th1) + abs(th2) + abs(th3)) * 0.2
+        upright_reward_points = self.upright_weight * (1.25 - y1 - y2 - y3)
+        upright_reward_angles = self.upright_weight * (abs(q1) + abs(q2) + abs(q3)) * 0.2
         upright_reward = upright_reward_points + upright_reward_angles - 2.5
 
         # Check if pendulum is upright
@@ -126,16 +123,16 @@ class RewardManager:
             upright_reward *= exponential_multiplier
 
         # ----------------------- STABILITY REWARD -----------------------
-        angular_velocity_penalty = (th1_dot**2 + th2_dot**2 + th3_dot**2) / 3.0
+        angular_velocity_penalty = (u1**2 + u2**2 + u3**2) / 3.0
 
         # ----------------------- POINTS VELOCITY -----------------------
-        points_velocity = ((abs(end3_x - self.old_points_positions[6]) + abs(end3_y - self.old_points_positions[7]))) ** 0.2
+        points_velocity = ((abs(x3 - self.old_points_positions[6]) + abs(y3 - self.old_points_positions[7]))) ** 0.2
         if points_velocity == 0:
             points_velocity = self.cached_velocity
         else:
             self.cached_velocity = points_velocity
 
-        self.old_points_positions = [pivot1_x, pivot1_y, end1_x, end1_y, end2_x, end2_y, end3_x, end3_y]
+        self.old_points_positions = [x1, y1, x2, y2, x3, y3]
 
         stability_penalty = self.stability_weight * (angular_velocity_penalty + points_velocity)
 
@@ -173,7 +170,6 @@ class RewardManager:
             self.force_terminated = True
                    
         return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated
-        '''
     
     def get_reward_components(self, state, current_step):
         reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, force_terminated = self.calculate_reward(state, False, current_step)

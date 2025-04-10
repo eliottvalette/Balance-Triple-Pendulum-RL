@@ -254,7 +254,7 @@ class TriplePendulumEnv:
         self.current_state = next_state
         self.current_time += self.dt
         
-        return self.current_state.copy()
+        return self.get_state()
         
     def render(self):
         """

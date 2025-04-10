@@ -1,7 +1,7 @@
 import pygame
 import sys
 import numpy as np
-from depricated.tp_env_v1 import TriplePendulumEnv
+from tp_env_v1 import TriplePendulumEnv
 from reward import RewardManager
 from config import config
 
@@ -15,7 +15,7 @@ obs = env.reset()
 # Track last direction for more responsive controls
 last_direction = 0
 # Force magnitude for manual control
-force_magnitude = 10.0
+force_magnitude = 0.1
 # Whether to apply stronger braking when direction changes
 strong_braking = True
 

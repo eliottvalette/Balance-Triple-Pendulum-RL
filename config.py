@@ -7,7 +7,7 @@ config = {
     'hidden_dim': 256,
     'buffer_capacity': 100000,
     'updates_per_episode': 10,
-    'load_models': True,
+    'load_models': False,
     'num_nodes': 3,
     'seq_length': 3
 }

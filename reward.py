@@ -68,6 +68,8 @@ class RewardManager:
         Returns:
             float: The calculated reward value
         """
+        return 0, 0, 0, 0, 0, 0, False
+        '''
         # ----------------------- SET UPS -----------------------
         x, x_dot, x_ddot = state[0:3]  # Cart state
         th1, th1_dot, th1_ddot = state[3:6]  # First pendulum angles and derivatives
@@ -171,6 +173,7 @@ class RewardManager:
             self.force_terminated = True
                    
         return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated
+        '''
     
     def get_reward_components(self, state, current_step):
         reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, force_terminated = self.calculate_reward(state, False, current_step)

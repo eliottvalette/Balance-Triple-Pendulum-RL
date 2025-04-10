@@ -139,6 +139,7 @@ class TriplePendulumEnv:
         self.current_state = state.copy()  # On stocke l'état courant
         self.current_time = 0.0            # Réinitialisation du temps courant
         self.dt = 0.01
+        self.num_steps = 0
         return state
 
     def _init_pygame(self):
@@ -160,32 +161,45 @@ class TriplePendulumEnv:
     def get_state(self):
         """
         Renvoie l'état courant du système.
-        self.current_state: [x, 
+        self.current_state: [x, q1, q2, q3, u1, u2, u3, f, x1, y1, x2, y2, x3, y3]
         x: position du chariot
         q1, q2, q3: angles des pendules
         u1, u2, u3: vitesses angulaires des pendules
         f: force appliquée au chariot
-        
+        x1, y1, x2, y2, x3, y3: positions des masses des pendules
         Returns:
             np.array: L'état actuel du système avec les positions x,y de chaque noeud
         """
-        # Calculer les positions x et y de tous les noeuds
-        num_joints = len(self.q)
-        x_positions = np.hstack((self.current_state[0], np.zeros(num_joints - 1)))
-        y_positions = np.zeros(num_joints)
+        if self.current_state is None:
+            return None
         
-        for joint in range(1, num_joints):
-            x_positions[joint] = x_positions[joint - 1] + self.arm_length * np.cos(self.current_state[joint])
-            y_positions[joint] = y_positions[joint - 1] + self.arm_length * np.sin(self.current_state[joint])
+        # Calculer les positions x et y de tous les noeuds
+        cart_x = self.current_state[0]
+        
+        # Point d'attache sur le chariot
+        attach_x = cart_x
+        attach_y = 0
+        
+        # Position de la première masse (après le premier bras)
+        x1 = attach_x + self.arm_length * np.cos(self.current_state[1])
+        y1 = attach_y + self.arm_length * np.sin(self.current_state[1])
+        
+        # Position de la deuxième masse (après le deuxième bras)
+        x2 = x1 + self.arm_length * np.cos(self.current_state[2])
+        y2 = y1 + self.arm_length * np.sin(self.current_state[2])
+        
+        # Position de la troisième masse (après le troisième bras)
+        x3 = x2 + self.arm_length * np.cos(self.current_state[3])
+        y3 = y2 + self.arm_length * np.sin(self.current_state[3])
         
         # Ajouter les positions x et y à l'état
         state_with_positions = np.hstack((
             self.current_state,
-            x_positions,
-            y_positions
+            x1, y1, x2, y2, x3, y3
         ))
         
         return state_with_positions
+
 
     def step(self, action=0.0):
         """
@@ -303,7 +317,7 @@ class TriplePendulumEnv:
         
         return True
 
-    def animate_pendulum_pygame(self, steps, states=None, length=None, title='Pendulum'):
+    def animate_pendulum_pygame(self, max_steps, states=None, length=None, title='Pendulum'):
         """
         Anime le pendule en utilisant les méthodes step et render.
         
@@ -324,10 +338,10 @@ class TriplePendulumEnv:
         force_smoothing = 0.1
         running = True
         
-        for _ in range(steps):
-            if not running:
-                break
-                
+        while running:
+            if self.num_steps >= max_steps:
+                self.reset()
+                self.num_steps = 0
             # Gestion des événements
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -341,8 +355,22 @@ class TriplePendulumEnv:
                         target_force = 0.0
                         self.reset()
                     elif event.key == pygame.K_s:
-                        print('state:')
-                        print(self.get_state())
+                        state = self.get_state()
+                        print(f'State: {state}')
+                        print('------- Details: -------')
+                        print(f'x: {state[0]}')
+                        print(f'q1: {state[1]}')
+                        print(f'q2: {state[2]}')
+                        print(f'q3: {state[3]}')
+                        print(f'u1: {state[4]}')
+                        print(f'u2: {state[5]}')
+                        print(f'u3: {state[6]}')
+                        print(f'f: {state[7]}')
+                        print(f'[x1, y1]: [{state[8]:.2f}, {state[9]:.2f}]')
+                        print(f'[x2, y2]: [{state[10]:.2f}, {state[11]:.2f}]')
+                        print(f'[x3, y3]: [{state[12]:.2f}, {state[13]:.2f}]')
+                        print('------- Fin des details -------')
+                        
                 elif event.type == pygame.KEYUP:
                     if event.key in [pygame.K_LEFT, pygame.K_RIGHT]:
                         target_force = 0.0
@@ -354,6 +382,8 @@ class TriplePendulumEnv:
             # Rendu
             if not self.render():
                 break
+
+            self.num_steps += 1
         
         if self.pygame_initialized:
             pygame.quit()
@@ -365,4 +395,4 @@ if __name__ == "__main__":
     
     # Utilisation avec les nouvelles méthodes
     env.reset()
-    env.animate_pendulum_pygame(steps=500, title='Simulation Triple Pendule')
+    env.animate_pendulum_pygame(max_steps=10_000, title='Simulation Triple Pendule')

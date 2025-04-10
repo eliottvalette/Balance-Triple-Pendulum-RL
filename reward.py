@@ -14,7 +14,7 @@ class RewardManager:
         # Reward weights
         # -----------------------
         self.cart_position_weight = 0.30
-        self.termination_penalty = 10_000
+        self.termination_penalty = 10
         self.alignement_weight = 2.0
         self.upright_weight = 1.5
         self.stability_weight = 0.02  # Weight for the stability reward
@@ -83,11 +83,12 @@ class RewardManager:
 
         end_node_y = y3 if self.num_nodes == 3 else y2 if self.num_nodes == 2 else y1
 
+        # ----------------------- REWARD COMPONENTS -----------------------
         if self.old_points_positions is None:
             self.old_points_positions = [x1, y1, x2, y2, x3, y3]
         
         # ----------------------- CART POSITION REWARD -----------------------
-        x_penalty = self.cart_position_weight * (abs(x)) **2 + (100 * (abs(x) > 1.6))
+        x_penalty = self.cart_position_weight * (abs(x)) **2
 
         # ----------------------- ANGLES ALIGNEMENT REWARD -----------------------
         non_alignement_penalty = self.alignement_weight * (((1 - np.cos(q1 - q2)) + (1 - np.cos(q2 - q3))) / 2)
@@ -151,7 +152,6 @@ class RewardManager:
         reward = upright_reward - x_penalty - non_alignement_penalty - stability_penalty - mse_penalty
 
         
-        '''
         if not self.have_been_upright_once and end_node_y > self.upright_threshold:
             self.have_been_upright_once = True
 
@@ -162,17 +162,16 @@ class RewardManager:
             reward = -10
             self.steps_double_down += 1
         
-        '''
 
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
-
-        self.force_terminated = False
-        if self.steps_double_down > 150:
-            self.force_terminated = True
+        
+        # ----------------------- REAL REWARD -----------------------
+        aim_y = 0.33 * self.num_nodes
+        real_reward = 2 - ((abs(aim_y - end_node_y) / aim_y) +(abs(x) / 1.6))
                    
-        return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated
+        return real_reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated
     
     def get_reward_components(self, state, current_step):
         reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, force_terminated = self.calculate_reward(state, False, current_step)

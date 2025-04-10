@@ -74,18 +74,6 @@ class TriplePendulumTrainer:
         if config['load_models']:
             self.load_models()
     
-    def normalize_reward(self, reward):
-        # Update running statistics
-        self.reward_running_mean = (1 - self.reward_alpha) * self.reward_running_mean + self.reward_alpha * reward
-        self.reward_running_std = (1 - self.reward_alpha) * self.reward_running_std + self.reward_alpha * abs(reward - self.reward_running_mean)
-        
-        # Avoid division by zero
-        std = max(self.reward_running_std, 1e-6)
-        
-        # Normalize and scale
-        normalized_reward = (reward - self.reward_running_mean) / std
-        return normalized_reward * self.reward_scale
-
     def collect_trajectory(self, episode):
         state, _ = self.env.reset()
         rich_state = self.env.get_rich_state(state)
@@ -138,10 +126,7 @@ class TriplePendulumTrainer:
             # Calculate custom reward and components
             custom_reward, _, _, _, _, _, force_terminated = self.reward_manager.calculate_reward(next_rich_state, terminated, num_steps)
             reward_components = self.reward_manager.get_reward_components(next_rich_state, num_steps)
-            
-            # Normalize reward
-            normalized_reward = self.normalize_reward(custom_reward)
-            
+                        
             # Store transition in replay buffer with normalized reward
             next_rich_state_tensor = torch.FloatTensor(next_rich_state).unsqueeze(0)  # Convert to tensor
             
@@ -153,7 +138,7 @@ class TriplePendulumTrainer:
             current_seq_state = torch.cat(self.seq_state, dim=1).squeeze(0)
             
             # Stocker dans le buffer de replay
-            self.memory.push(current_seq_state, action, normalized_reward, next_seq_state, terminated)
+            self.memory.push(current_seq_state, action, custom_reward, next_seq_state, terminated)
             
             trajectory.append((next_seq_state, action, custom_reward, next_seq_state, terminated))
             episode_reward += custom_reward
@@ -185,8 +170,6 @@ class TriplePendulumTrainer:
         
         # Reshape states to handle sequence properly
         batch_size = states.shape[0]
-        seq_length = self.config['seq_length']
-        state_dim = 34  # Dimension of a single state
         
         # Reshape states from [batch_size, seq_length, state_dim] to [batch_size, seq_length*state_dim]
         states_reshaped = torch.cat([states[i] for i in range(batch_size)], dim=0).view(batch_size, -1)

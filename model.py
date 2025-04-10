@@ -29,19 +29,19 @@ class TriplePendulumActor(nn.Module):
         self.norm3 = nn.LayerNorm(hidden_dim)
         
         # Fourth layer
-        self.fc4 = nn.Linear(hidden_dim, hidden_dim // 2)
+        self.fc4 = nn.Linear(hidden_dim, hidden_dim)
         nn.init.orthogonal_(self.fc4.weight, gain=1.414)
         nn.init.constant_(self.fc4.bias, 0)
-        self.norm4 = nn.LayerNorm(hidden_dim // 2)
+        self.norm4 = nn.LayerNorm(hidden_dim)
         
         # Fifth layer
-        self.fc5 = nn.Linear(hidden_dim // 2, hidden_dim // 4)
+        self.fc5 = nn.Linear(hidden_dim, hidden_dim)
         nn.init.orthogonal_(self.fc5.weight, gain=1.414)
         nn.init.constant_(self.fc5.bias, 0)
-        self.norm5 = nn.LayerNorm(hidden_dim // 4)
+        self.norm5 = nn.LayerNorm(hidden_dim)
         
         # Output layer
-        self.fc_out = nn.Linear(hidden_dim // 4, action_dim)
+        self.fc_out = nn.Linear(hidden_dim, action_dim)
         nn.init.orthogonal_(self.fc_out.weight, gain=0.01)
         nn.init.constant_(self.fc_out.bias, 0)
         
@@ -64,6 +64,7 @@ class TriplePendulumActor(nn.Module):
         x = F.relu(x)
         x = self.dropout(x)
         
+        """
         # Third layer
         x = self.fc3(x)
         x = self.norm3(x)
@@ -80,6 +81,7 @@ class TriplePendulumActor(nn.Module):
         x = self.fc5(x)
         x = self.norm5(x)
         x = F.relu(x)
+        """
         
         # Output layer
         x = self.fc_out(x)
@@ -111,19 +113,19 @@ class TriplePendulumCritic(nn.Module):
         self.norm3 = nn.LayerNorm(hidden_dim)
         
         # Fourth layer
-        self.fc4 = nn.Linear(hidden_dim, hidden_dim // 2)
+        self.fc4 = nn.Linear(hidden_dim, hidden_dim)
         nn.init.orthogonal_(self.fc4.weight, gain=1.414)
         nn.init.constant_(self.fc4.bias, 0)
-        self.norm4 = nn.LayerNorm(hidden_dim // 2)
+        self.norm4 = nn.LayerNorm(hidden_dim)
         
         # Fifth layer
-        self.fc5 = nn.Linear(hidden_dim // 2, hidden_dim // 4)
+        self.fc5 = nn.Linear(hidden_dim, hidden_dim)
         nn.init.orthogonal_(self.fc5.weight, gain=1.414)
         nn.init.constant_(self.fc5.bias, 0)
-        self.norm5 = nn.LayerNorm(hidden_dim // 4)
+        self.norm5 = nn.LayerNorm(hidden_dim)
         
         # Output layer
-        self.fc_out = nn.Linear(hidden_dim // 4, 1)
+        self.fc_out = nn.Linear(hidden_dim, 1)
         nn.init.orthogonal_(self.fc_out.weight, gain=1)
         nn.init.constant_(self.fc_out.bias, 0)
         
@@ -148,6 +150,7 @@ class TriplePendulumCritic(nn.Module):
         x = F.relu(x)
         x = self.dropout(x)
         
+        """
         # Third layer
         x = self.fc3(x)
         x = self.norm3(x)
@@ -164,6 +167,7 @@ class TriplePendulumCritic(nn.Module):
         x = self.fc5(x)
         x = self.norm5(x)
         x = F.relu(x)
+        """
         
         # Output layer
         x = self.fc_out(x)

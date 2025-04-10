@@ -40,8 +40,8 @@ class TriplePendulumTrainer:
         initial_state = self.env.get_state()
         state_dim = len(initial_state) * config['seq_length']
         action_dim = 1
-        self.actor = TriplePendulumActor(state_dim, action_dim)
-        self.critic = TriplePendulumCritic(state_dim, action_dim)
+        self.actor = TriplePendulumActor(state_dim, action_dim, config['hidden_dim'])
+        self.critic = TriplePendulumCritic(state_dim, action_dim, config['hidden_dim'])
         self.seq_state = []
 
         # Optimizers
@@ -143,9 +143,6 @@ class TriplePendulumTrainer:
             custom_reward, _, _, _, _, _, force_terminated = self.reward_manager.calculate_reward(next_state, terminated, num_steps)
             reward_components = self.reward_manager.get_reward_components(next_state, num_steps)
             
-            # Normalize reward
-            normalized_reward = self.normalize_reward(custom_reward)
-            
             # Store transition in replay buffer with normalized reward
             next_state_tensor = torch.FloatTensor(next_state).unsqueeze(0)  # Convert to tensor
             
@@ -157,7 +154,7 @@ class TriplePendulumTrainer:
             current_seq_state = torch.cat(self.seq_state, dim=1).squeeze(0)
             
             # Stocker dans le buffer de replay
-            self.memory.push(current_seq_state, action, normalized_reward, next_seq_state, terminated)
+            self.memory.push(current_seq_state, action, custom_reward, next_seq_state, terminated)
             
             trajectory.append((next_seq_state, action, custom_reward, next_seq_state, terminated))
             episode_reward += custom_reward
@@ -170,7 +167,8 @@ class TriplePendulumTrainer:
             
         # Decay exploration parameters
         self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
-            
+        print(f"Episode {episode} ended with {num_steps} steps")
+
         return trajectory, episode_reward, reward_components
     
     def update_networks(self):

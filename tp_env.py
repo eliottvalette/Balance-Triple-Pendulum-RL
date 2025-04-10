@@ -1,17 +1,13 @@
-# tp_env.py
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
-from matplotlib import animation
-from numpy.linalg import solve, matrix_rank
-from numpy import pi, cos, sin, hstack, zeros, linspace, ones, array, matrix, around, dot
+import pygame
+from numpy.linalg import solve
+from numpy import pi, cos, sin, hstack, zeros, ones
 from sympy import symbols, Dummy, lambdify
 from sympy.physics.mechanics import ReferenceFrame, Point, Particle, KanesMethod, dynamicsymbols
-import control
-from reward import RewardManager
+import sys
 
 class TriplePendulumEnv:
-    def __init__(self, reward_manager: RewardManager = None, render_mode=None, num_nodes=5, arm_length=1./3, bob_mass=0.01/3, friction_coefficient=0.1):
+    def __init__(self, reward_manager=None, render_mode=None, num_nodes=3, arm_length=1./3, bob_mass=0.01/3, friction_coefficient=0.1):
         self.reward_manager = reward_manager
         self.render_mode = render_mode
         self.n = num_nodes
@@ -23,6 +19,7 @@ class TriplePendulumEnv:
         self.dt = 0.01  # Durée d'un pas de simulation
         self.current_state = None
         self.current_time = 0.0
+        self.applied_force = 0.0
 
         # -----------------------------
         # Modèle symbolique
@@ -37,6 +34,27 @@ class TriplePendulumEnv:
 
         self._setup_symbolic_model()
         self._setup_numeric_evaluation()
+        
+        # Pygame initialization
+        self.pygame_initialized = False
+        self.screen = None
+        self.clock = None
+        self.scale = 200  # Pixels par unité de longueur
+        
+        # Limites pour le chariot
+        self.window_width = 4.0
+        self.xmin, self.xmax = -self.window_width / 2, self.window_width / 2
+        
+        # Dimensions du chariot
+        self.cart_width, self.cart_height = 0.4 * self.scale, 0.2 * self.scale
+        
+        # Couleurs
+        self.BACKGROUND_COLOR = (240, 240, 245)
+        self.CART_COLOR = (50, 50, 60)
+        self.TRACK_COLOR = (180, 180, 190)
+        self.PENDULUM_COLORS = [(220, 60, 60), (60, 180, 60), (60, 60, 220)]
+        self.TEXT_COLOR = (60, 60, 70)
+        self.GRID_COLOR = (210, 210, 215)
 
     def _setup_symbolic_model(self):
         I = ReferenceFrame('I')
@@ -120,162 +138,206 @@ class TriplePendulumEnv:
         self.dt = 0.01
         return state
 
-    def animate_pendulum(self, steps, states, length, title='Pendulum'):
-        num_joints = states.shape[1] // 2
-        fig = plt.figure(facecolor='#F0F0F5')
-        cart_width, cart_height = 0.4, 0.2
+    def _init_pygame(self):
+        if not self.pygame_initialized:
+            pygame.init()
+            self.width, self.height = 800, 600
+            self.screen = pygame.display.set_mode((self.width, self.height))
+            pygame.display.set_caption("Triple Pendule Simulation")
+            self.clock = pygame.time.Clock()
+            self.font = pygame.font.SysFont('Arial', 16)
+            self.pygame_initialized = True
 
-        window_width = 4.0
-        xmin = -window_width / 2
-        xmax = window_width / 2
+    def _convert_to_screen_coords(self, x, y):
+        # Convertit les coordonnées physiques en coordonnées d'écran
+        screen_x = self.width // 2 + int(x * self.scale)
+        screen_y = self.height // 2 - int(y * self.scale)  # Y inversé dans pygame
+        return screen_x, screen_y
+    
+    def get_state(self):
+        """
+        Renvoie l'état courant du système.
+        
+        Returns:
+            np.array: L'état actuel du système
+        """
+        return self.current_state
 
-        ax = plt.axes(xlim=(xmin, xmax), ylim=(-1.1, 1.1), aspect='equal')
-        ax.set_title(title, color='#3C3C46', fontsize=12, pad=20)
-
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['bottom'].set_visible(False)
-        ax.spines['left'].set_visible(False)
-        ax.set_xticks([])
-        ax.set_yticks([])
-
-        BACKGROUND_COLOR = '#F0F0F5'
-        CART_COLOR = '#32323C'
-        TRACK_COLOR = '#B4B4BE'
-        PENDULUM_COLORS = ['#DC3C3C', '#3CB43C', '#3C3CDC']
-
-        fig.patch.set_facecolor(BACKGROUND_COLOR)
-        ax.set_facecolor(BACKGROUND_COLOR)
-
-        for x_val in np.arange(xmin, xmax + 0.5, 0.5):
-            ax.axvline(x=x_val, color='#D2D2D7', linestyle='-', alpha=0.3)
+    def step(self, action=0.0):
+        """
+        Effectue un pas de simulation avec l'action donnée (force appliquée).
+        
+        Args:
+            action (float): Force appliquée au chariot
+            
+        Returns:
+            np.array: Le nouvel état après le pas de simulation
+        """
+        if self.current_state is None:
+            self.reset()
+            
+        self.applied_force = action
+        
+        # Calcul du nouvel état
+        dx = self.rhs(self.current_state, self.current_time, self.parameter_vals, lambda x: self.applied_force)
+        next_state = self.current_state + dx * self.dt
+        
+        # Vérifier les limites du chariot
+        num_joints = len(self.q)
+        cart_position = next_state[0]
+        if cart_position - self.cart_width/(2*self.scale) < self.xmin:
+            next_state[0] = self.xmin + self.cart_width/(2*self.scale)
+            next_state[num_joints] = 0  # Vitesse du chariot à zéro
+        elif cart_position + self.cart_width/(2*self.scale) > self.xmax:
+            next_state[0] = self.xmax - self.cart_width/(2*self.scale)
+            next_state[num_joints] = 0  # Vitesse du chariot à zéro
+        
+        # Mise à jour de l'état et du temps
+        self.current_state = next_state
+        self.current_time += self.dt
+        
+        return self.current_state.copy()
+        
+    def render(self):
+        """
+        Affiche l'état actuel du pendule.
+        """
+        self._init_pygame()
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                if self.pygame_initialized:
+                    pygame.quit()
+                    self.pygame_initialized = False
+                return False
+        
+        # Dessiner le fond
+        self.screen.fill(self.BACKGROUND_COLOR)
+        
+        # Dessiner la grille
+        for x_val in np.arange(self.xmin, self.xmax + 0.5, 0.5):
+            x_screen = self._convert_to_screen_coords(x_val, 0)[0]
+            pygame.draw.line(self.screen, self.GRID_COLOR, (x_screen, 0), (x_screen, self.height), 1)
+        
         for y_val in np.arange(-1, 1.1, 0.5):
-            ax.axhline(y=y_val, color='#D2D2D7', linestyle='-', alpha=0.3)
+            y_screen = self._convert_to_screen_coords(0, y_val)[1]
+            pygame.draw.line(self.screen, self.GRID_COLOR, (0, y_screen), (self.width, y_screen), 1)
+        
+        # Dessiner la piste
+        track_x, track_y = self._convert_to_screen_coords(self.xmin, self.cart_height/(2*self.scale) - 0.05)
+        track_width = int((self.xmax - self.xmin) * self.scale)
+        track_height = int(0.05 * self.scale)
+        pygame.draw.rect(self.screen, self.TRACK_COLOR, (track_x, track_y, track_width, track_height))
+        
+        # Dessiner le repère central
+        center_x = self._convert_to_screen_coords(0, self.cart_height/(2*self.scale) - 0.025)[0]
+        center_y = self._convert_to_screen_coords(0, self.cart_height/(2*self.scale) - 0.025)[1]
+        pygame.draw.line(self.screen, (100, 100, 110), (center_x, center_y - 10), (center_x, center_y + 10), 2)
+        
+        # Dessiner le chariot
+        cart_x = self.current_state[0]
+        cart_screen_x, cart_screen_y = self._convert_to_screen_coords(cart_x - self.cart_width/(2*self.scale), self.cart_height/(2*self.scale))
+        pygame.draw.rect(self.screen, self.CART_COLOR, (cart_screen_x, cart_screen_y, self.cart_width, self.cart_height))
+        
+        # Dessiner le surlignage du chariot
+        highlight_x = cart_screen_x + 4
+        highlight_y = cart_screen_y + 4
+        highlight_width = self.cart_width - 8
+        highlight_height = self.cart_height // 3
+        pygame.draw.rect(self.screen, (80, 80, 90), (highlight_x, highlight_y, highlight_width, highlight_height))
+        
+        # Dessiner le pendule
+        num_joints = len(self.q)
+        x_positions = hstack((self.current_state[0], zeros(num_joints - 1)))
+        y_positions = zeros(num_joints)
+        
+        for joint in range(1, num_joints):
+            x_positions[joint] = x_positions[joint - 1] + self.arm_length * cos(self.current_state[joint])
+            y_positions[joint] = y_positions[joint - 1] + self.arm_length * sin(self.current_state[joint])
+        
+        current_angle = self.current_state[1]
+        color_index = min(2, int(abs(current_angle) / (pi/2)))
+        
+        for i in range(num_joints - 1):
+            start_x, start_y = self._convert_to_screen_coords(x_positions[i], y_positions[i])
+            end_x, end_y = self._convert_to_screen_coords(x_positions[i+1], y_positions[i+1])
+            pygame.draw.line(self.screen, self.PENDULUM_COLORS[color_index], (start_x, start_y), (end_x, end_y), 4)
+            pygame.draw.circle(self.screen, (90, 90, 100), (end_x, end_y), 8)
+            pygame.draw.circle(self.screen, (30, 30, 40), (end_x, end_y), 8, 1)
+        
+        # Afficher les infos
+        time_text = self.font.render(f'time = {self.current_time:.2f}', True, self.TEXT_COLOR)
+        force_text = self.font.render(f'force = {self.applied_force:.2f}', True, self.TEXT_COLOR)
+        info_text = self.font.render('Utilisez les flèches gauche/droite pour appliquer une force', True, self.TEXT_COLOR)
+        
+        self.screen.blit(time_text, (20, 20))
+        self.screen.blit(force_text, (20, 45))
+        self.screen.blit(info_text, (20, self.height - 30))
+        
+        pygame.display.flip()
+        self.clock.tick(60)
+        
+        return True
 
-        track = Rectangle([xmin, -cart_height / 2 - 0.05],
-                          window_width, 0.05,
-                          facecolor=TRACK_COLOR, edgecolor='none')
-        ax.add_patch(track)
-
-        ax.plot([0], [-cart_height / 2 - 0.025], '|',
-                color='#64646E', markersize=10, markeredgewidth=2)
-
-        time_display = ax.text(0.04, 0.9, '', transform=ax.transAxes,
-                               color='#3C3C46', fontsize=10)
-
-        cart = Rectangle([states[0, 0] - cart_width/2, -cart_height/2],
-                         cart_width, cart_height,
-                         facecolor=CART_COLOR, edgecolor='none')
-        ax.add_patch(cart)
-
-        highlight = Rectangle([states[0, 0] - cart_width/2 + 0.02, -cart_height/2 + 0.02],
-                              cart_width - 0.04, cart_height / 3,
-                              facecolor='#50505A', edgecolor='none')
-        ax.add_patch(highlight)
-
-        pendulum_line, = ax.plot([], [],
-                                 color=PENDULUM_COLORS[0],
-                                 linewidth=4,
-                                 marker='o',
-                                 markersize=8,
-                                 markeredgecolor='#1E1E28',
-                                 markerfacecolor='#5A5A64')
-
-        applied_force = 0.0
+    def animate_pendulum_pygame(self, steps, states=None, length=None, title='Pendulum'):
+        """
+        Anime le pendule en utilisant les méthodes step et render.
+        
+        Args:
+            steps (int): Nombre de pas de simulation
+            states (np.array, optional): États préalablement calculés. Si None, ils seront générés.
+            length (float, optional): Longueur des bras du pendule. Si None, utilise self.arm_length.
+            title (str, optional): Titre de la fenêtre.
+        """
+        self._init_pygame()
+        pygame.display.set_caption(title)
+        
+        if self.current_state is None:
+            self.reset()
+        
         force_increment = 0.3
         target_force = 0.0
         force_smoothing = 0.1
-        current_frame = 0
+        running = True
+        
+        for _ in range(steps):
+            if not running:
+                break
+                
+            # Gestion des événements
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_LEFT:
+                        target_force = -force_increment
+                    elif event.key == pygame.K_RIGHT:
+                        target_force = force_increment
+                    elif event.key == pygame.K_SPACE:
+                        target_force = 0.0
+                        self.reset()
+                    elif event.key == pygame.K_ESCAPE:
+                        print(self.get_state())
+                elif event.type == pygame.KEYUP:
+                    if event.key in [pygame.K_LEFT, pygame.K_RIGHT]:
+                        target_force = 0.0
+            
+            # Mise à jour de la force et de l'état
+            self.applied_force += force_smoothing * (target_force - self.applied_force)
+            self.step(self.applied_force)
+            
+            # Rendu
+            if not self.render():
+                break
+        
+        if self.pygame_initialized:
+            pygame.quit()
+            self.pygame_initialized = False
 
-        def handle_key_press(event):
-            nonlocal target_force, states, current_frame
-            if event.key == 'left':
-                target_force = -force_increment
-            elif event.key == 'right':
-                target_force = force_increment
-            elif event.key == ' ':
-                target_force = 0.0
-                states[current_frame] = self.reset()
-                for i in range(current_frame + 1, len(states)):
-                    states[i] = states[current_frame]
-
-        def handle_key_release(event):
-            nonlocal target_force
-            if event.key in ['left', 'right']:
-                target_force = 0.0
-
-        fig.canvas.mpl_connect('key_press_event', handle_key_press)
-        fig.canvas.mpl_connect('key_release_event', handle_key_release)
-
-        def initialize_animation():
-            time_display.set_text('')
-            cart.set_xy((0.0, -cart_height/2))
-            highlight.set_xy((0.0 - cart_width/2 + 0.02, -cart_height/2 + 0.02))
-            pendulum_line.set_data([], [])
-            return time_display, cart, highlight, pendulum_line
-
-        def update_animation(frame):
-            nonlocal states, applied_force, current_frame
-            current_frame = frame
-            if frame < steps - 1:
-                applied_force += force_smoothing * (target_force - applied_force)
-                current_state = states[frame]
-                time_step = self.dt
-                next_state = current_state + self.rhs(current_state, frame*self.dt, self.parameter_vals, lambda x: applied_force) * time_step
-                cart_position = next_state[0]
-                if cart_position - cart_width/2 < xmin:
-                    next_state[0] = xmin + cart_width/2
-                    next_state[num_joints] = 0
-                elif cart_position + cart_width/2 > xmax:
-                    next_state[0] = xmax - cart_width/2
-                    next_state[num_joints] = 0
-                states[frame+1] = next_state
-
-            time_display.set_text(f'time = {frame*self.dt:.2f}\nforce = {applied_force:.2f}')
-            cart.set_xy((states[frame, 0] - cart_width/2, -cart_height/2))
-            highlight.set_xy((states[frame, 0] - cart_width/2 + 0.02, -cart_height/2 + 0.02))
-
-            x_positions = hstack((states[frame, 0], zeros(num_joints - 1)))
-            y_positions = zeros(num_joints)
-            for joint in range(1, num_joints):
-                x_positions[joint] = x_positions[joint - 1] + length * cos(states[frame, joint])
-                y_positions[joint] = y_positions[joint - 1] + length * sin(states[frame, joint])
-            current_angle = states[frame, 1]
-            color_index = min(2, int(abs(current_angle) / (pi/2)))
-            pendulum_line.set_color(PENDULUM_COLORS[color_index])
-            pendulum_line.set_data(x_positions, y_positions)
-            return time_display, cart, highlight, pendulum_line
-
-        anim = animation.FuncAnimation(fig, update_animation, frames=steps,
-                                       init_func=initialize_animation, interval=20, blit=True)
-        plt.show()
-
-    def get_state(self):
-        # Renvoie l'état numérique courant
-        if self.current_state is not None:
-            return self.current_state
-        else:
-            return self.reset()
-
-    def _render_init(self):
-        # Méthode optionnelle pour initialiser le rendu si besoin
-        pass
-
-# Exemple d'utilisation en mode step-by-step et avec contrôle LQR
+# Exemple d'utilisation
 if __name__ == "__main__":
     env = TriplePendulumEnv()
     
-    # --- INITIALISATION ---
-    state = env.reset()
-    states = [state]
-    max_steps = 500
-    for _ in range(max_steps):
-        action = 0.0
-        dx = env.rhs(state, env.current_time, env.parameter_vals, lambda x: action)
-        env.current_time += env.dt
-        states.append(state)
-    # --- FIN INITIALISATION ---
-
-    states = np.vstack(states)
-    env.animate_pendulum(steps = max_steps, states = states, length = env.arm_length, title='Simulation step-by-step')
-
+    # Utilisation avec les nouvelles méthodes
+    env.reset()
+    env.animate_pendulum_pygame(steps=500, title='Simulation Triple Pendule')

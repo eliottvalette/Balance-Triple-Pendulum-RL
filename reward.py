@@ -23,7 +23,7 @@ class RewardManager:
         # -----------------------
         # Upright tracking parameters
         # -----------------------
-        self.upright_threshold = 0.20  # Threshold for considering pendulum upright
+        self.upright_threshold = 0.10  # Threshold for considering pendulum upright
         self.consecutive_upright_steps = 0  # Track consecutive steps with pendulum upright
         self.exponential_base = 1.15  # Base for exponential reward
         self.max_exponential = 3.0  # Maximum exponential multiplier
@@ -87,7 +87,7 @@ class RewardManager:
             self.old_points_positions = [x1, y1, x2, y2, x3, y3]
         
         # ----------------------- CART POSITION REWARD -----------------------
-        x_penalty = self.cart_position_weight * (abs(x)) **2
+        x_penalty = self.cart_position_weight * (abs(x)) **2 + (100 * (abs(x) > 1.6))
 
         # ----------------------- ANGLES ALIGNEMENT REWARD -----------------------
         non_alignement_penalty = self.alignement_weight * (((1 - np.cos(q1 - q2)) + (1 - np.cos(q2 - q3))) / 2)
@@ -149,17 +149,20 @@ class RewardManager:
 
         # ----------------------- REWARD -----------------------
         reward = upright_reward - x_penalty - non_alignement_penalty - stability_penalty - mse_penalty
-        # reward = upright_reward - (x_penalty + non_alignement_penalty + stability_penalty + mse_penalty) * 0.01
 
+        
+        '''
         if not self.have_been_upright_once and end_node_y > self.upright_threshold:
             self.have_been_upright_once = True
 
-        if self.have_been_upright_once and end_node_y < self.upright_threshold:
+        if self.have_been_upright_once and end_node_y < self.upright_threshold - 0.10:
             self.came_back_down = True
         
         if self.have_been_upright_once and self.came_back_down:
             reward = -10
             self.steps_double_down += 1
+        
+        '''
 
         # Apply termination penalty
         if terminated:
@@ -180,7 +183,11 @@ class RewardManager:
             'stability_penalty': stability_penalty,
             'mse_penalty': mse_penalty,
             'reward': reward,
-            'force_terminated': force_terminated
+            'force_terminated': force_terminated,
+            'consecutive_upright_steps': self.consecutive_upright_steps,
+            'have_been_upright_once': self.have_been_upright_once,
+            'came_back_down': self.came_back_down,
+            'steps_double_down': self.steps_double_down
         }
 
     def reset(self):

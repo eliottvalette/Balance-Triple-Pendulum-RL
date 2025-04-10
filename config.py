@@ -10,5 +10,5 @@ config = {
     'load_models': False,
     'num_nodes': 1,
     'seq_length': 3,
-    'gravity': 0.81
+    'gravity': 2.0
 }

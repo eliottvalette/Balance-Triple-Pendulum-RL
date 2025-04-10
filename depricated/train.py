@@ -112,7 +112,7 @@ class TriplePendulumTrainer:
             
             # Epsilon-greedy exploration
             if np.random.random() < self.epsilon:
-                action = np.random.uniform(-1, 1)  # Random action
+                action = np.random.uniform(-0.5, 0.5)  # Random action
             else:
                 with torch.no_grad():
                     # Concatène les états de la séquence

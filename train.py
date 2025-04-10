@@ -125,10 +125,7 @@ class TriplePendulumTrainer:
                     action = self.actor(seq_state_tensor).squeeze().numpy()
 
             # Take step in environment
-            next_state = self.env.step(action)
-            
-            # Déterminer si l'épisode est terminé - à adapter selon les besoins
-            terminated = False  # Par défaut, non terminé
+            next_state, terminated = self.env.step(action)
 
             # Check for NaN values in state
             if np.isnan(np.sum(next_state)):
@@ -137,7 +134,7 @@ class TriplePendulumTrainer:
             
             # Render if rendering is enabled
             if self.env.render_mode == "human":
-                rendering_successful = self.env.render()
+                rendering_successful = self.env.render(episode, self.epsilon)
                 if not rendering_successful:
                     done = True
                     raise ValueError("Warning: Rendering failed")

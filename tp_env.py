@@ -143,6 +143,8 @@ class TriplePendulumEnv:
         self.current_time = 0.0            # Réinitialisation du temps courant
         self.dt = 0.01
         self.num_steps = 0
+        if self.reward_manager is not None:
+            self.reward_manager.reset()
         return state
 
     def _init_pygame(self):
@@ -161,17 +163,10 @@ class TriplePendulumEnv:
         screen_y = self.height // 2 - int(y * self.scale)  # Y inversé dans pygame
         return screen_x, screen_y
     
-    def get_state(self):
+    def _calculate_base_state(self):
         """
-        Renvoie l'état courant du système.
-        self.current_state: [x, q1, ..., qi, u1, u2, ..., ui, f] avec self.n = i
-        x: position du chariot
-        q1, q2, q3: angles des pendules
-        u1, u2, u3: vitesses angulaires des pendules
-        f: force appliquée au chariot    
-            adapted_state: [x, q1, q2, q3, u1, u2, u3, f, x1, y1, x2, y2, x3, y3]
-            x1, y1, x2, y2, x3, y3: positions des masses des pendules
-            np.array: L'état actuel du système avec les positions x,y de chaque noeud
+        Méthode interne pour calculer l'état de base sans risque de récursion infinie.
+        Calcule juste les positions des pendules sans les composants de récompense.
         """
         if self.current_state is None:
             return None
@@ -204,14 +199,58 @@ class TriplePendulumEnv:
         position_x3 = position_x2 + self.arm_length * np.cos(adapted_state[3])
         position_y3 = position_y2 + self.arm_length * np.sin(adapted_state[3])
         
-        # Ajouter les positions x et y à l'état
-        state_with_positions = np.hstack((
+        # Retourne un état de base avec uniquement les positions
+        return adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3
+    
+    def get_state(self):
+        """
+        Renvoie l'état courant du système avec tous les composants, y compris les récompenses.
+        Utilise _calculate_base_state pour éviter la récursion infinie.
+        """
+        if self.current_state is None:
+            return None
+        
+        # Obtenir l'état de base (positions sans récompenses)
+        base_result = self._calculate_base_state()
+        if base_result is None:
+            return None
+            
+        adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3 = base_result
+        
+        # Création d'un état temporaire avec les positions calculées pour le reward manager
+        temp_state = np.hstack((
             adapted_state,
             position_x1, position_y1, position_x2, position_y2, position_x3, position_y3
         ))
         
-        return state_with_positions
+        # Utilisation de l'état temporaire pour calculer les récompenses
+        reward_components = self.reward_manager.get_reward_components(temp_state, 0)
+        x_penalty = reward_components['x_penalty']
+        upright_reward = reward_components['upright_reward']
+        non_alignement_penalty = reward_components['non_alignement_penalty']
+        stability_penalty = reward_components['stability_penalty']
+        mse_penalty = reward_components['mse_penalty']
+        force_terminated = reward_components['force_terminated']
+        consecutive_upright_steps = reward_components['consecutive_upright_steps'] / 150
+        have_been_upright_once = reward_components['have_been_upright_once']
+        came_back_down = reward_components['came_back_down']
+        steps_double_down = reward_components['steps_double_down'] / 150
 
+        # ------- Indicators -------
+        near_border = (abs(adapted_state[0]) > 1.6)
+        end_node_y = position_y3 if self.n == 3 else position_y2 if self.n == 2 else position_y1
+        end_node_upright = (end_node_y > self.reward_manager.upright_threshold)
+        
+        # Ajouter les positions x et y à l'état
+        state_with_positions = np.hstack((
+            adapted_state,
+            position_x1, position_y1, position_x2, position_y2, position_x3, position_y3,
+            x_penalty, upright_reward, non_alignement_penalty, stability_penalty, mse_penalty, force_terminated,
+            consecutive_upright_steps, have_been_upright_once, came_back_down, steps_double_down,
+            near_border, end_node_y, end_node_upright
+        ))
+        
+        return state_with_positions
 
     def step(self, action=0.0):
         """
@@ -253,10 +292,12 @@ class TriplePendulumEnv:
         # Mise à jour de l'état et du temps
         self.current_state = next_state
         self.current_time += self.dt
+
+        terminated = False
         
-        return self.get_state()
+        return self.get_state(), terminated
         
-    def render(self, episode=0, epsilon=0):
+    def render(self, episode = 0, epsilon = 0):
         """
         Affiche l'état actuel du pendule.
         """
@@ -334,11 +375,20 @@ class TriplePendulumEnv:
         
         # Afficher les composants de récompense si le reward_manager est disponible
         if self.reward_manager is not None:
-            state = self.get_state()
+            # Calculer l'état une seule fois et l'utiliser pour tout le rendu
+            base_state_result = self._calculate_base_state()
             
-            if state is not None:
+            if base_state_result is not None:
+                adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3 = base_state_result
+                
+                # Créer un état temporaire pour le reward manager
+                temp_state = np.hstack((
+                    adapted_state,
+                    position_x1, position_y1, position_x2, position_y2, position_x3, position_y3
+                ))
+                
                 # Récupérer les composants de récompense
-                reward_components = self.reward_manager.get_reward_components(state, 0)
+                reward_components = self.reward_manager.get_reward_components(temp_state, 0)
                 
                 # Dessiner un conteneur pour les récompenses
                 reward_panel_width = 300
@@ -541,11 +591,14 @@ class TriplePendulumEnv:
             
             # Mise à jour de la force et de l'état
             self.applied_force += force_smoothing * (target_force - self.applied_force)
-            self.step(self.applied_force)
+            next_state, terminated = self.step(self.applied_force)
             
             # Rendu avec informations sur l'épisode et epsilon
             if not self.render(episode=episode, epsilon=epsilon):
                 break
+
+            if terminated:
+                self.reset()
 
             self.num_steps += 1
         

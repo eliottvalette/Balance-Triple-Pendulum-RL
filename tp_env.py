@@ -6,8 +6,11 @@ from sympy import symbols, Dummy, lambdify
 from sympy.physics.mechanics import ReferenceFrame, Point, Particle, KanesMethod, dynamicsymbols
 import sys
 
+GRAVITY = 9.81
+
+
 class TriplePendulumEnv:
-    def __init__(self, reward_manager=None, render_mode=None, num_nodes=3, arm_length=1./3, bob_mass=0.01/3, friction_coefficient=0.1):
+    def __init__(self, reward_manager=None, render_mode=None, num_nodes=1, arm_length=1./3, bob_mass=0.01/3, friction_coefficient=0.1):
         self.reward_manager = reward_manager
         self.render_mode = render_mode
         self.n = num_nodes
@@ -24,13 +27,13 @@ class TriplePendulumEnv:
         # -----------------------------
         # Modèle symbolique
         # -----------------------------
-        self.q = dynamicsymbols(f'q:{num_nodes + 1}')  # Coordonnées généralisées
-        self.u = dynamicsymbols(f'u:{num_nodes + 1}')  # Vitesses généralisées
-        self.f = dynamicsymbols('f')                    # Force appliquée au chariot
+        self.positions = dynamicsymbols(f'q:{num_nodes + 1}')  # Coordonnées généralisées
+        self.velocities = dynamicsymbols(f'u:{num_nodes + 1}')  # Vitesses généralisées
+        self.force = dynamicsymbols('f')                    # Force appliquée au chariot
 
-        self.m = symbols(f'm:{num_nodes + 1}')          # Masses
-        self.l = symbols(f'l:{num_nodes}')              # Longueurs
-        self.g, self.t = symbols('g t')                 # Gravité et temps
+        self.masses = symbols(f'm:{num_nodes + 1}')          # Masses
+        self.lengths = symbols(f'l:{num_nodes}')              # Longueurs
+        self.gravity, self.time = symbols('g t')              # Gravité et temps
 
         self._setup_symbolic_model()
         self._setup_numeric_evaluation()
@@ -60,71 +63,71 @@ class TriplePendulumEnv:
         self._init_pygame()
 
     def _setup_symbolic_model(self):
-        I = ReferenceFrame('I')
-        O = Point('O')
-        O.set_vel(I, 0)
+        inertial_frame = ReferenceFrame('I')
+        origin = Point('O')
+        origin.set_vel(inertial_frame, 0)
 
-        P0 = Point('P0')
-        P0.set_pos(O, self.q[0] * I.x)
-        P0.set_vel(I, self.u[0] * I.x)
-        Pa0 = Particle('Pa0', P0, self.m[0])
+        cart_point = Point('P0')
+        cart_point.set_pos(origin, self.positions[0] * inertial_frame.x)
+        cart_point.set_vel(inertial_frame, self.velocities[0] * inertial_frame.x)
+        cart_particle = Particle('Pa0', cart_point, self.masses[0])
 
-        frames = [I]
-        points = [P0]
-        particles = [Pa0]
+        frames = [inertial_frame]
+        points = [cart_point]
+        particles = [cart_particle]
 
-        force_cart = self.f * I.x
-        weight_cart = -self.m[0] * self.g * I.y
-        friction_cart = -self.friction_coefficient * self.u[0] * I.x
-        forces = [(P0, force_cart + weight_cart + friction_cart)]
-        kindiffs = [self.q[0].diff(self.t) - self.u[0]]
+        force_cart = self.force * inertial_frame.x
+        weight_cart = -self.masses[0] * self.gravity * inertial_frame.y
+        friction_cart = -self.friction_coefficient * self.velocities[0] * inertial_frame.x
+        forces = [(cart_point, force_cart + weight_cart + friction_cart)]
+        kindiffs = [self.positions[0].diff(self.time) - self.velocities[0]]
 
         for i in range(self.n):
-            Bi = I.orientnew(f'B{i}', 'Axis', [self.q[i + 1], I.z])
-            Bi.set_ang_vel(I, self.u[i + 1] * I.z)
-            frames.append(Bi)
+            pendulum_frame = inertial_frame.orientnew(f'B{i}', 'Axis', [self.positions[i + 1], inertial_frame.z])
+            pendulum_frame.set_ang_vel(inertial_frame, self.velocities[i + 1] * inertial_frame.z)
+            frames.append(pendulum_frame)
 
-            Pi = points[-1].locatenew(f'P{i + 1}', self.l[i] * Bi.x)
-            Pi.v2pt_theory(points[-1], I, Bi)
-            points.append(Pi)
+            pendulum_point = points[-1].locatenew(f'P{i + 1}', self.lengths[i] * pendulum_frame.x)
+            pendulum_point.v2pt_theory(points[-1], inertial_frame, pendulum_frame)
+            points.append(pendulum_point)
 
-            Pai = Particle(f'Pa{i + 1}', Pi, self.m[i + 1])
-            particles.append(Pai)
+            pendulum_particle = Particle(f'Pa{i + 1}', pendulum_point, self.masses[i + 1])
+            particles.append(pendulum_particle)
 
-            weight = -self.m[i + 1] * self.g * I.y
-            friction = -self.friction_coefficient * self.u[i + 1] * I.z
-            forces.append((Pi, weight + friction))
-            kindiffs.append(self.q[i + 1].diff(self.t) - self.u[i + 1])
+            weight = -self.masses[i + 1] * self.gravity * inertial_frame.y
+            friction = -self.friction_coefficient * self.velocities[i + 1] * inertial_frame.z
+            forces.append((pendulum_point, weight + friction))
+            kindiffs.append(self.positions[i + 1].diff(self.time) - self.velocities[i + 1])
 
-        self.kane = KanesMethod(I, q_ind=self.q, u_ind=self.u, kd_eqs=kindiffs)
+        self.kane = KanesMethod(inertial_frame, q_ind=self.positions, u_ind=self.velocities, kd_eqs=kindiffs)
         self.fr = self.kane._form_fr(forces)
         self.frstar = self.kane._form_frstar(particles)
 
     def _setup_numeric_evaluation(self):
-        parameters = [self.g, self.m[0]]
-        self.parameter_vals = [9.81, self.bob_mass]
+        parameters = [self.gravity, self.masses[0]]
+        self.parameter_vals = [GRAVITY, self.bob_mass]
 
         for i in range(self.n):
-            parameters += [self.l[i], self.m[i + 1]]
+            parameters += [self.lengths[i], self.masses[i + 1]]
             self.parameter_vals += [self.arm_length, self.bob_mass]
 
-        dynamic = self.q + self.u
-        dynamic.append(self.f)
+        dynamic = self.positions + self.velocities
+        dynamic.append(self.force)
         dummy_symbols = [Dummy() for _ in dynamic]
         dummy_dict = dict(zip(dynamic, dummy_symbols))
         kindiff_dict = self.kane.kindiffdict()
 
-        M = self.kane.mass_matrix_full.subs(kindiff_dict).subs(dummy_dict)
-        F = self.kane.forcing_full.subs(kindiff_dict).subs(dummy_dict)
+        mass_matrix = self.kane.mass_matrix_full.subs(kindiff_dict).subs(dummy_dict)
+        forcing_vector = self.kane.forcing_full.subs(kindiff_dict).subs(dummy_dict)
 
-        self.M_func = lambdify(dummy_symbols + parameters, M)
-        self.F_func = lambdify(dummy_symbols + parameters, F)
+        self.M_func = lambdify(dummy_symbols + parameters, mass_matrix)
+        self.F_func = lambdify(dummy_symbols + parameters, forcing_vector)
 
-    def rhs(self, x, t, args, controller=None):
-        u_input = controller(x) if controller else 0.0
-        arguments = hstack((x, u_input, args))
-        dx = np.array(solve(self.M_func(*arguments), self.F_func(*arguments))).T[0]
-        return dx
+    def rhs(self, state, time, args, controller=None):
+        control_input = controller(state) if controller else 0.0
+        arguments = hstack((state, control_input, args))
+        state_derivative = np.array(solve(self.M_func(*arguments), self.F_func(*arguments))).T[0]
+        return state_derivative
 
     def reset(self):
         # Initialisation de l'état
@@ -133,8 +136,8 @@ class TriplePendulumEnv:
         vitesses_initiales = 1e-3
         state = hstack((
             position_initiale_chariot,
-            angles_initiaux * ones(len(self.q) - 1),
-            vitesses_initiales * ones(len(self.u))
+            angles_initiaux * ones(len(self.positions) - 1),
+            vitesses_initiales * ones(len(self.velocities))
         ))
         self.current_state = state.copy()  # On stocke l'état courant
         self.current_time = 0.0            # Réinitialisation du temps courant
@@ -161,41 +164,50 @@ class TriplePendulumEnv:
     def get_state(self):
         """
         Renvoie l'état courant du système.
-        self.current_state: [x, q1, q2, q3, u1, u2, u3, f, x1, y1, x2, y2, x3, y3]
+        self.current_state: [x, q1, ..., qi, u1, u2, ..., ui, f] avec self.n = i
         x: position du chariot
         q1, q2, q3: angles des pendules
         u1, u2, u3: vitesses angulaires des pendules
-        f: force appliquée au chariot
-        x1, y1, x2, y2, x3, y3: positions des masses des pendules
-        Returns:
+        f: force appliquée au chariot    
+            adapted_state: [x, q1, q2, q3, u1, u2, u3, f, x1, y1, x2, y2, x3, y3]
+            x1, y1, x2, y2, x3, y3: positions des masses des pendules
             np.array: L'état actuel du système avec les positions x,y de chaque noeud
         """
         if self.current_state is None:
             return None
         
+        non_adapted_state = self.current_state
+        
+        if self.n == 1:
+            adapted_state = [non_adapted_state[0], non_adapted_state[1], 0, 0, non_adapted_state[2], 0, 0, non_adapted_state[3]]
+        elif self.n == 2:
+            adapted_state = [non_adapted_state[0], non_adapted_state[1], non_adapted_state[2], 0, non_adapted_state[3], non_adapted_state[4], 0, non_adapted_state[6]]
+        elif self.n == 3:
+            adapted_state = non_adapted_state
+        
         # Calculer les positions x et y de tous les noeuds
-        cart_x = self.current_state[0]
+        cart_position = adapted_state[0]
         
         # Point d'attache sur le chariot
-        attach_x = cart_x
+        attach_x = cart_position
         attach_y = 0
         
         # Position de la première masse (après le premier bras)
-        x1 = attach_x + self.arm_length * np.cos(self.current_state[1])
-        y1 = attach_y + self.arm_length * np.sin(self.current_state[1])
+        position_x1 = attach_x + self.arm_length * np.cos(adapted_state[1])
+        position_y1 = attach_y + self.arm_length * np.sin(adapted_state[1])
         
         # Position de la deuxième masse (après le deuxième bras)
-        x2 = x1 + self.arm_length * np.cos(self.current_state[2])
-        y2 = y1 + self.arm_length * np.sin(self.current_state[2])
+        position_x2 = position_x1 + self.arm_length * np.cos(adapted_state[2])
+        position_y2 = position_y1 + self.arm_length * np.sin(adapted_state[2])
         
         # Position de la troisième masse (après le troisième bras)
-        x3 = x2 + self.arm_length * np.cos(self.current_state[3])
-        y3 = y2 + self.arm_length * np.sin(self.current_state[3])
+        position_x3 = position_x2 + self.arm_length * np.cos(adapted_state[3])
+        position_y3 = position_y2 + self.arm_length * np.sin(adapted_state[3])
         
         # Ajouter les positions x et y à l'état
         state_with_positions = np.hstack((
-            self.current_state,
-            x1, y1, x2, y2, x3, y3
+            adapted_state,
+            position_x1, position_y1, position_x2, position_y2, position_x3, position_y3
         ))
         
         return state_with_positions
@@ -217,11 +229,11 @@ class TriplePendulumEnv:
         self.applied_force = action
         
         # Calcul du nouvel état
-        dx = self.rhs(self.current_state, self.current_time, self.parameter_vals, lambda x: self.applied_force)
-        next_state = self.current_state + dx * self.dt
+        state_derivative = self.rhs(self.current_state, self.current_time, self.parameter_vals, lambda state: self.applied_force)
+        next_state = self.current_state + state_derivative * self.dt
         
         # Vérifier les limites du chariot
-        num_joints = len(self.q)
+        num_joints = len(self.positions)
         cart_position = next_state[0]
         if cart_position - self.cart_width/(2*self.scale) < self.xmin:
             next_state[0] = self.xmin + self.cart_width/(2*self.scale)
@@ -229,6 +241,14 @@ class TriplePendulumEnv:
         elif cart_position + self.cart_width/(2*self.scale) > self.xmax:
             next_state[0] = self.xmax - self.cart_width/(2*self.scale)
             next_state[num_joints] = 0  # Vitesse du chariot à zéro
+        
+        # Appliquer un amortissement supplémentaire direct aux vitesses
+        # Coefficient d'amortissement: plus élevé pour une dissipation d'énergie plus rapide
+        damping_factor = 0.99
+        
+        # Appliquer l'amortissement aux vitesses angulaires (u1, u2, u3)
+        for i in range(num_joints, 2*num_joints):
+            next_state[i] *= damping_factor
         
         # Mise à jour de l'état et du temps
         self.current_state = next_state
@@ -253,13 +273,13 @@ class TriplePendulumEnv:
         self.screen.fill(self.BACKGROUND_COLOR)
         
         # Dessiner la grille
-        for x_val in np.arange(self.xmin, self.xmax + 0.5, 0.5):
-            x_screen = self._convert_to_screen_coords(x_val, 0)[0]
-            pygame.draw.line(self.screen, self.GRID_COLOR, (x_screen, 0), (x_screen, self.height), 1)
+        for position_x in np.arange(self.xmin, self.xmax + 0.5, 0.5):
+            grid_x = self._convert_to_screen_coords(position_x, 0)[0]
+            pygame.draw.line(self.screen, self.GRID_COLOR, (grid_x, 0), (grid_x, self.height), 1)
         
-        for y_val in np.arange(-1, 1.1, 0.5):
-            y_screen = self._convert_to_screen_coords(0, y_val)[1]
-            pygame.draw.line(self.screen, self.GRID_COLOR, (0, y_screen), (self.width, y_screen), 1)
+        for position_y in np.arange(-1, 1.1, 0.5):
+            grid_y = self._convert_to_screen_coords(0, position_y)[1]
+            pygame.draw.line(self.screen, self.GRID_COLOR, (0, grid_y), (self.width, grid_y), 1)
         
         # Dessiner la piste
         track_x, track_y = self._convert_to_screen_coords(self.xmin, self.cart_height/(2*self.scale) - 0.05)
@@ -273,8 +293,8 @@ class TriplePendulumEnv:
         pygame.draw.line(self.screen, (100, 100, 110), (center_x, center_y - 10), (center_x, center_y + 10), 2)
         
         # Dessiner le chariot
-        cart_x = self.current_state[0]
-        cart_screen_x, cart_screen_y = self._convert_to_screen_coords(cart_x - self.cart_width/(2*self.scale), self.cart_height/(2*self.scale))
+        cart_position = self.current_state[0]
+        cart_screen_x, cart_screen_y = self._convert_to_screen_coords(cart_position - self.cart_width/(2*self.scale), self.cart_height/(2*self.scale))
         pygame.draw.rect(self.screen, self.CART_COLOR, (cart_screen_x, cart_screen_y, self.cart_width, self.cart_height))
         
         # Dessiner le surlignage du chariot
@@ -285,20 +305,20 @@ class TriplePendulumEnv:
         pygame.draw.rect(self.screen, (80, 80, 90), (highlight_x, highlight_y, highlight_width, highlight_height))
         
         # Dessiner le pendule
-        num_joints = len(self.q)
-        x_positions = hstack((self.current_state[0], zeros(num_joints - 1)))
-        y_positions = zeros(num_joints)
+        num_joints = len(self.positions)
+        pendulum_x_positions = hstack((self.current_state[0], zeros(num_joints - 1)))
+        pendulum_y_positions = zeros(num_joints)
         
         for joint in range(1, num_joints):
-            x_positions[joint] = x_positions[joint - 1] + self.arm_length * cos(self.current_state[joint])
-            y_positions[joint] = y_positions[joint - 1] + self.arm_length * sin(self.current_state[joint])
+            pendulum_x_positions[joint] = pendulum_x_positions[joint - 1] + self.arm_length * cos(self.current_state[joint])
+            pendulum_y_positions[joint] = pendulum_y_positions[joint - 1] + self.arm_length * sin(self.current_state[joint])
         
         current_angle = self.current_state[1]
         color_index = min(2, int(abs(current_angle) / (pi/2)))
         
         for i in range(num_joints - 1):
-            start_x, start_y = self._convert_to_screen_coords(x_positions[i], y_positions[i])
-            end_x, end_y = self._convert_to_screen_coords(x_positions[i+1], y_positions[i+1])
+            start_x, start_y = self._convert_to_screen_coords(pendulum_x_positions[i], pendulum_y_positions[i])
+            end_x, end_y = self._convert_to_screen_coords(pendulum_x_positions[i+1], pendulum_y_positions[i+1])
             pygame.draw.line(self.screen, self.PENDULUM_COLORS[color_index], (start_x, start_y), (end_x, end_y), 4)
             pygame.draw.circle(self.screen, (90, 90, 100), (end_x, end_y), 8)
             pygame.draw.circle(self.screen, (30, 30, 40), (end_x, end_y), 8, 1)
@@ -322,7 +342,7 @@ class TriplePendulumEnv:
         Anime le pendule en utilisant les méthodes step et render.
         
         Args:
-            steps (int): Nombre de pas de simulation
+            max_steps (int): Nombre maximal de pas de simulation avant réinitialisation
             states (np.array, optional): États préalablement calculés. Si None, ils seront générés.
             length (float, optional): Longueur des bras du pendule. Si None, utilise self.arm_length.
             title (str, optional): Titre de la fenêtre.
@@ -356,7 +376,7 @@ class TriplePendulumEnv:
                         self.reset()
                     elif event.key == pygame.K_s:
                         state = self.get_state()
-                        print(f'State: {state}')
+                        print(f'State: {state}, length: {len(state)}')
                         print('------- Details: -------')
                         print(f'x: {state[0]}')
                         print(f'q1: {state[1]}')
@@ -367,8 +387,10 @@ class TriplePendulumEnv:
                         print(f'u3: {state[6]}')
                         print(f'f: {state[7]}')
                         print(f'[x1, y1]: [{state[8]:.2f}, {state[9]:.2f}]')
-                        print(f'[x2, y2]: [{state[10]:.2f}, {state[11]:.2f}]')
-                        print(f'[x3, y3]: [{state[12]:.2f}, {state[13]:.2f}]')
+                        if self.n > 1:
+                            print(f'[x2, y2]: [{state[10]:.2f}, {state[11]:.2f}]')
+                        if self.n > 2:
+                            print(f'[x3, y3]: [{state[12]:.2f}, {state[13]:.2f}]')
                         print('------- Fin des details -------')
                         
                 elif event.type == pygame.KEYUP:

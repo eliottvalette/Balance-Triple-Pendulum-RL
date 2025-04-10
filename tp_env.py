@@ -225,11 +225,11 @@ class TriplePendulumEnv:
         
         # Utilisation de l'état temporaire pour calculer les récompenses
         reward_components = self.reward_manager.get_reward_components(temp_state, 0)
-        x_penalty = reward_components['x_penalty']
-        upright_reward = reward_components['upright_reward']
-        non_alignement_penalty = reward_components['non_alignement_penalty']
-        stability_penalty = reward_components['stability_penalty']
-        mse_penalty = reward_components['mse_penalty']
+        x_penalty = reward_components['x_penalty'] / 100
+        upright_reward = reward_components['upright_reward'] / 100
+        non_alignement_penalty = reward_components['non_alignement_penalty'] / 100
+        stability_penalty = reward_components['stability_penalty'] / 100
+        mse_penalty = reward_components['mse_penalty'] / 100
         force_terminated = reward_components['force_terminated']
         consecutive_upright_steps = reward_components['consecutive_upright_steps'] / 150
         have_been_upright_once = reward_components['have_been_upright_once']

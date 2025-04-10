@@ -168,7 +168,7 @@ class RewardManager:
             reward -= self.termination_penalty
         
         # ----------------------- REAL REWARD -----------------------
-        aim_y = 0.33 * self.num_nodes
+        aim_y = -0.33 * self.num_nodes
         real_reward = 2 - ((abs(aim_y - end_node_y) / aim_y) +(abs(x) / 1.6))
                    
         return real_reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated

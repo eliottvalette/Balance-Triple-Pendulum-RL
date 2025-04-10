@@ -38,11 +38,10 @@ class TriplePendulumTrainer:
         # Ici, la dimension est basée sur la taille de l'état retourné par reset()
         self.env.reset()
         initial_state = self.env.get_state()
-        state_dim = len(initial_state) * config['seq_length']
+        state_dim = len(initial_state)
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim, config['hidden_dim'])
         self.critic = TriplePendulumCritic(state_dim, action_dim, config['hidden_dim'])
-        self.seq_state = []
 
         # Optimizers
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=config['actor_lr'])
@@ -55,7 +54,7 @@ class TriplePendulumTrainer:
         
         # Exploration parameters
         self.epsilon = 1.0  # Initial random action probability
-        self.epsilon_decay = 0.995  # Epsilon decay rate
+        self.epsilon_decay = 0.99  # Epsilon decay rate
         self.min_epsilon = 0.001  # Minimum epsilon
         
         # Replay buffer
@@ -103,26 +102,17 @@ class TriplePendulumTrainer:
         # Réinitialiser le RewardManager
         self.reward_manager.reset()
         
-        # Initialiser seq_state comme une liste vide
-        self.seq_state = []
-        
         while not done and num_steps < self.max_steps:
             state_tensor = torch.FloatTensor(state).unsqueeze(0)
-            while len(self.seq_state) < self.config['seq_length'] : # Remplir la sequence avec des les mêmes états au debut de l'episode
-                self.seq_state.append(state_tensor)
-
-            # Garder une sequence de longueur fixe en enlevant le premier element et en ajoutant le nouveau
-            self.seq_state.pop(0)
-            self.seq_state.append(state_tensor)
             
             # Epsilon-greedy exploration
             if np.random.random() < self.epsilon:
-                action = np.random.uniform(-1, 1)  # Random action
+                action = np.random.uniform(-0.1, 0.1)  # Random action
             else:
                 with torch.no_grad():
                     # Concatène les états de la séquence
-                    seq_state_tensor = torch.cat(self.seq_state, dim=1).squeeze(0)
-                    action = self.actor(seq_state_tensor).squeeze().numpy()
+                    action = self.actor(state_tensor).squeeze().numpy()
+                    action /= 5
 
             # Take step in environment
             next_state, terminated = self.env.step(action)
@@ -145,18 +135,11 @@ class TriplePendulumTrainer:
             
             # Store transition in replay buffer with normalized reward
             next_state_tensor = torch.FloatTensor(next_state).unsqueeze(0)  # Convert to tensor
-            
-            # Construire le prochain état de séquence
-            next_seq = self.seq_state[1:] + [next_state_tensor]
-            next_seq_state = torch.cat(next_seq, dim=1).squeeze(0)
-            
-            # Construire l'état de séquence actuel
-            current_seq_state = torch.cat(self.seq_state, dim=1).squeeze(0)
-            
+
             # Stocker dans le buffer de replay
-            self.memory.push(current_seq_state, action, custom_reward, next_seq_state, terminated)
+            self.memory.push(state_tensor, action, custom_reward, next_state_tensor, terminated)
             
-            trajectory.append((next_seq_state, action, custom_reward, next_seq_state, terminated))
+            trajectory.append((state_tensor, action, custom_reward, next_state_tensor, terminated))
             episode_reward += custom_reward
             self.total_steps += 1
             num_steps += 1
@@ -225,7 +208,7 @@ class TriplePendulumTrainer:
             print(f"Episode {episode} started")
             
             # Activer ou désactiver le rendu en fonction du numéro d'épisode
-            if episode % 100 == 0 or episode % 10 == 9:
+            if episode % 50 == 0 and episode > 200:
                 self.env.render_mode = "human"
             else:
                 self.env.render_mode = None

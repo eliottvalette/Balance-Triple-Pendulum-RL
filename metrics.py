@@ -4,11 +4,23 @@ from collections import defaultdict
 import os
 import seaborn as sns
 import torch
+from config import config
 
 class MetricsTracker:
-    def __init__(self):
+    def __init__(self, plot_config=None):
         self.metrics = defaultdict(list)
         self.episode_window = 100  # For moving average
+        
+        # Utiliser la configuration des plots si fournie, sinon utiliser config.py
+        if plot_config is None and 'plot_config' in config:
+            plot_config = config['plot_config']
+        else:
+            plot_config = plot_config or {}
+            
+        # Initialiser les paramètres de plotting avec des valeurs par défaut si non définies
+        self.max_points_per_plot = plot_config.get('max_points_per_plot', 1000)
+        self.plot_dpi = plot_config.get('plot_dpi', 100)
+        self.enable_plots = plot_config.get('enable_plots', True)
         
     def add_metric(self, name, value):
         self.metrics[name].append(value)
@@ -19,16 +31,42 @@ class MetricsTracker:
             return np.mean(values)
         return np.mean(values[-self.episode_window:])
     
+    def _downsample_if_needed(self, data):
+        """Sous-échantillonne les données si nécessaire pour améliorer les performances"""
+        if len(data) <= self.max_points_per_plot:
+            return np.array(data), np.arange(len(data))
+        
+        # Calculer le facteur de sous-échantillonnage
+        step = max(1, len(data) // self.max_points_per_plot)
+        # Utiliser le début, la fin et les points intermédiaires sous-échantillonnés
+        indices = np.concatenate([
+            np.arange(0, 100, 1),  # Inclure les premières valeurs intégralement
+            np.arange(100, len(data) - 100, step),  # Sous-échantillonner le milieu
+            np.arange(max(100, len(data) - 100), len(data), 1)  # Inclure les dernières valeurs
+        ])
+        indices = np.unique(indices)
+        indices = indices[indices < len(data)]
+        return np.array(data)[indices], indices
+    
     def plot_metrics(self, save_path=None):
+        """Génère le graphique principal des métriques d'entraînement"""
+        if not self.enable_plots:
+            return
+
         fig, axes = plt.subplots(2, 3, figsize=(20, 12))
         fig.suptitle('Training Metrics')
         
         # Plot rewards
         ax = axes[0, 0]
         rewards = self.metrics['episode_reward']
-        ax.plot(rewards, alpha=0.3, label='Episode Reward')
-        ax.plot(np.convolve(rewards, np.ones(self.episode_window)/self.episode_window, mode='valid'),
-                label=f'Moving Average ({self.episode_window} episodes)')
+        rewards_ds, indices = self._downsample_if_needed(rewards)
+        ax.plot(indices, rewards_ds, alpha=0.3, label='Episode Reward')
+        
+        if len(rewards) >= self.episode_window:
+            moving_avg = np.convolve(rewards, np.ones(self.episode_window)/self.episode_window, mode='valid')
+            ma_ds, ma_indices = self._downsample_if_needed(moving_avg)
+            ax.plot(ma_indices + self.episode_window - 1, ma_ds, 
+                   label=f'Moving Average ({self.episode_window} episodes)')
         ax.set_title('Rewards')
         ax.set_xlabel('Episode')
         ax.set_ylabel('Reward')
@@ -36,8 +74,13 @@ class MetricsTracker:
         
         # Plot losses
         ax = axes[0, 1]
-        ax.plot(self.metrics['actor_loss'], label='Actor Loss')
-        ax.plot(self.metrics['critic_loss'], label='Critic Loss')
+        if 'actor_loss' in self.metrics and len(self.metrics['actor_loss']) > 0:
+            actor_loss_ds, actor_indices = self._downsample_if_needed(self.metrics['actor_loss'])
+            ax.plot(actor_indices, actor_loss_ds, label='Actor Loss')
+        
+        if 'critic_loss' in self.metrics and len(self.metrics['critic_loss']) > 0:
+            critic_loss_ds, critic_indices = self._downsample_if_needed(self.metrics['critic_loss'])
+            ax.plot(critic_indices, critic_loss_ds, label='Critic Loss')
         ax.set_title('Network Losses')
         ax.set_xlabel('Episode')
         ax.set_ylabel('Loss')
@@ -48,8 +91,9 @@ class MetricsTracker:
         reward_components = ['upright_reward', 'x_penalty', 
                            'non_alignement_penalty', 'stability_penalty', 'mse_penalty']
         for component in reward_components:
-            if component in self.metrics:
-                ax.plot(self.metrics[component], label=component)
+            if component in self.metrics and len(self.metrics[component]) > 0:
+                comp_ds, comp_indices = self._downsample_if_needed(self.metrics[component])
+                ax.plot(comp_indices, comp_ds, label=component)
         ax.set_title('Reward Components')
         ax.set_xlabel('Episode')
         ax.set_ylabel('Value')
@@ -58,11 +102,12 @@ class MetricsTracker:
         # Plot moving averages of reward components
         ax = axes[1, 0]
         for component in reward_components:
-            if component in self.metrics:
+            if component in self.metrics and len(self.metrics[component]) >= self.episode_window:
                 moving_avg = np.convolve(self.metrics[component], 
                                        np.ones(self.episode_window)/self.episode_window, 
                                        mode='valid')
-                ax.plot(moving_avg, label=f'{component} (MA)')
+                ma_ds, ma_indices = self._downsample_if_needed(moving_avg)
+                ax.plot(ma_indices + self.episode_window - 1, ma_ds, label=f'{component} (MA)')
         ax.set_title('Moving Averages of Reward Components')
         ax.set_xlabel('Episode')
         ax.set_ylabel('Value')
@@ -70,12 +115,16 @@ class MetricsTracker:
         
         # Plot stability metrics
         ax = axes[1, 1]
-        if 'stability_penalty' in self.metrics:
-            ax.plot(self.metrics['stability_penalty'], label='Stability Penalty')
-            moving_avg = np.convolve(self.metrics['stability_penalty'], 
-                                   np.ones(self.episode_window)/self.episode_window, 
-                                   mode='valid')
-            ax.plot(moving_avg, label='Stability Penalty (MA)')
+        if 'stability_penalty' in self.metrics and len(self.metrics['stability_penalty']) > 0:
+            stab_ds, stab_indices = self._downsample_if_needed(self.metrics['stability_penalty'])
+            ax.plot(stab_indices, stab_ds, label='Stability Penalty')
+            
+            if len(self.metrics['stability_penalty']) >= self.episode_window:
+                moving_avg = np.convolve(self.metrics['stability_penalty'], 
+                                      np.ones(self.episode_window)/self.episode_window, 
+                                      mode='valid')
+                ma_ds, ma_indices = self._downsample_if_needed(moving_avg)
+                ax.plot(ma_indices + self.episode_window - 1, ma_ds, label='Stability Penalty (MA)')
         ax.set_title('Stability Metrics')
         ax.set_xlabel('Episode')
         ax.set_ylabel('Value')
@@ -83,12 +132,16 @@ class MetricsTracker:
         
         # Plot alignment metrics
         ax = axes[1, 2]
-        if 'non_alignement_penalty' in self.metrics:
-            ax.plot(self.metrics['non_alignement_penalty'], label='Alignment Penalty')
-            moving_avg = np.convolve(self.metrics['non_alignement_penalty'], 
-                                   np.ones(self.episode_window)/self.episode_window, 
-                                   mode='valid')
-            ax.plot(moving_avg, label='Alignment Penalty (MA)')
+        if 'non_alignement_penalty' in self.metrics and len(self.metrics['non_alignement_penalty']) > 0:
+            align_ds, align_indices = self._downsample_if_needed(self.metrics['non_alignement_penalty'])
+            ax.plot(align_indices, align_ds, label='Alignment Penalty')
+            
+            if len(self.metrics['non_alignement_penalty']) >= self.episode_window:
+                moving_avg = np.convolve(self.metrics['non_alignement_penalty'], 
+                                      np.ones(self.episode_window)/self.episode_window, 
+                                      mode='valid')
+                ma_ds, ma_indices = self._downsample_if_needed(moving_avg)
+                ax.plot(ma_indices + self.episode_window - 1, ma_ds, label='Alignment Penalty (MA)')
         ax.set_title('Alignment Metrics')
         ax.set_xlabel('Episode')
         ax.set_ylabel('Value')
@@ -96,28 +149,33 @@ class MetricsTracker:
         
         plt.tight_layout()
         if save_path:
-            plt.savefig(save_path)
+            plt.savefig(save_path, dpi=self.plot_dpi)
         plt.close()
     
     def plot_detailed_rewards(self, save_path=None):
         """Génère un graphique détaillé des récompenses et leurs composantes"""
+        if not self.enable_plots:
+            return
+            
         plt.figure(figsize=(16, 10))
         
         # Tracer la récompense totale
         plt.subplot(2, 1, 1)
         rewards = self.metrics['episode_reward']
-        plt.plot(rewards, alpha=0.3, label='Récompense par épisode')
+        rewards_ds, indices = self._downsample_if_needed(rewards)
+        plt.plot(indices, rewards_ds, alpha=0.3, label='Récompense par épisode')
         
         # Calculer et tracer la moyenne mobile
         if len(rewards) >= self.episode_window:
             moving_avg = np.convolve(rewards, np.ones(self.episode_window)/self.episode_window, mode='valid')
-            plt.plot(np.arange(len(moving_avg)) + self.episode_window - 1, moving_avg, 
+            ma_ds, ma_indices = self._downsample_if_needed(moving_avg)
+            plt.plot(ma_indices + self.episode_window - 1, ma_ds,
                     label=f'Moyenne mobile ({self.episode_window} épisodes)')
         
         plt.title('Évolution de la récompense au cours de l\'entraînement')
         plt.xlabel('Épisode')
         plt.ylabel('Récompense')
-        plt.legend()
+        plt.legend(loc="upper left")
         plt.grid(alpha=0.3)
         
         # Tracer les composantes de récompense
@@ -127,66 +185,83 @@ class MetricsTracker:
         
         for component in reward_components:
             if component in self.metrics and len(self.metrics[component]) > 0:
-                plt.plot(self.metrics[component], label=component)
+                comp_ds, comp_indices = self._downsample_if_needed(self.metrics[component])
+                plt.plot(comp_indices, comp_ds, label=component)
         
         plt.title('Composantes de la récompense')
         plt.xlabel('Épisode')
         plt.ylabel('Valeur')
-        plt.legend()
+        plt.legend(loc="upper left")
         plt.grid(alpha=0.3)
         
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path)
+            plt.savefig(save_path, dpi=self.plot_dpi)
             plt.close()
         else:
             plt.show()
 
     def plot_losses(self, save_path=None):
         """Génère un graphique détaillé des pertes du réseau"""
+        if not self.enable_plots:
+            return
+            
         plt.figure(figsize=(14, 8))
         
-        plt.plot(self.metrics['actor_loss'], label='Perte de l\'acteur')
-        plt.plot(self.metrics['critic_loss'], label='Perte du critique')
+        if 'actor_loss' in self.metrics and len(self.metrics['actor_loss']) > 0:
+            actor_loss_ds, actor_indices = self._downsample_if_needed(self.metrics['actor_loss'])
+            plt.plot(actor_indices, actor_loss_ds, label='Perte de l\'acteur')
+        
+        if 'critic_loss' in self.metrics and len(self.metrics['critic_loss']) > 0:
+            critic_loss_ds, critic_indices = self._downsample_if_needed(self.metrics['critic_loss'])
+            plt.plot(critic_indices, critic_loss_ds, label='Perte du critique')
         
         # Calculer et tracer les moyennes mobiles
-        if len(self.metrics['actor_loss']) >= self.episode_window:
+        if 'actor_loss' in self.metrics and len(self.metrics['actor_loss']) >= self.episode_window:
             actor_ma = np.convolve(self.metrics['actor_loss'], 
                                   np.ones(self.episode_window)/self.episode_window, 
                                   mode='valid')
-            plt.plot(np.arange(len(actor_ma)) + self.episode_window - 1, actor_ma, 
+            ma_ds, ma_indices = self._downsample_if_needed(actor_ma)
+            plt.plot(ma_indices + self.episode_window - 1, ma_ds,
                     label=f'Acteur MA ({self.episode_window} épisodes)')
             
-        if len(self.metrics['critic_loss']) >= self.episode_window:
+        if 'critic_loss' in self.metrics and len(self.metrics['critic_loss']) >= self.episode_window:
             critic_ma = np.convolve(self.metrics['critic_loss'], 
                                    np.ones(self.episode_window)/self.episode_window, 
                                    mode='valid')
-            plt.plot(np.arange(len(critic_ma)) + self.episode_window - 1, critic_ma, 
+            ma_ds, ma_indices = self._downsample_if_needed(critic_ma)
+            plt.plot(ma_indices + self.episode_window - 1, ma_ds,
                     label=f'Critique MA ({self.episode_window} épisodes)')
         
         plt.title('Évolution des pertes des réseaux')
         plt.xlabel('Épisode')
         plt.ylabel('Perte')
-        plt.legend()
+        plt.legend(loc="upper right")
         plt.grid(alpha=0.3)
         
         if save_path:
-            plt.savefig(save_path)
+            plt.savefig(save_path, dpi=self.plot_dpi)
             plt.close()
         else:
             plt.show()
     
     def plot_reward_distribution(self, save_path=None):
         """Affiche la distribution des récompenses"""
-        if len(self.metrics['episode_reward']) < 10:
+        if not self.enable_plots or len(self.metrics['episode_reward']) < 10:
             return
             
         plt.figure(figsize=(12, 8))
         
-        # Distribution complète
+        # Distribution complète - limiter à max_points pour accélérer
         plt.subplot(2, 1, 1)
-        sns.histplot(self.metrics['episode_reward'], kde=True)
+        rewards = self.metrics['episode_reward']
+        if len(rewards) > self.max_points_per_plot:
+            sample_indices = np.linspace(0, len(rewards)-1, self.max_points_per_plot, dtype=int)
+            sampled_rewards = [rewards[i] for i in sample_indices]
+            sns.histplot(sampled_rewards, kde=True)
+        else:
+            sns.histplot(rewards, kde=True)
         plt.title('Distribution des récompenses sur tous les épisodes')
         plt.xlabel('Récompense')
         plt.ylabel('Fréquence')
@@ -200,25 +275,39 @@ class MetricsTracker:
         
         # Comparaison des distributions de début et de fin d'entraînement
         if first_quarter > 0:
-            sns.kdeplot(self.metrics['episode_reward'][:first_quarter], 
-                      label='Premier quart des épisodes')
-            sns.kdeplot(self.metrics['episode_reward'][last_quarter:], 
-                      label='Dernier quart des épisodes')
+            # Sous-échantillonnage pour les grands ensembles de données
+            if first_quarter > self.max_points_per_plot // 2:
+                sample_indices = np.linspace(0, first_quarter-1, self.max_points_per_plot // 2, dtype=int)
+                first_data = [self.metrics['episode_reward'][i] for i in sample_indices]
+            else:
+                first_data = self.metrics['episode_reward'][:first_quarter]
+                
+            if (num_episodes - last_quarter) > self.max_points_per_plot // 2:
+                sample_indices = np.linspace(last_quarter, num_episodes-1, self.max_points_per_plot // 2, dtype=int)
+                last_data = [self.metrics['episode_reward'][i] for i in sample_indices]
+            else:
+                last_data = self.metrics['episode_reward'][last_quarter:]
+                
+            sns.kdeplot(first_data, label='Premier quart des épisodes')
+            sns.kdeplot(last_data, label='Dernier quart des épisodes')
             plt.title('Comparaison des distributions de récompenses (début vs fin)')
             plt.xlabel('Récompense')
             plt.ylabel('Densité')
-            plt.legend()
+            plt.legend(loc="upper right")
         
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path)
+            plt.savefig(save_path, dpi=self.plot_dpi)
             plt.close()
         else:
             plt.show()
     
     def generate_all_plots(self, base_path='results'):
         """Génère tous les graphiques disponibles dans le dossier spécifié"""
+        if not self.enable_plots:
+            return
+            
         os.makedirs(base_path, exist_ok=True)
         
         # Graphique principal
@@ -240,7 +329,7 @@ class MetricsTracker:
             sample_states: Un tenseur d'états échantillonnés pour l'analyse
             save_path: Chemin où sauvegarder le graphique
         """
-        if not isinstance(sample_states, torch.Tensor):
+        if not self.enable_plots or not isinstance(sample_states, torch.Tensor):
             return
             
         with torch.no_grad():
@@ -274,7 +363,7 @@ class MetricsTracker:
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path)
+            plt.savefig(save_path, dpi=self.plot_dpi)
             plt.close()
         else:
             plt.show() 

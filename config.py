@@ -10,5 +10,14 @@ config = {
     'load_models': True,
     'num_nodes': 2,
     'seq_length': 1,
-    'gravity': 9.8
+    'gravity': 2.0,
+    
+    # Options de visualisation et de plots
+    'plot_config': {
+        'enable_plots': True,           # Activer/désactiver tous les graphiques
+        'plot_frequency': 500,          # Fréquence de génération des graphiques principaux
+        'full_plot_frequency': 1000,    # Fréquence de génération des graphiques complets
+        'max_points_per_plot': 1000,    # Nombre maximal de points par graphique
+        'plot_dpi': 100                 # Résolution des graphiques (DPI)
+    }
 }

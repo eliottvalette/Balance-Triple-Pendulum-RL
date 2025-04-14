@@ -49,8 +49,12 @@ class TriplePendulumTrainer:
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=config['actor_lr'])
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=config['critic_lr'])
         
-        # Metrics tracking
-        self.metrics = MetricsTracker()
+        # Metrics tracking avec la configuration des plots
+        plot_config = config.get('plot_config', {})
+        self.metrics = MetricsTracker(plot_config)
+        self.plot_frequency = plot_config.get('plot_frequency', 500)
+        self.full_plot_frequency = plot_config.get('full_plot_frequency', 1000)
+        
         self.total_steps = 0
         self.max_steps = 500  # Maximum steps per episode
         
@@ -238,17 +242,18 @@ class TriplePendulumTrainer:
             for component_name, value in reward_components.items():
                 self.metrics.add_metric(component_name, value)
             
-            # Génération régulière des graphiques
-            if episode % 100 == 99:
+            # Génération des graphiques selon la fréquence configurée
+            if episode % self.plot_frequency == self.plot_frequency - 1:
                 avg_reward = self.metrics.get_moving_average('episode_reward')
                 print(f"Episode {episode}, Avg Reward: {avg_reward:.2f}")
                 
-                # Générer tous les graphiques disponibles
-                self.metrics.generate_all_plots()
+                # Générer seulement le graphique principal
+                os.makedirs('results', exist_ok=True)
+                self.metrics.plot_metrics('results/metrics.png')
                 
-                # Analyse du modèle tous les 100 épisodes
-                if episode % 100 == 99:
-                    # Échantillonner des états du buffer pour l'analyse du modèle
+                # Génération complète des graphiques à une fréquence moins élevée
+                if episode % self.full_plot_frequency == self.full_plot_frequency - 1:
+                    # Analyse du modèle
                     if len(self.memory) >= 100:
                         samples = self.memory.sample(100)
                         sample_states = torch.FloatTensor(samples[0])
@@ -256,8 +261,11 @@ class TriplePendulumTrainer:
                             self.actor, 
                             self.critic, 
                             sample_states,
-                            f'results/model_analysis.png'
+                            f'results/model_analysis_{episode+1}.png'
                         )
+                    
+                    # Génération de tous les graphiques
+                    self.metrics.generate_all_plots()
                 
                 # Save model
                 self.save_models(f"models/checkpoint")

@@ -54,8 +54,8 @@ class TriplePendulumTrainer:
         
         # Exploration parameters
         self.epsilon = 1.0  # Initial random action probability
-        self.epsilon_decay = 0.99  # Epsilon decay rate
-        self.min_epsilon = 0.001  # Minimum epsilon
+        self.epsilon_decay = 0.995  # Epsilon decay rate - ralenti la décroissance
+        self.min_epsilon = 0.05  # Minimum epsilon - augmenté pour maintenir l'exploration
         
         # Replay buffer
         self.memory = ReplayBuffer(capacity=config['buffer_capacity'])
@@ -103,16 +103,13 @@ class TriplePendulumTrainer:
         self.reward_manager.reset()
         
         while not done and num_steps < self.max_steps:
-            state_tensor = torch.FloatTensor(state).unsqueeze(0)
+            state_tensor = torch.FloatTensor(state)
             
-            # Epsilon-greedy exploration
-            if np.random.random() < self.epsilon:
-                action = np.random.uniform(-0.1, 0.1)  # Random action
-            else:
-                with torch.no_grad():
-                    # Concatène les états de la séquence
-                    action = self.actor(state_tensor).squeeze().numpy()
-                    action /= 5
+            # Exploration: ajouter du bruit gaussien à la sortie de l'acteur
+            with torch.no_grad():
+                action = self.actor(state_tensor).squeeze().numpy()
+            noise = np.random.normal(0, self.epsilon, size=action.shape)
+            action = action + noise
 
             # Take step in environment
             next_state, terminated = self.env.step(action)
@@ -124,7 +121,7 @@ class TriplePendulumTrainer:
             
             # Render if rendering is enabled
             if self.env.render_mode == "human":
-                rendering_successful = self.env.render(episode, self.epsilon)
+                rendering_successful = self.env.render(episode, self.epsilon, num_steps)
                 if not rendering_successful:
                     done = True
                     raise ValueError("Warning: Rendering failed")
@@ -134,7 +131,7 @@ class TriplePendulumTrainer:
             reward_components = self.reward_manager.get_reward_components(next_state, num_steps)
             
             # Store transition in replay buffer with normalized reward
-            next_state_tensor = torch.FloatTensor(next_state).unsqueeze(0)  # Convert to tensor
+            next_state_tensor = torch.FloatTensor(next_state)  # Convert to tensor
 
             # Stocker dans le buffer de replay
             self.memory.push(state_tensor, action, custom_reward, next_state_tensor, terminated)
@@ -160,7 +157,6 @@ class TriplePendulumTrainer:
 
         # Sample batch from replay buffer
         states, actions, rewards, next_states, dones = self.memory.sample(self.config['batch_size'])
-
         # Convert to tensors
         states = torch.FloatTensor(states)
         actions = torch.FloatTensor(actions).unsqueeze(-1)
@@ -171,17 +167,17 @@ class TriplePendulumTrainer:
         # Reshape states to handle sequence properly
         batch_size = states.shape[0]
         
-        # Reshape states from [batch_size, seq_length, state_dim] to [batch_size, seq_length*state_dim]
-        states_reshaped = torch.cat([states[i] for i in range(batch_size)], dim=0).view(batch_size, -1)
-        next_states_reshaped = torch.cat([next_states[i] for i in range(batch_size)], dim=0).view(batch_size, -1)
-        
         # Update critic
-        current_q = self.critic(states_reshaped, actions)
+        current_q = self.critic(states, actions)
         with torch.no_grad():
-            next_actions = self.actor(next_states_reshaped)
-            target_q = rewards + (1 - dones) * self.config['gamma'] * self.critic(next_states_reshaped, next_actions)
+            next_actions = self.actor(next_states)
+            # Ajout de bruit target pour stabiliser l'apprentissage
+            noise = torch.clamp(torch.randn_like(next_actions) * 0.1, -0.2, 0.2)
+            next_actions = torch.clamp(next_actions + noise, -1, 1)
+            target_q = rewards + (1 - dones) * self.config['gamma'] * self.critic(next_states, next_actions)
         
-        critic_loss = F.mse_loss(current_q, target_q)
+        # Utiliser Huber Loss au lieu de MSE pour être plus robuste aux valeurs aberrantes
+        critic_loss = F.smooth_l1_loss(current_q, target_q)
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         # Add gradient clipping for critic
@@ -191,7 +187,7 @@ class TriplePendulumTrainer:
         # Update actor - we want to maximize the critic output (Q-value)
         # Since optimizers perform minimization by default, we use negative sign to turn maximization into minimization
         # This is correct for DDPG: we want the actor to choose actions that maximize Q-values
-        actor_loss = -self.critic(states_reshaped, self.actor(states_reshaped)).mean()
+        actor_loss = -self.critic(states, self.actor(states)).mean()
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         # Add gradient clipping for actor
@@ -239,13 +235,26 @@ class TriplePendulumTrainer:
             for component_name, value in reward_components.items():
                 self.metrics.add_metric(component_name, value)
             
-            # Periodic display and saving
+            # Génération régulière des graphiques
             if episode % 100 == 99:
                 avg_reward = self.metrics.get_moving_average('episode_reward')
                 print(f"Episode {episode}, Avg Reward: {avg_reward:.2f}")
                 
-                # Save graphs
-                self.metrics.plot_metrics(f'results/metrics.png')
+                # Générer tous les graphiques disponibles
+                self.metrics.generate_all_plots()
+                
+                # Analyse du modèle tous les 100 épisodes
+                if episode % 100 == 99:
+                    # Échantillonner des états du buffer pour l'analyse du modèle
+                    if len(self.memory) >= 100:
+                        samples = self.memory.sample(100)
+                        sample_states = torch.FloatTensor(samples[0])
+                        self.metrics.plot_model_analysis(
+                            self.actor, 
+                            self.critic, 
+                            sample_states,
+                            f'results/model_analysis.png'
+                        )
                 
                 # Save model
                 self.save_models(f"models/checkpoint")
@@ -255,6 +264,13 @@ class TriplePendulumTrainer:
         torch.save(self.critic.state_dict(), path + '_critic.pth')
         torch.save(self.actor_optimizer.state_dict(), path + '_actor_optimizer.pth')
         torch.save(self.critic_optimizer.state_dict(), path + '_critic_optimizer.pth')
+        
+        # Sauvegarde supplémentaire avec numéro d'épisode pour suivre l'évolution
+        episode_num = len(self.metrics.metrics['episode_reward'])
+        if episode_num > 0 and episode_num % 1000 == 0:  # Sauvegarde tous les 1000 épisodes
+            checkpoint_path = f"models/checkpoint_episode_{episode_num}"
+            torch.save(self.actor.state_dict(), checkpoint_path + '_actor.pth')
+            torch.save(self.critic.state_dict(), checkpoint_path + '_critic.pth')
 
     def load_models(self):
         if os.path.exists('models/checkpoint_actor.pth'):

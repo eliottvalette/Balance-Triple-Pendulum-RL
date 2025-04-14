@@ -17,32 +17,32 @@ class TriplePendulumActor(nn.Module):
         self.norm1 = nn.LayerNorm(hidden_dim)
         
         # Second layer
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim//2)
         nn.init.orthogonal_(self.fc2.weight, gain=1.414)
         nn.init.constant_(self.fc2.bias, 0)
-        self.norm2 = nn.LayerNorm(hidden_dim)
+        self.norm2 = nn.LayerNorm(hidden_dim//2)
         
         # Third layer
-        self.fc3 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim//2, hidden_dim//4)
         nn.init.orthogonal_(self.fc3.weight, gain=1.414)
         nn.init.constant_(self.fc3.bias, 0)
-        self.norm3 = nn.LayerNorm(hidden_dim)
+        self.norm3 = nn.LayerNorm(hidden_dim//4)
         
         # Fourth layer
-        self.fc4 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc4 = nn.Linear(hidden_dim//4, hidden_dim//8)
         nn.init.orthogonal_(self.fc4.weight, gain=1.414)
         nn.init.constant_(self.fc4.bias, 0)
-        self.norm4 = nn.LayerNorm(hidden_dim)
+        self.norm4 = nn.LayerNorm(hidden_dim//8)
         
         # Fifth layer
-        self.fc5 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc5 = nn.Linear(hidden_dim//8, action_dim * 4)
         nn.init.orthogonal_(self.fc5.weight, gain=1.414)
         nn.init.constant_(self.fc5.bias, 0)
-        self.norm5 = nn.LayerNorm(hidden_dim)
+        self.norm5 = nn.LayerNorm(action_dim * 4)
         
         # Output layer
-        self.fc_out = nn.Linear(hidden_dim, action_dim)
-        nn.init.orthogonal_(self.fc_out.weight, gain=0.01)
+        self.fc_out = nn.Linear(action_dim * 4, action_dim)
+        nn.init.orthogonal_(self.fc_out.weight, gain=0.1)
         nn.init.constant_(self.fc_out.bias, 0)
         
         # Dropout for regularization
@@ -55,37 +55,35 @@ class TriplePendulumActor(nn.Module):
         # First layer
         x = self.fc1(x)
         x = self.norm1(x)
-        x = F.relu(x)
+        x = F.leaky_relu(x)
         x = self.dropout(x)
         
         # Second layer
         x = self.fc2(x)
         x = self.norm2(x)
-        x = F.relu(x)
+        x = F.leaky_relu(x)
         x = self.dropout(x)
         
-        """
         # Third layer
         x = self.fc3(x)
         x = self.norm3(x)
-        x = F.relu(x)
+        x = F.leaky_relu(x)
         x = self.dropout(x)
         
         # Fourth layer
         x = self.fc4(x)
         x = self.norm4(x)
-        x = F.relu(x)
+        x = F.leaky_relu(x)
         x = self.dropout(x)
         
         # Fifth layer
         x = self.fc5(x)
         x = self.norm5(x)
-        x = F.relu(x)
-        """
+        x = F.leaky_relu(x)
         
         # Output layer
         x = self.fc_out(x)
-        return torch.tanh(x)
+        return torch.tanh(x) * 1.2
 
 class TriplePendulumCritic(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim=256):
@@ -101,31 +99,31 @@ class TriplePendulumCritic(nn.Module):
         self.norm1 = nn.LayerNorm(hidden_dim)
         
         # Second layer
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim//2)
         nn.init.orthogonal_(self.fc2.weight, gain=1.414)
         nn.init.constant_(self.fc2.bias, 0)
-        self.norm2 = nn.LayerNorm(hidden_dim)
+        self.norm2 = nn.LayerNorm(hidden_dim//2)
         
         # Third layer
-        self.fc3 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim//2, hidden_dim//4)
         nn.init.orthogonal_(self.fc3.weight, gain=1.414)
         nn.init.constant_(self.fc3.bias, 0)
-        self.norm3 = nn.LayerNorm(hidden_dim)
+        self.norm3 = nn.LayerNorm(hidden_dim//4)
         
         # Fourth layer
-        self.fc4 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc4 = nn.Linear(hidden_dim//4, hidden_dim//8)
         nn.init.orthogonal_(self.fc4.weight, gain=1.414)
         nn.init.constant_(self.fc4.bias, 0)
-        self.norm4 = nn.LayerNorm(hidden_dim)
+        self.norm4 = nn.LayerNorm(hidden_dim//8)
         
         # Fifth layer
-        self.fc5 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc5 = nn.Linear(hidden_dim//8, action_dim * 4)
         nn.init.orthogonal_(self.fc5.weight, gain=1.414)
         nn.init.constant_(self.fc5.bias, 0)
-        self.norm5 = nn.LayerNorm(hidden_dim)
+        self.norm5 = nn.LayerNorm(action_dim * 4)
         
         # Output layer
-        self.fc_out = nn.Linear(hidden_dim, 1)
+        self.fc_out = nn.Linear(action_dim * 4, 1)
         nn.init.orthogonal_(self.fc_out.weight, gain=1)
         nn.init.constant_(self.fc_out.bias, 0)
         
@@ -141,33 +139,31 @@ class TriplePendulumCritic(nn.Module):
         # First layer
         x = self.fc1(x)
         x = self.norm1(x)
-        x = F.relu(x)
+        x = F.leaky_relu(x)
         x = self.dropout(x)
         
         # Second layer
         x = self.fc2(x)
         x = self.norm2(x)
-        x = F.relu(x)
+        x = F.leaky_relu(x)
         x = self.dropout(x)
         
-        """
         # Third layer
         x = self.fc3(x)
         x = self.norm3(x)
-        x = F.relu(x)
+        x = F.leaky_relu(x)
         x = self.dropout(x)
         
         # Fourth layer
         x = self.fc4(x)
         x = self.norm4(x)
-        x = F.relu(x)
+        x = F.leaky_relu(x)
         x = self.dropout(x)
         
         # Fifth layer
         x = self.fc5(x)
         x = self.norm5(x)
-        x = F.relu(x)
-        """
+        x = F.leaky_relu(x)
         
         # Output layer
         x = self.fc_out(x)

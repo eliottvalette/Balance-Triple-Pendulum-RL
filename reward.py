@@ -14,11 +14,11 @@ class RewardManager:
         # Reward weights
         # -----------------------
         self.cart_position_weight = 0.30
-        self.termination_penalty = 10
+        self.termination_penalty = 100
         self.alignement_weight = 2.0
         self.upright_weight = 1.5
         self.stability_weight = 0.02  # Weight for the stability reward
-        self.mse_weight = 0.0  # Weight for the MSE penalty
+        self.mse_weight = 0.3  # Weight for the MSE penalty
         
         # -----------------------
         # Upright tracking parameters
@@ -37,16 +37,18 @@ class RewardManager:
         # -----------------------
         self.old_points_positions = None
         self.cached_velocity = 0
+        self.update_step = 0
         
         # -----------------------
         # Target state
         # -----------------------
-        self.aim_position_state = [0.0, 0.0, 0.0, np.pi,
-                                 0.0, 0.0, np.pi, 0.0,
-                                 0.0, np.pi, 0.0, 0.0,
-                                 0.5, 0.5, 0.5, 0.41,
-                                 0.5, 0.33333333, 0.5, 0.25,
-                                 0.0, 0.0, 0.0, 0.0]
+        self.aim_position_state = [ 0.0,  np.pi/2,  np.pi/2,  np.pi/2,
+                                    0.0, 0.0, 0.0, 0.0,
+                                    0.0, 0.33, 0.0, 0.66,
+                                    0.0, 1.0, 0.0, 0.0,
+                                    0.0, 0.0, 0.0, 0.0,
+                                    0.5,  1.0,  0.0,  0.0,
+                                    0.0,  1.0,  1.0]
         
         # -----------------------
         # DEBUG
@@ -84,8 +86,9 @@ class RewardManager:
         end_node_y = y3 if self.num_nodes == 3 else y2 if self.num_nodes == 2 else y1
 
         # ----------------------- REWARD COMPONENTS -----------------------
-        if self.old_points_positions is None:
-            self.old_points_positions = [x1, y1, x2, y2, x3, y3]
+        if current_step == 0 and self.update_step == 0:
+            self.old_points_positions = [x, x1, y1, x2, y2, x3, y3]
+            self.update_step = current_step
         
         # ----------------------- CART POSITION REWARD -----------------------
         x_penalty = self.cart_position_weight * (abs(x)) **2
@@ -127,29 +130,41 @@ class RewardManager:
         angular_velocity_penalty = (u1**2 + u2**2 + u3**2) / 3.0
 
         # ----------------------- POINTS VELOCITY -----------------------
-        points_velocity = ((abs(x3 - self.old_points_positions[4]) + abs(y3 - self.old_points_positions[5]))) ** 0.2
+        points_velocity = ((abs(x3 - self.old_points_positions[5]) + abs(y3 - self.old_points_positions[6]))) ** 0.2
         if points_velocity == 0:
             points_velocity = self.cached_velocity
         else:
             self.cached_velocity = points_velocity
 
-        self.old_points_positions = [x1, y1, x2, y2, x3, y3]
-
         stability_penalty = self.stability_weight * (angular_velocity_penalty + points_velocity)
 
         # ----------------------- MSE PENALTY -----------------------
         mse_sum = 0
-        # Handle non-angular components (positions and velocities)
-        for i in range(len(state)):
-            if i in [3, 6, 9]: # angles
-                mse_sum += np.sqrt((abs(state[i]) - self.aim_position_state[i]) ** 2)
-            elif i in [0, 12, 13, 14, 15, 16, 17, 18, 19] : # absolute positions
-                mse_sum += (state[i] - self.aim_position_state[i]) ** 2
+        for idx, component in enumerate(self.aim_position_state):
+            if idx in [0, 9, 11, 13]:
+                importance_coef = 5.0
+            else:
+                importance_coef = 0.0
+            if idx < len(state):
+                mse_sum += (state[idx] - component) ** 2 * importance_coef
         
         mse_penalty = self.mse_weight * (mse_sum / len(state))
 
+        # ----------------------- RIGHT PATH REWARD -----------------------
+        aim_y = 0.33 * self.num_nodes
+        aim_x = 0.0
+        previous_x = self.old_points_positions[0]
+        previous_y = self.old_points_positions[2 * self.num_nodes]
+        previous_dist_x = abs(aim_x - previous_x)
+        previous_dist_y = abs(aim_y - previous_y)
+        current_dist_x = abs(aim_x - x)
+        current_dist_y = abs(aim_y - end_node_y)
+        direction_reward_y = previous_dist_y - current_dist_y
+        direction_reward_x = previous_dist_x - current_dist_x
+        right_path_reward = (direction_reward_y + direction_reward_x) * 20 + (2 - current_dist_y - current_dist_x)
+
         # ----------------------- REWARD -----------------------
-        reward = upright_reward - x_penalty - non_alignement_penalty - stability_penalty - mse_penalty
+        reward = upright_reward + right_path_reward - x_penalty - non_alignement_penalty - stability_penalty - mse_penalty
 
         
         if not self.have_been_upright_once and end_node_y > self.upright_threshold:
@@ -159,19 +174,18 @@ class RewardManager:
             self.came_back_down = True
         
         if self.have_been_upright_once and self.came_back_down:
-            reward = -10
+            reward -= 1
             self.steps_double_down += 1
         
-
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
-        
-        # ----------------------- REAL REWARD -----------------------
-        aim_y = -0.33 * self.num_nodes
-        real_reward = 2 - ((abs(aim_y - end_node_y) / aim_y) +(abs(x) / 1.6))
-                   
-        return real_reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated
+
+        if current_step == self.update_step + 1:
+            self.old_points_positions = [x, x1, y1, x2, y2, x3, y3]
+            self.update_step = current_step
+
+        return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated
     
     def get_reward_components(self, state, current_step):
         reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, force_terminated = self.calculate_reward(state, False, current_step)
@@ -198,3 +212,4 @@ class RewardManager:
         self.steps_double_down = 0
         self.force_terminated = False
         self.cached_velocity = 0
+        self.update_step = 0

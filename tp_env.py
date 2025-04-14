@@ -132,7 +132,7 @@ class TriplePendulumEnv:
     def reset(self):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
-        angles_initiaux = -pi / 2
+        angles_initiaux = - pi / 2
         vitesses_initiales = 1e-3
         state = hstack((
             position_initiale_chariot,
@@ -224,7 +224,7 @@ class TriplePendulumEnv:
         ))
         
         # Utilisation de l'état temporaire pour calculer les récompenses
-        reward_components = self.reward_manager.get_reward_components(temp_state, 0)
+        reward_components = self.reward_manager.get_reward_components(temp_state, self.num_steps)
         x_penalty = reward_components['x_penalty'] / 100
         upright_reward = reward_components['upright_reward'] / 100
         non_alignement_penalty = reward_components['non_alignement_penalty'] / 100
@@ -264,6 +264,11 @@ class TriplePendulumEnv:
         """
         if self.current_state is None:
             self.reset()
+        
+        if (self.current_state[0] > 1.6 and action > 0) :
+            action = -0.1
+        elif (self.current_state[0] < -1.6 and action < 0):
+            action = 0.1
             
         self.applied_force = action
         
@@ -297,7 +302,7 @@ class TriplePendulumEnv:
         
         return self.get_state(), terminated
         
-    def render(self, episode = 0, epsilon = 0):
+    def render(self, episode = 0, epsilon = 0, current_step = 0):
         """
         Affiche l'état actuel du pendule.
         """
@@ -388,7 +393,7 @@ class TriplePendulumEnv:
                 ))
                 
                 # Récupérer les composants de récompense
-                reward_components = self.reward_manager.get_reward_components(temp_state, 0)
+                reward_components = self.reward_manager.get_reward_components(temp_state, current_step)
                 
                 # Dessiner un conteneur pour les récompenses
                 reward_panel_width = 300
@@ -594,7 +599,7 @@ class TriplePendulumEnv:
             next_state, terminated = self.step(self.applied_force)
             
             # Rendu avec informations sur l'épisode et epsilon
-            if not self.render(episode=episode, epsilon=epsilon):
+            if not self.render(episode=episode, epsilon=epsilon, current_step=self.num_steps):
                 break
 
             if terminated:

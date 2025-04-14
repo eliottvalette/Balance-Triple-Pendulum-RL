@@ -103,12 +103,13 @@ class TriplePendulumTrainer:
         self.reward_manager.reset()
         
         while not done and num_steps < self.max_steps:
+            state = self.env.get_state()
             state_tensor = torch.FloatTensor(state)
             
             # Exploration: ajouter du bruit gaussien à la sortie de l'acteur
             with torch.no_grad():
                 action = self.actor(state_tensor).squeeze().numpy()
-            noise = np.random.normal(0, self.epsilon, size=action.shape)
+            noise = np.random.normal(0, self.epsilon * 0.1, size=action.shape)
             action = action + noise
 
             # Take step in environment

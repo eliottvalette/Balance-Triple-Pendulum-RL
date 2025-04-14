@@ -165,7 +165,6 @@ class RewardManager:
 
         # ----------------------- REWARD -----------------------
         reward = upright_reward + right_path_reward - x_penalty - non_alignement_penalty - stability_penalty - mse_penalty
-
         
         if not self.have_been_upright_once and end_node_y > self.upright_threshold:
             self.have_been_upright_once = True

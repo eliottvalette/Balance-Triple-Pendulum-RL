@@ -93,16 +93,28 @@ class TriplePendulumCritic(nn.Module):
         self.input_norm = nn.LayerNorm(state_dim + action_dim)
         
         # First layer
-        self.fc1 = nn.Linear(state_dim + action_dim, action_dim * 32)
+        self.fc1 = nn.Linear(state_dim + action_dim, hidden_dim // 2)
         nn.init.orthogonal_(self.fc1.weight, gain=1.414)
         nn.init.constant_(self.fc1.bias, 0)
-        self.norm1 = nn.LayerNorm(action_dim * 32)
+        self.norm1 = nn.LayerNorm(hidden_dim // 2)
         
         # Second layer
-        self.fc2 = nn.Linear(action_dim * 32, action_dim * 8)
+        self.fc2 = nn.Linear(hidden_dim // 2, hidden_dim // 4)
         nn.init.orthogonal_(self.fc2.weight, gain=1.414)
         nn.init.constant_(self.fc2.bias, 0)
-        self.norm2 = nn.LayerNorm(action_dim * 8)
+        self.norm2 = nn.LayerNorm(hidden_dim // 4)
+
+        # Third layer
+        self.fc3 = nn.Linear(hidden_dim // 4 , action_dim * 32)
+        nn.init.orthogonal_(self.fc3.weight, gain=1.414)
+        nn.init.constant_(self.fc3.bias, 0)
+        self.norm3 = nn.LayerNorm(action_dim * 32)
+
+        # Fourth layer
+        self.fc4 = nn.Linear(action_dim * 32, action_dim * 8)
+        nn.init.orthogonal_(self.fc4.weight, gain=1.414)
+        nn.init.constant_(self.fc4.bias, 0)
+        self.norm4 = nn.LayerNorm(action_dim * 8)
         
         # Output layer
         self.fc_out = nn.Linear(action_dim * 8, 1)
@@ -127,6 +139,18 @@ class TriplePendulumCritic(nn.Module):
         # Second layer
         x = self.fc2(x)
         x = self.norm2(x)
+        x = F.leaky_relu(x)
+        x = self.dropout(x)
+
+        # Third layer
+        x = self.fc3(x)
+        x = self.norm3(x)
+        x = F.leaky_relu(x)
+        x = self.dropout(x)
+
+        # Fourth layer
+        x = self.fc4(x)
+        x = self.norm4(x)
         x = F.leaky_relu(x)
         x = self.dropout(x)
         

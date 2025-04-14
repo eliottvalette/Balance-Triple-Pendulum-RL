@@ -56,7 +56,7 @@ class TriplePendulumEnv:
         self.BACKGROUND_COLOR = (240, 240, 245)
         self.CART_COLOR = (50, 50, 60)
         self.TRACK_COLOR = (180, 180, 190)
-        self.PENDULUM_COLORS = [(220, 60, 60), (60, 180, 60), (60, 60, 220)]
+        self.PENDULUM_COLORS = [(220, 60, 60), (60, 180, 60)]
         self.TEXT_COLOR = (60, 60, 70)
         self.GRID_COLOR = (210, 210, 215)
     
@@ -133,11 +133,12 @@ class TriplePendulumEnv:
     def reset(self):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
-        angles_initiaux = rd.uniform(-pi, pi)
+        rd_angle = -pi/2
+        angles_initiaux = [rd_angle] + [rd_angle] * (len(self.positions) - 2)
         vitesses_initiales = 1e-3
         state = hstack((
             position_initiale_chariot,
-            angles_initiaux * ones(len(self.positions) - 1),
+            angles_initiaux,
             vitesses_initiales * ones(len(self.velocities))
         ))
         self.current_state = state.copy()  # On stocke l'état courant
@@ -274,7 +275,9 @@ class TriplePendulumEnv:
         elif (self.current_state[0] < -1.65 and action < 0):
             action = 0.1
             
-        self.applied_force = action
+        # Appliquer le lissage à la force
+        force_smoothing = 0.1
+        self.applied_force += force_smoothing * (action - self.applied_force)
         
         # Calcul du nouvel état
         state_derivative = self.rhs(self.current_state, self.current_time, self.parameter_vals, lambda state: self.applied_force)
@@ -362,13 +365,14 @@ class TriplePendulumEnv:
         for joint in range(1, num_joints):
             pendulum_x_positions[joint] = pendulum_x_positions[joint - 1] + self.arm_length * cos(self.current_state[joint])
             pendulum_y_positions[joint] = pendulum_y_positions[joint - 1] + self.arm_length * sin(self.current_state[joint])
-        
-        current_angle = self.current_state[1]
-        color_index = min(2, int(abs(current_angle) / (pi/2)))
-        
+                
         for i in range(num_joints - 1):
             start_x, start_y = self._convert_to_screen_coords(pendulum_x_positions[i], pendulum_y_positions[i])
             end_x, end_y = self._convert_to_screen_coords(pendulum_x_positions[i+1], pendulum_y_positions[i+1])
+            if end_y > self.height//2:
+                color_index = 0
+            else :
+                color_index = 1
             pygame.draw.line(self.screen, self.PENDULUM_COLORS[color_index], (start_x, start_y), (end_x, end_y), 4)
             pygame.draw.circle(self.screen, (90, 90, 100), (end_x, end_y), 8)
             pygame.draw.circle(self.screen, (30, 30, 40), (end_x, end_y), 8, 1)
@@ -542,7 +546,7 @@ class TriplePendulumEnv:
         if self.current_state is None:
             self.reset()
         
-        force_increment = 0.3
+        force_increment = 0.5
         target_force = 0.0
         force_smoothing = 0.1
         running = True

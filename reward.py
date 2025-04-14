@@ -23,7 +23,7 @@ class RewardManager:
         # -----------------------
         # Upright tracking parameters
         # -----------------------
-        self.upright_threshold = 0.10  # Threshold for considering pendulum upright
+        self.upright_threshold = 0.20 * self.num_nodes # Threshold for considering pendulum upright
         self.consecutive_upright_steps = 0  # Track consecutive steps with pendulum upright
         self.exponential_base = 1.15  # Base for exponential reward
         self.max_exponential = 3.0  # Maximum exponential multiplier

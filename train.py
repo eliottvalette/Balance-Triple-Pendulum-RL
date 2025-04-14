@@ -40,7 +40,7 @@ class TriplePendulumTrainer:
         self.env.reset()
         self.old_state = self.env.get_state()
         initial_state = self.env.get_state()
-        state_dim = len(initial_state * 2)
+        state_dim = len(initial_state) * 2
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim, config['hidden_dim'])
         self.critic = TriplePendulumCritic(state_dim, action_dim, config['hidden_dim'])
@@ -114,7 +114,7 @@ class TriplePendulumTrainer:
             
             if rd.random() < self.epsilon:
                 noise = np.random.normal(0, self.epsilon * 0.5, size=action.shape)
-                action = action + noise
+                action = np.clip(action + noise, -1, 1)
 
             # Take step in environment
             next_state, terminated = self.env.step(action)
@@ -271,7 +271,7 @@ class TriplePendulumTrainer:
         # Sauvegarde supplémentaire avec numéro d'épisode pour suivre l'évolution
         episode_num = len(self.metrics.metrics['episode_reward'])
         if episode_num > 0 and episode_num % 1000 == 0:  # Sauvegarde tous les 1000 épisodes
-            checkpoint_path = f"models/checkpoint_episode_{episode_num}"
+            checkpoint_path = f"models/checkpoint"
             torch.save(self.actor.state_dict(), checkpoint_path + '_actor.pth')
             torch.save(self.critic.state_dict(), checkpoint_path + '_critic.pth')
 

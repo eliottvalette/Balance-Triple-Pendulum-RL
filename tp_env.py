@@ -133,7 +133,7 @@ class TriplePendulumEnv:
     def reset(self):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
-        angles_initiaux = rd.uniform(0, pi)
+        angles_initiaux = rd.uniform(-pi, pi)
         vitesses_initiales = 1e-3
         state = hstack((
             position_initiale_chariot,
@@ -224,12 +224,23 @@ class TriplePendulumEnv:
             position_x1, position_y1, position_x2, position_y2, position_x3, position_y3
         ))
         
+        
+
+
+        # ---------------- Reward Components -----------------------
+        reward_components = self.reward_manager.get_reward_components(temp_state, self.num_steps)
+        reward_components = self.reward_manager.get_reward_components(temp_state, 0)
+        x_penalty = reward_components['x_penalty']
+        upright_reward = reward_components['upright_reward']
+        non_alignement_penalty = reward_components['non_alignement_penalty']
+        stability_penalty = reward_components['stability_penalty']
+        mse_penalty = reward_components['mse_penalty']
         consecutive_upright_steps = self.reward_manager.consecutive_upright_steps / 150
         have_been_upright_once = self.reward_manager.have_been_upright_once
         came_back_down = self.reward_manager.came_back_down
         steps_double_down = self.reward_manager.steps_double_down / 150
-
-        # ------- Indicators -------
+        
+        # -------------------- Indicators --------------------------
         near_border = (abs(adapted_state[0]) > 1.6)
         end_node_y = position_y3 if self.n == 3 else position_y2 if self.n == 2 else position_y1
         end_node_upright = (end_node_y > self.reward_manager.upright_threshold)
@@ -238,6 +249,7 @@ class TriplePendulumEnv:
         state_with_positions = np.hstack((
             adapted_state,
             position_x1, position_y1, position_x2, position_y2, position_x3, position_y3,
+            x_penalty, upright_reward, non_alignement_penalty, stability_penalty, mse_penalty,
             consecutive_upright_steps, have_been_upright_once, came_back_down, steps_double_down,
             near_border, end_node_y, end_node_upright
         ))

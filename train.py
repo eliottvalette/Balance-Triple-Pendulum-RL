@@ -38,8 +38,9 @@ class TriplePendulumTrainer:
         # Ajustement de la dimension d'état en fonction de l'environnement réel
         # Ici, la dimension est basée sur la taille de l'état retourné par reset()
         self.env.reset()
+        self.old_state = self.env.get_state()
         initial_state = self.env.get_state()
-        state_dim = len(initial_state)
+        state_dim = len(initial_state * 2)
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim, config['hidden_dim'])
         self.critic = TriplePendulumCritic(state_dim, action_dim, config['hidden_dim'])
@@ -92,8 +93,7 @@ class TriplePendulumTrainer:
         return normalized_reward * self.reward_scale
 
     def collect_trajectory(self, episode):
-        state = self.env.reset()
-        state = self.env.get_state()
+        self.env.reset()
         done = False
         trajectory = []
         episode_reward = 0
@@ -104,12 +104,13 @@ class TriplePendulumTrainer:
         self.reward_manager.reset()
         
         while not done and num_steps < self.max_steps:
-            state = self.env.get_state()
-            state_tensor = torch.FloatTensor(state)
+            current_state = self.env.get_state()
+            old_and_current_state = np.concatenate((self.old_state, current_state))
+            old_and_current_state_tensor = torch.FloatTensor(old_and_current_state)
             
             # Exploration: ajouter du bruit gaussien à la sortie de l'acteur
             with torch.no_grad():
-                action = self.actor(state_tensor).squeeze().numpy()
+                action = self.actor(old_and_current_state_tensor).squeeze().numpy()
             
             if rd.random() < self.epsilon:
                 noise = np.random.normal(0, self.epsilon * 0.5, size=action.shape)
@@ -135,15 +136,17 @@ class TriplePendulumTrainer:
             reward_components = self.reward_manager.get_reward_components(next_state, num_steps)
             
             # Store transition in replay buffer with normalized reward
-            next_state_tensor = torch.FloatTensor(next_state)  # Convert to tensor
+            current_and_next_state = np.concatenate((current_state, next_state))
+            current_and_next_state_tensor = torch.FloatTensor(current_and_next_state)  # Convert to tensor
 
             # Stocker dans le buffer de replay
-            self.memory.push(state_tensor, action, custom_reward, next_state_tensor, terminated)
+            self.memory.push(old_and_current_state_tensor, action, custom_reward, current_and_next_state_tensor, terminated)
             
-            trajectory.append((state_tensor, action, custom_reward, next_state_tensor, terminated))
+            trajectory.append((old_and_current_state_tensor, action, custom_reward, current_and_next_state_tensor, terminated))
             episode_reward += custom_reward
             self.total_steps += 1
             num_steps += 1
+            self.old_state = current_state
 
             if terminated or force_terminated:
                 done = True

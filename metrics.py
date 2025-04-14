@@ -262,7 +262,7 @@ class MetricsTracker:
         plt.title('Distribution des actions générées par le modèle d\'acteur')
         plt.xlabel('Action')
         plt.ylabel('Fréquence')
-        plt.xlim(-1, 1)
+        plt.xlim(max(-1, min(actions_np) - 0.2), min(max(actions_np) + 0.2, 1))
 
         # Distribution des valeurs Q
         plt.subplot(2, 1, 2)
@@ -270,7 +270,6 @@ class MetricsTracker:
         plt.title('Distribution des valeurs Q générées par le modèle de critique')
         plt.xlabel('Valeur Q')
         plt.ylabel('Fréquence')
-        plt.xlim(-1, 1)
         
         plt.tight_layout()
         

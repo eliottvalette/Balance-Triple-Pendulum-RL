@@ -54,8 +54,8 @@ class TriplePendulumTrainer:
         
         # Exploration parameters
         self.epsilon = 1.0  # Initial random action probability
-        self.epsilon_decay = 0.995  # Epsilon decay rate - ralenti la décroissance
-        self.min_epsilon = 0.05  # Minimum epsilon - augmenté pour maintenir l'exploration
+        self.epsilon_decay = 0.999  # Epsilon decay rate
+        self.min_epsilon = 0.001  # Minimum epsilon
         
         # Replay buffer
         self.memory = ReplayBuffer(capacity=config['buffer_capacity'])
@@ -171,13 +171,9 @@ class TriplePendulumTrainer:
         current_q = self.critic(states, actions)
         with torch.no_grad():
             next_actions = self.actor(next_states)
-            # Ajout de bruit target pour stabiliser l'apprentissage
-            noise = torch.clamp(torch.randn_like(next_actions) * 0.1, -0.2, 0.2)
-            next_actions = torch.clamp(next_actions + noise, -1, 1)
             target_q = rewards + (1 - dones) * self.config['gamma'] * self.critic(next_states, next_actions)
         
-        # Utiliser Huber Loss au lieu de MSE pour être plus robuste aux valeurs aberrantes
-        critic_loss = F.smooth_l1_loss(current_q, target_q)
+        critic_loss = F.mse_loss(current_q, target_q)
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         # Add gradient clipping for critic

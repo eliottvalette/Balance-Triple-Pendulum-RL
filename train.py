@@ -2,6 +2,7 @@ import gym
 import torch
 import pygame
 import numpy as np
+import random as rd
 from tp_env import TriplePendulumEnv
 from model import TriplePendulumActor, TriplePendulumCritic
 from reward import RewardManager
@@ -109,8 +110,10 @@ class TriplePendulumTrainer:
             # Exploration: ajouter du bruit gaussien à la sortie de l'acteur
             with torch.no_grad():
                 action = self.actor(state_tensor).squeeze().numpy()
-            noise = np.random.normal(0, self.epsilon * 0.1, size=action.shape)
-            action = action + noise
+            
+            if rd.random() < self.epsilon:
+                noise = np.random.normal(0, self.epsilon * 0.5, size=action.shape)
+                action = action + noise
 
             # Take step in environment
             next_state, terminated = self.env.step(action)

@@ -4,11 +4,11 @@ config = {
     'critic_lr': 3e-4,
     'gamma': 0.99,
     'batch_size': 64,
-    'hidden_dim': 128,
+    'hidden_dim': 512,
     'buffer_capacity': 100000,
     'updates_per_episode': 10,
-    'load_models': False,
+    'load_models': True,
     'num_nodes': 1,
     'seq_length': 1,
-    'gravity': 1.0
+    'gravity': 2.0
 }

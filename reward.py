@@ -13,7 +13,7 @@ class RewardManager:
         # -----------------------
         # Reward weights
         # -----------------------
-        self.cart_position_weight = 0.30
+        self.cart_position_weight = 0.60
         self.termination_penalty = 100
         self.alignement_weight = 2.0
         self.upright_weight = 1.5
@@ -151,7 +151,7 @@ class RewardManager:
         mse_penalty = self.mse_weight * (mse_sum / len(state))
 
         # ----------------------- RIGHT PATH REWARD -----------------------
-        aim_y = 0.33 * self.num_nodes
+        aim_y = - 0.33 * self.num_nodes
         aim_x = 0.0
         previous_x = self.old_points_positions[0]
         previous_y = self.old_points_positions[2 * self.num_nodes]
@@ -173,9 +173,9 @@ class RewardManager:
             self.came_back_down = True
         
         if self.have_been_upright_once and self.came_back_down:
-            reward -= 1
             self.steps_double_down += 1
-        
+            reward -= 10
+
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty

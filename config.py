@@ -8,9 +8,9 @@ config = {
     'buffer_capacity': 100000,
     'updates_per_episode': 10,
     'load_models': True,
-    'num_nodes': 2,
+    'num_nodes': 1,
     'seq_length': 1,
-    'gravity': 2.0,
+    'gravity': 1.0,
     
     # Options de visualisation et de plots
     'plot_config': {

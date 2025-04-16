@@ -224,9 +224,6 @@ class TriplePendulumEnv:
             adapted_state,
             position_x1, position_y1, position_x2, position_y2, position_x3, position_y3
         ))
-        
-        
-
 
         # ---------------- Reward Components -----------------------
         reward_components = self.reward_manager.get_reward_components(temp_state, self.num_steps)
@@ -244,7 +241,7 @@ class TriplePendulumEnv:
         # -------------------- Indicators --------------------------
         near_border = (abs(adapted_state[0]) > 1.6)
         end_node_y = position_y3 if self.n == 3 else position_y2 if self.n == 2 else position_y1
-        end_node_upright = (end_node_y > self.reward_manager.upright_threshold)
+        end_node_upright = (end_node_y > self.reward_manager.upright_threshold * self.reward_manager.threshold_ratio)
         
         # Ajouter les positions x et y à l'état
         state_with_positions = np.hstack((

@@ -13,7 +13,7 @@ class RewardManager:
         # -----------------------
         # Reward weights
         # -----------------------
-        self.cart_position_weight = 0.60
+        self.cart_position_weight = 0.20
         self.termination_penalty = 1
         self.alignement_weight = 2.0
         self.upright_weight = 1.5
@@ -36,7 +36,7 @@ class RewardManager:
         # -----------------------
         # Real Reward Components
         # -----------------------
-        self.threshold_ratio = 0.95  # 95% of pendulum length (as per the formula)
+        self.threshold_ratio = 0.9  # 90% of pendulum length (as per the formula)
         self.time_over_threshold = 0
         self.prev_output = None
         self.output_deltas = []
@@ -159,43 +159,35 @@ class RewardManager:
         
         mse_penalty = self.mse_weight * (mse_sum / len(state))
 
-        # ----------------------- RIGHT PATH REWARD -----------------------
-        aim_y = - 0.33 * self.num_nodes
-        aim_x = 0.0
-        previous_x = self.old_points_positions[0]
-        previous_y = self.old_points_positions[2 * self.num_nodes]
-        previous_dist_x = abs(aim_x - previous_x)
-        previous_dist_y = abs(aim_y - previous_y)
-        current_dist_x = abs(aim_x - x)
-        current_dist_y = abs(aim_y - end_node_y)
-        direction_reward_y = previous_dist_y - current_dist_y
-        direction_reward_x = previous_dist_x - current_dist_x
-        right_path_reward = (direction_reward_y + direction_reward_x) * 20 + (2 - current_dist_y - current_dist_x)
-
         # ----------------------- REAL REWARD -----------------------
         threshold = self.length * self.threshold_ratio
 
         # Track time over threshold
         if end_node_y > threshold:
-            self.time_over_threshold += 1  # Assuming 1 unit per frame
+            self.time_over_threshold += 1
+        else:
+            self.time_over_threshold = 0
 
-        # Compute smoothness: sum of absolute differences
+        # Track smoothness with exponential moving average of variation
         if self.prev_output is not None:
-            self.output_deltas.append(abs(end_node_y - self.prev_output))
+            delta = abs(end_node_y - self.prev_output)
+            self.smoothed_variation = 0.9 * self.smoothed_variation + 0.1 * delta
+        else:
+            self.smoothed_variation = 0.0
+
         self.prev_output = end_node_y
 
         # Compute the score
-        denominator = 1 + sum(self.output_deltas)
-        reward = self.time_over_threshold / denominator if denominator != 0 else 0
+        reward = self.time_over_threshold / (1 + self.smoothed_variation) 
+
+        # Normalize reward
+        reward = np.minimum((reward / 100) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)), 10)
+
 
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
-
-        if current_step == self.update_step + 1:
-            self.old_points_positions = [x, x1, y1, x2, y2, x3, y3]
-            self.update_step = current_step
-
+        
         return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated
     
     def get_reward_components(self, state, current_step):
@@ -216,7 +208,6 @@ class RewardManager:
 
     def reset(self):
         """Reset the reward manager state"""
-        self.old_points_positions = None
         self.consecutive_upright_steps = 0
         self.have_been_upright_once = False
         self.came_back_down = False
@@ -224,3 +215,7 @@ class RewardManager:
         self.force_terminated = False
         self.cached_velocity = 0
         self.update_step = 0
+        self.smoothed_smoothness = 0.0
+        self.prev_output = None
+        self.time_over_threshold = 0
+        self.output_deltas = []

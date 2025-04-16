@@ -35,7 +35,7 @@ class TriplePendulumActor(nn.Module):
         self.norm4 = nn.LayerNorm(hidden_dim//8)
         
         # Fifth layer
-        self.fc5 = nn.Linear(hidden_dim//8, action_dim * 4)
+        self.fc5 = nn.Linear(hidden_dim//8 + state_dim, action_dim * 4)
         nn.init.orthogonal_(self.fc5.weight, gain=1.414)
         nn.init.constant_(self.fc5.bias, 0)
         self.norm5 = nn.LayerNorm(action_dim * 4)
@@ -49,6 +49,8 @@ class TriplePendulumActor(nn.Module):
         self.dropout = nn.Dropout(p=0.1)
         
     def forward(self, x):
+        saved_input = x
+
         # Normalize input
         x = self.input_norm(x)
         
@@ -76,7 +78,8 @@ class TriplePendulumActor(nn.Module):
         x = F.leaky_relu(x)
         x = self.dropout(x)
         
-        # Fifth layer
+        # Fifth layer (with skip connection)
+        x = torch.cat([x, saved_input], dim=len(x.shape) - 1)
         x = self.fc5(x)
         x = self.norm5(x)
         x = F.leaky_relu(x)
@@ -111,7 +114,7 @@ class TriplePendulumCritic(nn.Module):
         self.norm3 = nn.LayerNorm(action_dim * 32)
 
         # Fourth layer
-        self.fc4 = nn.Linear(action_dim * 32, action_dim * 8)
+        self.fc4 = nn.Linear(action_dim * 32 + state_dim, action_dim * 8)
         nn.init.orthogonal_(self.fc4.weight, gain=1.414)
         nn.init.constant_(self.fc4.bias, 0)
         self.norm4 = nn.LayerNorm(action_dim * 8)
@@ -125,6 +128,7 @@ class TriplePendulumCritic(nn.Module):
         self.dropout = nn.Dropout(p=0.1)
         
     def forward(self, state, action):
+        saved_input = state
         x = torch.cat([state, action], dim=1)
         
         # Normalize input
@@ -148,7 +152,8 @@ class TriplePendulumCritic(nn.Module):
         x = F.leaky_relu(x)
         x = self.dropout(x)
 
-        # Fourth layer
+        # Fourth layer (with skip connection)
+        x = torch.cat([x, saved_input], dim=1)
         x = self.fc4(x)
         x = self.norm4(x)
         x = F.leaky_relu(x)

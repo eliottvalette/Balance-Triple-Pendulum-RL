@@ -8,13 +8,13 @@ class RewardManager:
         # Configuration
         # -----------------------
         self.num_nodes = config['num_nodes']
-        self.length = 0.5  # Pendulum length
+        self.length = 0.33  # Pendulum length
         
         # -----------------------
         # Reward weights
         # -----------------------
         self.cart_position_weight = 0.60
-        self.termination_penalty = 100
+        self.termination_penalty = 1
         self.alignement_weight = 2.0
         self.upright_weight = 1.5
         self.stability_weight = 0.02  # Weight for the stability reward
@@ -32,7 +32,15 @@ class RewardManager:
         self.steps_double_down = 0
         self.force_terminated = False
         self.first_step_above_threshold = None
-        
+
+        # -----------------------
+        # Real Reward Components
+        # -----------------------
+        self.threshold_ratio = 0.95  # 95% of pendulum length (as per the formula)
+        self.time_over_threshold = 0
+        self.prev_output = None
+        self.output_deltas = []
+
         # -----------------------
         # State tracking
         # -----------------------
@@ -57,7 +65,7 @@ class RewardManager:
         self.old_angles = [0.0, 0.0, 0.0]
         self.old_alignement_penalty = None
 
-    def calculate_reward_complex(self, state, terminated, current_step):
+    def calculate_reward(self, state, terminated, current_step):
         """
         Calculate the reward based on the current state and termination status.
         
@@ -164,18 +172,21 @@ class RewardManager:
         direction_reward_x = previous_dist_x - current_dist_x
         right_path_reward = (direction_reward_y + direction_reward_x) * 20 + (2 - current_dist_y - current_dist_x)
 
-        # ----------------------- REWARD -----------------------
-        reward = upright_reward + right_path_reward - x_penalty - non_alignement_penalty - stability_penalty - mse_penalty
-        
-        if not self.have_been_upright_once and end_node_y > self.upright_threshold:
-            self.have_been_upright_once = True
+        # ----------------------- REAL REWARD -----------------------
+        threshold = self.length * self.threshold_ratio
 
-        if self.have_been_upright_once and end_node_y < self.upright_threshold - 0.10:
-            self.came_back_down = True
-        
-        if self.have_been_upright_once and self.came_back_down:
-            self.steps_double_down += 1
-            reward -= 10
+        # Track time over threshold
+        if end_node_y > threshold:
+            self.time_over_threshold += 1  # Assuming 1 unit per frame
+
+        # Compute smoothness: sum of absolute differences
+        if self.prev_output is not None:
+            self.output_deltas.append(abs(end_node_y - self.prev_output))
+        self.prev_output = end_node_y
+
+        # Compute the score
+        denominator = 1 + sum(self.output_deltas)
+        reward = self.time_over_threshold / denominator if denominator != 0 else 0
 
         # Apply termination penalty
         if terminated:
@@ -184,53 +195,6 @@ class RewardManager:
         if current_step == self.update_step + 1:
             self.old_points_positions = [x, x1, y1, x2, y2, x3, y3]
             self.update_step = current_step
-
-        return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated
-    
-    def calculate_reward(self, state, terminated, current_step):
-        """
-        Calculate the reward based on the current state and termination status.
-        
-        Args:
-            state: [x, q1, q2, q3, u1, u2, u3, f, x1, y1, x2, y2, x3, y3]
-            terminated (bool): Whether the episode has terminated due to constraints violation
-        
-        Returns:
-            float: The calculated reward value
-        """
-        # ----------------------- SET UPS -----------------------
-        x = state[0]
-        q1 = state[1]
-        q2 = state[2]
-        q3 = state[3]
-        u1 = state[4]
-        u2 = state[5]
-        u3 = state[6]
-        f = state[7]
-        x1 = state[8]
-        y1 = state[9]
-        x2 = state[10]
-        y2 = state[11]
-        x3 = state[12]
-        y3 = state[13]
-
-        end_node_y = y3 if self.num_nodes == 3 else y2 if self.num_nodes == 2 else y1
-
-        if self.first_step_above_threshold is None and end_node_y > self.upright_threshold and current_step != self.update_step:
-            self.update_step = current_step
-            self.first_step_above_threshold = current_step
-
-        reward = 0
-        if self.first_step_above_threshold is not None:
-            if end_node_y > self.upright_threshold and current_step - self.first_step_above_threshold == 10:
-                reward = 1
-                print(f'Reward: {reward}')
-                self.first_step_above_threshold = current_step
-            
-            if end_node_y <= self.upright_threshold:
-                self.first_step_above_threshold = None
-
-        upright_reward = x_penalty = non_alignement_penalty = stability_penalty = mse_penalty = 0
 
         return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated
     

@@ -7,10 +7,10 @@ config = {
     'hidden_dim': 512,
     'buffer_capacity': 100000,
     'updates_per_episode': 10,
-    'load_models': True,
+    'load_models': False,
     'num_nodes': 1,
     'seq_length': 1,
-    'gravity': 1.0,
+    'gravity': 9.81,
     
     # Options de visualisation et de plots
     'plot_config': {

@@ -23,7 +23,7 @@ class RewardManager:
         # -----------------------
         # Upright tracking parameters
         # -----------------------
-        self.upright_threshold = 0.20 * self.num_nodes # Threshold for considering pendulum upright
+        self.upright_threshold = 0.25 * self.num_nodes # Threshold for considering pendulum upright
         self.consecutive_upright_steps = 0  # Track consecutive steps with pendulum upright
         self.exponential_base = 1.15  # Base for exponential reward
         self.max_exponential = 3.0  # Maximum exponential multiplier
@@ -36,7 +36,7 @@ class RewardManager:
         # -----------------------
         # Real Reward Components
         # -----------------------
-        self.threshold_ratio = 0.9  # 90% of pendulum length (as per the formula)
+        self.threshold_ratio = 0.95  # 60% of pendulum length (as per the formula)
         self.time_over_threshold = 0
         self.prev_output = None
         self.output_deltas = []
@@ -160,7 +160,7 @@ class RewardManager:
         mse_penalty = self.mse_weight * (mse_sum / len(state))
 
         # ----------------------- REAL REWARD -----------------------
-        threshold = self.length * self.threshold_ratio
+        threshold = self.upright_threshold * self.threshold_ratio
 
         # Track time over threshold
         if end_node_y > threshold:
@@ -181,8 +181,7 @@ class RewardManager:
         reward = self.time_over_threshold / (1 + self.smoothed_variation) 
 
         # Normalize reward
-        reward = np.minimum((reward / 100) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)), 10)
-
+        reward = np.minimum((reward / 50) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)), 10)
 
         # Apply termination penalty
         if terminated:

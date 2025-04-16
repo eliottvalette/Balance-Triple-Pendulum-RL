@@ -206,28 +206,24 @@ class TriplePendulumEnv:
     
     def get_state(self):
         """
-        Renvoie l'état courant du système avec tous les composants, y compris les récompenses.
-        Utilise _calculate_base_state pour éviter la récursion infinie.
+        Renvoie l'état courant du système enrichi avec des combinaisons de features.
         """
         if self.current_state is None:
             return None
-        
+
         # Obtenir l'état de base (positions sans récompenses)
         base_result = self._calculate_base_state()
         if base_result is None:
             return None
-            
+
         adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3 = base_result
-        
-        # Création d'un état temporaire avec les positions calculées pour le reward manager
-        temp_state = np.hstack((
-            adapted_state,
-            position_x1, position_y1, position_x2, position_y2, position_x3, position_y3
-        ))
 
         # ---------------- Reward Components -----------------------
-        reward_components = self.reward_manager.get_reward_components(temp_state, self.num_steps)
-        reward_components = self.reward_manager.get_reward_components(temp_state, 0)
+        reward_components = self.reward_manager.get_reward_components(
+            np.hstack((adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3)),
+            self.num_steps
+        )
+        
         x_penalty = reward_components['x_penalty']
         upright_reward = reward_components['upright_reward']
         non_alignement_penalty = reward_components['non_alignement_penalty']
@@ -237,22 +233,67 @@ class TriplePendulumEnv:
         have_been_upright_once = self.reward_manager.have_been_upright_once
         came_back_down = self.reward_manager.came_back_down
         steps_double_down = self.reward_manager.steps_double_down / 150
-        
-        # -------------------- Indicators --------------------------
-        near_border = (abs(adapted_state[0]) > 1.6)
+        time_over_threshold = self.reward_manager.time_over_threshold / 150
+        smoothed_variation = self.reward_manager.smoothed_variation
+
+        # ----------------- Indicateurs logiques -------------------
+        near_border = float(abs(adapted_state[0]) > 1.6)
         end_node_y = position_y3 if self.n == 3 else position_y2 if self.n == 2 else position_y1
-        end_node_upright = (end_node_y > self.reward_manager.upright_threshold * self.reward_manager.threshold_ratio)
+        end_node_upright = float(end_node_y > self.reward_manager.upright_threshold * self.reward_manager.threshold_ratio)
+
+        # ----------------- Feature Engineering -------------------
+        q1, q2, q3 = adapted_state[1:4]
+        u1, u2, u3 = adapted_state[4:7]
+
+        # Combinaisons d'angles
+        if self.n > 1:
+            sin_diff_12 = np.sin(q1 - q2)
+        else:
+            sin_diff_12 = 0
         
-        # Ajouter les positions x et y à l'état
+        if self.n > 2:
+            cos_sum_23 = np.cos(q2 + q3)
+        else:
+            cos_sum_23 = 0
+
+        # Interaction angle × vitesse
+        if self.n > 1:
+            v1_angle1 = u1 * q1
+        else:
+            v1_angle1 = 0
+
+        if self.n > 2:
+            v2_angle2 = u2 * q2
+        else:
+            v2_angle2 = 0
+
+        # Approximation énergie
+        KE = 0.5 * (u1 ** 2 + u2 ** 2 + u3 ** 2)
+        PE = -GRAVITY * end_node_y
+
+        # Distances inter-masses
+        if self.n > 1:
+            d12 = np.linalg.norm([position_x2 - position_x1, position_y2 - position_y1])
+        else:
+            d12 = 0
+
+        if self.n > 2:
+            d23 = np.linalg.norm([position_x3 - position_x2, position_y3 - position_y2])
+        else:
+            d23 = 0
+        # ----------- Construction finale de l'état ---------------
         state_with_positions = np.hstack((
             adapted_state,
             position_x1, position_y1, position_x2, position_y2, position_x3, position_y3,
             x_penalty, upright_reward, non_alignement_penalty, stability_penalty, mse_penalty,
             consecutive_upright_steps, have_been_upright_once, came_back_down, steps_double_down,
-            near_border, end_node_y, end_node_upright
+            near_border, end_node_y, end_node_upright, time_over_threshold, smoothed_variation,
+            sin_diff_12, cos_sum_23, v1_angle1, v2_angle2,
+            KE, PE, d12, d23
         ))
-        
+
         return state_with_positions
+
 
     def step(self, action=0.0):
         """

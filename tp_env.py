@@ -245,7 +245,7 @@ class TriplePendulumEnv:
         # ----------------- Indicateurs logiques -------------------
         near_border = float(abs(adapted_state[0]) > 1.6)
         end_node_y = position_y3 if self.n == 3 else position_y2 if self.n == 2 else position_y1
-        end_node_upright = float(end_node_y > self.reward_manager.upright_threshold * self.reward_manager.threshold_ratio)
+        end_node_upright = float(end_node_y > self.reward_manager.max_height * self.reward_manager.threshold_ratio)
 
         # ----------------- Feature Engineering -------------------
         q1, q2, q3 = adapted_state[1:4]

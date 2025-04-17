@@ -23,7 +23,7 @@ class RewardManager:
         # -----------------------
         # Upright tracking parameters
         # -----------------------
-        self.upright_threshold = 0.25 * self.num_nodes # Threshold for considering pendulum upright
+        self.max_height = 0.33 * self.num_nodes # Threshold for considering pendulum upright
         self.consecutive_upright_steps = 0  # Track consecutive steps with pendulum upright
         self.exponential_base = 1.15  # Base for exponential reward
         self.max_exponential = 3.0  # Maximum exponential multiplier
@@ -114,7 +114,7 @@ class RewardManager:
         upright_reward = upright_reward_points + upright_reward_angles
 
         # Check if pendulum is upright
-        is_upright = (end_node_y > self.upright_threshold)
+        is_upright = (end_node_y > self.max_height * self.threshold_ratio)
 
         # Update consecutive upright steps
         if is_upright:
@@ -160,10 +160,10 @@ class RewardManager:
         mse_penalty = self.mse_weight * (mse_sum / len(state))
 
         # ----------------------- FAKE REWARD -----------------------
-        fake_reward = upright_reward - mse_penalty - x_penalty - non_alignement_penalty - stability_penalty
+        fake_reward = upright_reward - mse_penalty - non_alignement_penalty - stability_penalty
 
         # ----------------------- REAL REWARD -----------------------
-        threshold = self.upright_threshold * self.threshold_ratio
+        threshold = self.max_height * self.threshold_ratio
 
         # Track time over threshold
         if end_node_y > threshold:

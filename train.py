@@ -60,7 +60,7 @@ class TriplePendulumTrainer:
         
         # Exploration parameters
         self.epsilon = 1.0  # Initial random action probability
-        self.epsilon_decay = 0.9992  # Epsilon decay rate
+        self.epsilon_decay = 0.9985  # Epsilon decay rate
         self.min_epsilon = 0.001  # Minimum epsilon
         
         # Replay buffer
@@ -116,9 +116,8 @@ class TriplePendulumTrainer:
             with torch.no_grad():
                 action = self.actor(old_and_current_state_tensor).squeeze().numpy()
             
-            if rd.random() < self.epsilon:
-                noise = np.random.normal(0, self.epsilon, size=action.shape)
-                action = np.clip(action + noise, -1, 1)
+            noise = np.random.normal(0, self.epsilon)
+            action = np.clip(action + noise, -1, 1)
 
             # Take step in environment
             next_state, terminated = self.env.step(action)

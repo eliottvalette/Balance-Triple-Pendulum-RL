@@ -9,7 +9,7 @@ from config import config
 import sys
 
 GRAVITY = config['gravity']
-DT = 0.01
+DT = 0.005
 
 class TriplePendulumEnv:
     def __init__(self, reward_manager=None, render_mode=None, num_nodes=config['num_nodes'], arm_length=1./3, bob_mass=0.01/3, friction_coefficient=config['friction_coefficient']):
@@ -139,7 +139,7 @@ class TriplePendulumEnv:
     def reset(self):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
-        rd_angle = -pi/2 + rd.uniform(-0.3, 0.3)
+        rd_angle = pi/2
         angles_initiaux = [rd_angle] + [rd_angle] * (len(self.positions) - 2)
         vitesses_initiales = 0.0
         state = hstack((
@@ -562,7 +562,7 @@ class TriplePendulumEnv:
                 self.screen.blit(epsilon_text, (20, 95))
         
         pygame.display.flip()
-        self.clock.tick(60)
+        self.clock.tick(120)
         
         return True
 

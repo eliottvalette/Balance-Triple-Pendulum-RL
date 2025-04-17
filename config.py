@@ -9,7 +9,7 @@ config = {
     'updates_per_episode': 10,
     'load_models': True,
     'num_nodes': 2,
-    'gravity': 1.81,
+    'gravity': 9.81,
     'friction_coefficient': 0.1,
     
     # Options de visualisation et de plots

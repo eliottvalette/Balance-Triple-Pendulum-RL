@@ -9,7 +9,7 @@ from config import config
 import sys
 
 GRAVITY = config['gravity']
-DT = 0.005
+DT = 0.01
 
 class TriplePendulumEnv:
     def __init__(self, reward_manager=None, render_mode=None, num_nodes=config['num_nodes'], arm_length=1./3, bob_mass=0.01/3, friction_coefficient=config['friction_coefficient']):

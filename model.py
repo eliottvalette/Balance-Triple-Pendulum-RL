@@ -45,9 +45,6 @@ class TriplePendulumActor(nn.Module):
         nn.init.orthogonal_(self.fc_out.weight, gain=0.01)
         nn.init.constant_(self.fc_out.bias, 0)
         
-        # Dropout for regularization
-        self.dropout = nn.Dropout(p=0.1)
-        
     def forward(self, x):
         saved_input = x
 
@@ -58,25 +55,21 @@ class TriplePendulumActor(nn.Module):
         x = self.fc1(x)
         x = self.norm1(x)
         x = F.leaky_relu(x)
-        x = self.dropout(x)
         
         # Second layer
         x = self.fc2(x)
         x = self.norm2(x)
         x = F.leaky_relu(x)
-        x = self.dropout(x)
         
         # Third layer
         x = self.fc3(x)
         x = self.norm3(x)
         x = F.leaky_relu(x)
-        x = self.dropout(x)
         
         # Fourth layer
         x = self.fc4(x)
         x = self.norm4(x)
         x = F.leaky_relu(x)
-        x = self.dropout(x)
         
         # Fifth layer (with skip connection)
         x = torch.cat([x, saved_input], dim=len(x.shape) - 1)
@@ -123,10 +116,7 @@ class TriplePendulumCritic(nn.Module):
         self.fc_out = nn.Linear(action_dim * 8, 1)
         nn.init.orthogonal_(self.fc_out.weight, gain=1)
         nn.init.constant_(self.fc_out.bias, 0)
-        
-        # Dropout for regularization
-        self.dropout = nn.Dropout(p=0.1)
-        
+                
     def forward(self, state, action):
         saved_input = state
         x = torch.cat([state, action], dim=1)
@@ -138,26 +128,22 @@ class TriplePendulumCritic(nn.Module):
         x = self.fc1(x)
         x = self.norm1(x)
         x = F.leaky_relu(x)
-        x = self.dropout(x)
         
         # Second layer
         x = self.fc2(x)
         x = self.norm2(x)
         x = F.leaky_relu(x)
-        x = self.dropout(x)
 
         # Third layer
         x = self.fc3(x)
         x = self.norm3(x)
         x = F.leaky_relu(x)
-        x = self.dropout(x)
 
         # Fourth layer (with skip connection)
         x = torch.cat([x, saved_input], dim=1)
         x = self.fc4(x)
         x = self.norm4(x)
         x = F.leaky_relu(x)
-        x = self.dropout(x)
         
         # Output layer
         x = self.fc_out(x)

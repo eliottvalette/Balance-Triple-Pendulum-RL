@@ -56,7 +56,7 @@ class TriplePendulumTrainer:
         self.full_plot_frequency = plot_config.get('full_plot_frequency', 1000)
         
         self.total_steps = 0
-        self.max_steps = 1_000  # Maximum steps per episode
+        self.max_steps = 500  # Maximum steps per episode
         
         # Exploration parameters
         self.epsilon = 1.0  # Initial random action probability
@@ -116,8 +116,9 @@ class TriplePendulumTrainer:
             with torch.no_grad():
                 action = self.actor(old_and_current_state_tensor).squeeze().numpy()
             
-            noise = np.random.normal(0, self.epsilon)
-            action = np.clip(action + noise, -1, 1)
+            if rd.random() < self.epsilon:
+                noise = np.random.normal(0, self.epsilon * 0.5)
+                action = np.clip(action + noise, -1, 1)
 
             # Take step in environment
             next_state, terminated = self.env.step(action)

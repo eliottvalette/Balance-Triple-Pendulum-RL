@@ -9,7 +9,7 @@ from config import config
 import sys
 
 GRAVITY = config['gravity']
-DT = 0.005
+DT = 0.01
 
 class TriplePendulumEnv:
     def __init__(self, reward_manager=None, render_mode=None, num_nodes=config['num_nodes'], arm_length=1./3, bob_mass=0.01/3, friction_coefficient=config['friction_coefficient']):
@@ -139,7 +139,7 @@ class TriplePendulumEnv:
     def reset(self):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
-        rd_angle = pi/2
+        rd_angle = rd.uniform(-pi, pi) if rd.random() < 0.1 else pi/2
         angles_initiaux = [rd_angle] + [rd_angle] * (len(self.positions) - 2)
         vitesses_initiales = 0.0
         state = hstack((
@@ -383,6 +383,11 @@ class TriplePendulumEnv:
         track_width = int((self.xmax - self.xmin) * self.scale)
         track_height = int(0.05 * self.scale)
         pygame.draw.rect(self.screen, self.TRACK_COLOR, (track_x, track_y, track_width, track_height))
+
+        # dessiner un barre horizontale rouge qui indique le upright threshold
+        upright_threshold = self.reward_manager.max_height * self.reward_manager.threshold_ratio
+        upright_threshold_x, upright_threshold_y = self._convert_to_screen_coords(self.xmin, upright_threshold)
+        pygame.draw.rect(self.screen, (255, 0, 0), (upright_threshold_x, upright_threshold_y, self.width, 1))
         
         # Dessiner le repère central
         center_x = self._convert_to_screen_coords(0, self.cart_height/(2*self.scale) - 0.025)[0]
@@ -454,12 +459,18 @@ class TriplePendulumEnv:
                 reward_panel_y = 10
                 
                 # Fond du conteneur avec bordure arrondie
-                pygame.draw.rect(self.screen, (230, 230, 235), 
-                                pygame.Rect(reward_panel_x, reward_panel_y, reward_panel_width, reward_panel_height),
+                # Créer une surface avec canal alpha
+                panel_surface = pygame.Surface((reward_panel_width, reward_panel_height), pygame.SRCALPHA)
+                # Dessiner le fond semi-transparent
+                pygame.draw.rect(panel_surface, (230, 230, 235, 180), 
+                                pygame.Rect(0, 0, reward_panel_width, reward_panel_height),
                                 border_radius=10)
-                pygame.draw.rect(self.screen, (200, 200, 205), 
-                                pygame.Rect(reward_panel_x, reward_panel_y, reward_panel_width, reward_panel_height),
+                # Dessiner la bordure semi-transparente
+                pygame.draw.rect(panel_surface, (200, 200, 205, 200), 
+                                pygame.Rect(0, 0, reward_panel_width, reward_panel_height),
                                 border_radius=10, width=2)
+                # Appliquer la surface sur l'écran
+                self.screen.blit(panel_surface, (reward_panel_x, reward_panel_y))
                 
                 # Titre du conteneur
                 title_font = pygame.font.Font(None, 28)
@@ -562,7 +573,7 @@ class TriplePendulumEnv:
                 self.screen.blit(epsilon_text, (20, 95))
         
         pygame.display.flip()
-        self.clock.tick(120)
+        self.clock.tick(60)
         
         return True
 

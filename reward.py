@@ -36,7 +36,7 @@ class RewardManager:
         # -----------------------
         # Real Reward Components
         # -----------------------
-        self.threshold_ratio = 0.90  # 60% of pendulum length (as per the formula)
+        self.threshold_ratio = 0.95  # 60% of pendulum length (as per the formula)
         self.time_over_threshold = 0
         self.prev_output = None
         self.output_deltas = []
@@ -187,7 +187,7 @@ class RewardManager:
         border_penalty = 0.0
         if x < -1.6 or x > 1.6:
             border_penalty = 1
-        reward = np.minimum((reward / 50) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)), 10) - border_penalty + fake_reward * 0.05
+        reward = np.minimum((reward / 50) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)), 10) - border_penalty + fake_reward * 0.0
 
         # Apply termination penalty
         if terminated:

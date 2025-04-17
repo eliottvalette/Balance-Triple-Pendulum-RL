@@ -11,13 +11,14 @@ import sys
 GRAVITY = config['gravity']
 
 class TriplePendulumEnv:
-    def __init__(self, reward_manager=None, render_mode=None, num_nodes=config['num_nodes'], arm_length=1./3, bob_mass=0.01/3, friction_coefficient=0.1):
+    def __init__(self, reward_manager=None, render_mode=None, num_nodes=config['num_nodes'], arm_length=1./3, bob_mass=0.01/3, friction_coefficient=config['friction_coefficient']):
         self.reward_manager = reward_manager
         self.render_mode = render_mode
         self.n = num_nodes
         self.arm_length = arm_length
         self.bob_mass = bob_mass
         self.friction_coefficient = friction_coefficient
+        self.cart_friction = 0.1
 
         # Paramètre de simulation pas-à-pas
         self.dt = 0.01  # Durée d'un pas de simulation
@@ -28,13 +29,14 @@ class TriplePendulumEnv:
         # -----------------------------
         # Modèle symbolique
         # -----------------------------
-        self.positions = dynamicsymbols(f'q:{num_nodes + 1}')  # Coordonnées généralisées
+        self.positions = dynamicsymbols(f'q:{num_nodes + 1}')   # Coordonnées généralisées
         self.velocities = dynamicsymbols(f'u:{num_nodes + 1}')  # Vitesses généralisées
-        self.force = dynamicsymbols('f')                    # Force appliquée au chariot
+        self.force = dynamicsymbols('f')                        # Force appliquée au chariot
 
-        self.masses = symbols(f'm:{num_nodes + 1}')          # Masses
-        self.lengths = symbols(f'l:{num_nodes}')              # Longueurs
-        self.gravity, self.time = symbols('g t')              # Gravité et temps
+        self.masses = symbols(f'm:{num_nodes + 1}')             # Masses
+        self.lengths = symbols(f'l:{num_nodes}')                # Longueurs
+        self.gravity, self.time = symbols('g t')                # Gravité et temps
+        self.friction_symbol = symbols('b')
 
         self._setup_symbolic_model()
         self._setup_numeric_evaluation()
@@ -79,7 +81,7 @@ class TriplePendulumEnv:
 
         force_cart = self.force * inertial_frame.x
         weight_cart = -self.masses[0] * self.gravity * inertial_frame.y
-        friction_cart = -self.friction_coefficient * self.velocities[0] * inertial_frame.x
+        friction_cart = -self.cart_friction * self.velocities[0] * inertial_frame.x
         forces = [(cart_point, force_cart + weight_cart + friction_cart)]
         kindiffs = [self.positions[0].diff(self.time) - self.velocities[0]]
 
@@ -96,7 +98,7 @@ class TriplePendulumEnv:
             particles.append(pendulum_particle)
 
             weight = -self.masses[i + 1] * self.gravity * inertial_frame.y
-            friction = -self.friction_coefficient * self.velocities[i + 1] * inertial_frame.z
+            friction = -self.friction_symbol * self.velocities[i + 1] * inertial_frame.z
             forces.append((pendulum_point, weight + friction))
             kindiffs.append(self.positions[i + 1].diff(self.time) - self.velocities[i + 1])
 
@@ -111,6 +113,9 @@ class TriplePendulumEnv:
         for i in range(self.n):
             parameters += [self.lengths[i], self.masses[i + 1]]
             self.parameter_vals += [self.arm_length, self.bob_mass]
+
+        parameters.append(self.friction_symbol)
+        self.parameter_vals.append(self.friction_coefficient)
 
         dynamic = self.positions + self.velocities
         dynamic.append(self.force)
@@ -133,9 +138,9 @@ class TriplePendulumEnv:
     def reset(self):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
-        rd_angle = rd.uniform(-pi, pi)
+        rd_angle = -pi/2 #rd.uniform(-pi, pi)
         angles_initiaux = [rd_angle] + [rd_angle] * (len(self.positions) - 2)
-        vitesses_initiales = 1e-3
+        vitesses_initiales = 0.0
         state = hstack((
             position_initiale_chariot,
             angles_initiaux,

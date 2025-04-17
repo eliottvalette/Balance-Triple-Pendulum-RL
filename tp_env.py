@@ -9,6 +9,7 @@ from config import config
 import sys
 
 GRAVITY = config['gravity']
+DT = 0.005
 
 class TriplePendulumEnv:
     def __init__(self, reward_manager=None, render_mode=None, num_nodes=config['num_nodes'], arm_length=1./3, bob_mass=0.01/3, friction_coefficient=config['friction_coefficient']):
@@ -21,7 +22,7 @@ class TriplePendulumEnv:
         self.cart_friction = 0.1
 
         # Paramètre de simulation pas-à-pas
-        self.dt = 0.01  # Durée d'un pas de simulation
+        self.dt = DT  # Durée d'un pas de simulation
         self.current_state = None
         self.current_time = 0.0
         self.applied_force = 0.0
@@ -138,7 +139,7 @@ class TriplePendulumEnv:
     def reset(self):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
-        rd_angle = -pi/2 #rd.uniform(-pi, pi)
+        rd_angle = pi/2 + rd.uniform(-0.3, 0.3)
         angles_initiaux = [rd_angle] + [rd_angle] * (len(self.positions) - 2)
         vitesses_initiales = 0.0
         state = hstack((
@@ -148,7 +149,7 @@ class TriplePendulumEnv:
         ))
         self.current_state = state.copy()  # On stocke l'état courant
         self.current_time = 0.0            # Réinitialisation du temps courant
-        self.dt = 0.01
+        self.dt = DT
         self.num_steps = 0
         if self.reward_manager is not None:
             self.reward_manager.reset()
@@ -348,7 +349,7 @@ class TriplePendulumEnv:
         self.current_state = next_state
         self.current_time += self.dt
 
-        terminated = abs(self.current_state[0]) > 1.6
+        terminated = False # abs(self.current_state[0]) > 1.6
         
         return self.get_state(), terminated
         

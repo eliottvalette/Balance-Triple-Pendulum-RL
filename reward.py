@@ -181,7 +181,10 @@ class RewardManager:
         reward = self.time_over_threshold / (1 + self.smoothed_variation) 
 
         # Normalize reward
-        reward = np.minimum((reward / 50) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)), 10)
+        border_penalty = 0.0
+        if x < -1.6 or x > 1.6:
+            border_penalty = 1
+        reward = np.minimum((reward / 50) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)), 10) - border_penalty
 
         # Apply termination penalty
         if terminated:

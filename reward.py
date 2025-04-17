@@ -159,6 +159,9 @@ class RewardManager:
         
         mse_penalty = self.mse_weight * (mse_sum / len(state))
 
+        # ----------------------- FAKE REWARD -----------------------
+        fake_reward = upright_reward - mse_penalty - x_penalty - non_alignement_penalty - stability_penalty
+
         # ----------------------- REAL REWARD -----------------------
         threshold = self.upright_threshold * self.threshold_ratio
 
@@ -184,7 +187,7 @@ class RewardManager:
         border_penalty = 0.0
         if x < -1.6 or x > 1.6:
             border_penalty = 1
-        reward = np.minimum((reward / 50) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)), 10) - border_penalty
+        reward = np.minimum((reward / 50) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)), 10) - border_penalty + fake_reward * 0.05
 
         # Apply termination penalty
         if terminated:

@@ -139,7 +139,7 @@ class TriplePendulumEnv:
     def reset(self):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
-        rd_angle = rd.uniform(-pi, pi) if rd.random() < 0.1 else pi/2
+        rd_angle = pi/2 + rd.uniform(-pi/8, pi/8)
         angles_initiaux = [rd_angle] + [rd_angle] * (len(self.positions) - 2)
         vitesses_initiales = 0.0
         state = hstack((
@@ -428,7 +428,9 @@ class TriplePendulumEnv:
         
         # Afficher les infos de base
         time_text = self.font.render(f'time = {self.current_time:.2f}', True, self.TEXT_COLOR)
-        force_text = self.font.render(f'force = {self.applied_force:.2f}', True, self.TEXT_COLOR)
+        # Convertir la force en nombre à virgule flottante si c'est un tableau numpy
+        force_value = float(self.applied_force) if isinstance(self.applied_force, np.ndarray) else self.applied_force
+        force_text = self.font.render(f'force = {force_value:.2f}', True, self.TEXT_COLOR)
         info_text = self.font.render('Utilisez les flèches gauche/droite pour appliquer une force', True, self.TEXT_COLOR)
         
         self.screen.blit(time_text, (20, 20))

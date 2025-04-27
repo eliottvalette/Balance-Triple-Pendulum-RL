@@ -36,7 +36,7 @@ class RewardManager:
         # -----------------------
         # Real Reward Components
         # -----------------------
-        self.threshold_ratio = 0.95  # 60% of pendulum length (as per the formula)
+        self.threshold_ratio = 0.85  # 60% of pendulum length (as per the formula)
         self.time_over_threshold = 0
         self.prev_output = None
         self.output_deltas = []
@@ -192,6 +192,9 @@ class RewardManager:
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
+
+        if end_node_y < self.max_height * self.threshold_ratio * 0.1:
+            self.force_terminated = True
         
         return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated
     

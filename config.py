@@ -5,11 +5,11 @@ config = {
     'gamma': 0.99,
     'batch_size': 16,
     'hidden_dim': 512,
-    'buffer_capacity': 100_000,
+    'buffer_capacity': 25_000,
     'updates_per_episode': 10,
     'load_models': False,
     'num_nodes': 2,
-    'gravity': 9.81,
+    'gravity': 5.81,
     'friction_coefficient': 0.1,
     
     # Options de visualisation et de plots

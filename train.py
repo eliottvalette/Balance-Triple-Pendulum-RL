@@ -130,7 +130,7 @@ class TriplePendulumTrainer:
         # Variables pour l'exploration dirigée
         last_action = 0
         action_history = []
-        exploration_phase = episode < 1000  # Phase d'exploration initiale
+        exploration_phase = episode < 600  # Phase d'exploration initiale
         
         while not done and num_steps < self.max_steps:
             current_state = self.env.get_state()
@@ -143,7 +143,7 @@ class TriplePendulumTrainer:
             
             if exploration_phase:
                 # Phase d'exploration initiale: mouvements plus amples
-                if num_steps % 50 == 0:  # Changement de direction périodique
+                if num_steps % 25 == 0:  # Changement de direction périodique
                     last_action = np.random.choice([-1, 1]) * np.random.uniform(0.5, 1.0)
                 action = last_action + self.ou_noise.sample() * 0.3
             else:

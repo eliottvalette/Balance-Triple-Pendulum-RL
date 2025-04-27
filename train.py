@@ -28,6 +28,24 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
+class OrnsteinUhlenbeckNoise:
+    def __init__(self, action_dim, mu=0, theta=0.15, sigma=0.2, dt=0.01):
+        self.action_dim = action_dim
+        self.mu = mu * np.ones(action_dim)
+        self.theta = theta
+        self.sigma = sigma
+        self.dt = dt
+        self.reset()
+    
+    def reset(self):
+        self.state = np.copy(self.mu)
+    
+    def sample(self):
+        dx = self.theta * (self.mu - self.state) * self.dt + \
+             self.sigma * np.sqrt(self.dt) * np.random.randn(self.action_dim)
+        self.state += dx
+        return self.state
+
 class TriplePendulumTrainer:
     def __init__(self, config):
         self.config = config
@@ -62,6 +80,7 @@ class TriplePendulumTrainer:
         self.epsilon = 1.0  # Initial random action probability
         self.epsilon_decay = 0.9985  # Epsilon decay rate
         self.min_epsilon = 0.001  # Minimum epsilon
+        self.ou_noise = OrnsteinUhlenbeckNoise(action_dim=1)
         
         # Replay buffer
         self.memory = ReplayBuffer(capacity=config['buffer_capacity'])
@@ -104,26 +123,43 @@ class TriplePendulumTrainer:
         reward_components = {}
         num_steps = 0
         
-        # Réinitialiser le RewardManager
+        # Réinitialiser le RewardManager et le bruit
         self.reward_manager.reset()
+        self.ou_noise.reset()
+        
+        # Variables pour l'exploration dirigée
+        last_action = 0
+        action_history = []
+        exploration_phase = episode < 1000  # Phase d'exploration initiale
         
         while not done and num_steps < self.max_steps:
             current_state = self.env.get_state()
             old_and_current_state = np.concatenate((self.old_state, current_state))
             old_and_current_state_tensor = torch.FloatTensor(old_and_current_state)
             
-            # Exploration: ajouter du bruit gaussien à la sortie de l'acteur
+            # Exploration: combinaison de bruit OU et exploration dirigée
             with torch.no_grad():
                 action = self.actor(old_and_current_state_tensor).squeeze().numpy()
             
-            if rd.random() < self.epsilon:
-                noise = np.random.normal(0, self.epsilon * 0.5)
-                action = np.clip(action + noise, -1, 1)
-
+            if exploration_phase:
+                # Phase d'exploration initiale: mouvements plus amples
+                if num_steps % 50 == 0:  # Changement de direction périodique
+                    last_action = np.random.choice([-1, 1]) * np.random.uniform(0.5, 1.0)
+                action = last_action + self.ou_noise.sample() * 0.3
+            else:
+                # Phase d'apprentissage: bruit OU modulé par epsilon
+                if rd.random() < self.epsilon:
+                    action = action + self.ou_noise.sample() * self.epsilon
+                else:
+                    action = action + self.ou_noise.sample() * 0.1  # Petit bruit continu
+            
+            # Limiter l'action
+            action = np.clip(action, -1, 1)
+            action_history.append(action)
+            
             # Take step in environment
             next_state, terminated = self.env.step(action)
-
-            # Check for NaN values in state
+            
             if np.isnan(np.sum(next_state)):
                 print('state:', next_state)
                 raise ValueError("Warning: NaN detected in state")
@@ -192,8 +228,6 @@ class TriplePendulumTrainer:
         self.critic_optimizer.step()
         
         # Update actor - we want to maximize the critic output (Q-value)
-        # Since optimizers perform minimization by default, we use negative sign to turn maximization into minimization
-        # This is correct for DDPG: we want the actor to choose actions that maximize Q-values
         actor_loss = -self.critic(states, self.actor(states)).mean()
         self.actor_optimizer.zero_grad()
         actor_loss.backward()

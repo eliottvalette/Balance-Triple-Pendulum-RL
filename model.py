@@ -46,6 +46,10 @@ class TriplePendulumActor(nn.Module):
         nn.init.constant_(self.fc_out.bias, 0)
         
     def forward(self, x):
+        # Ensure input has correct shape
+        if len(x.shape) > 2:
+            x = x.squeeze(-1)
+            
         saved_input = x
 
         # Normalize input
@@ -72,7 +76,14 @@ class TriplePendulumActor(nn.Module):
         x = F.leaky_relu(x)
         
         # Fifth layer (with skip connection)
-        x = torch.cat([x, saved_input], dim=len(x.shape) - 1)
+        # Ensure both tensors have the same number of dimensions
+        if len(x.shape) != len(saved_input.shape):
+            if len(x.shape) > len(saved_input.shape):
+                saved_input = saved_input.unsqueeze(-1)
+            else:
+                x = x.unsqueeze(-1)
+        
+        x = torch.cat([x, saved_input], dim=-1)
         x = self.fc5(x)
         x = self.norm5(x)
         x = F.leaky_relu(x)
@@ -118,6 +129,12 @@ class TriplePendulumCritic(nn.Module):
         nn.init.constant_(self.fc_out.bias, 0)
                 
     def forward(self, state, action):
+        # Ensure inputs have correct shape
+        if len(state.shape) > 2:
+            state = state.squeeze(-1)
+        if len(action.shape) > 2:
+            action = action.squeeze(-1)
+        
         saved_input = state
         x = torch.cat([state, action], dim=1)
         

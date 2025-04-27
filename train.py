@@ -62,6 +62,7 @@ class TriplePendulumTrainer:
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim, config['hidden_dim'])
         self.critic = TriplePendulumCritic(state_dim, action_dim, config['hidden_dim'])
+        self.num_exploration_episodes = 600
 
         # Optimizers
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=config['actor_lr'])
@@ -130,7 +131,7 @@ class TriplePendulumTrainer:
         # Variables pour l'exploration dirigée
         last_action = 0
         action_history = []
-        exploration_phase = episode < 600  # Phase d'exploration initiale
+        exploration_phase = episode < self.num_exploration_episodes  # Phase d'exploration initiale
         
         while not done and num_steps < self.max_steps:
             current_state = self.env.get_state()
@@ -245,7 +246,7 @@ class TriplePendulumTrainer:
             print(f"Episode {episode} started")
             
             # Activer ou désactiver le rendu en fonction du numéro d'épisode
-            if episode % 50 == 0 and episode > 200:
+            if episode % 50 == 0 and episode > self.num_exploration_episodes:
                 self.env.render_mode = "human"
             else:
                 self.env.render_mode = None

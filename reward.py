@@ -14,6 +14,7 @@ class RewardManager:
         # Reward weights
         # -----------------------
         self.cart_position_weight = 0.20
+        self.nodes_position_weight = 0.80
         self.termination_penalty = 1
         self.alignement_weight = 2.0
         self.upright_weight = 1.5
@@ -92,6 +93,7 @@ class RewardManager:
         x3 = state[12]
         y3 = state[13]
 
+        end_node_x = x3 if self.num_nodes == 3 else x2 if self.num_nodes == 2 else x1
         end_node_y = y3 if self.num_nodes == 3 else y2 if self.num_nodes == 2 else y1
 
         # ----------------------- REWARD COMPONENTS -----------------------
@@ -99,8 +101,9 @@ class RewardManager:
             self.old_points_positions = [x, x1, y1, x2, y2, x3, y3]
             self.update_step = current_step
         
-        # ----------------------- CART POSITION REWARD -----------------------
-        x_penalty = self.cart_position_weight * (abs(x)) **2
+        # ----------------------- CART AND NODES POSITION REWARD -----------------------
+        x_cart_penalty = self.cart_position_weight * (abs(x)) **2
+        x_nodes_penalty = self.nodes_position_weight * (abs(end_node_x)) **2
 
         # ----------------------- ANGLES ALIGNEMENT REWARD -----------------------
         non_alignement_penalty = self.alignement_weight * (((1 - np.cos(q1 - q2)) + (1 - np.cos(q2 - q3))) / 2)
@@ -174,20 +177,20 @@ class RewardManager:
         # Track smoothness with exponential moving average of variation
         if self.prev_output is not None:
             delta = abs(end_node_y - self.prev_output)
-            self.smoothed_variation = 0.9 * self.smoothed_variation + 0.1 * delta
+            self.smoothed_variation = 0.99 * self.smoothed_variation + 0.1 * delta
         else:
             self.smoothed_variation = 0.0
 
         self.prev_output = end_node_y
 
         # Compute the score
-        reward = self.time_over_threshold / (1 + self.smoothed_variation) + end_node_y * 10
+        reward = self.time_over_threshold / (1 + self.smoothed_variation) + end_node_y * 5
 
         # Normalize reward
         border_penalty = 0.0
         if x < -1.6 or x > 1.6:
             border_penalty = 1
-        reward = np.log(1 + (reward / 50) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2))) - border_penalty + fake_reward * 0.0
+        reward = np.sqrt((reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2))) - border_penalty - x_nodes_penalty
 
         # Apply termination penalty
         if terminated:
@@ -197,12 +200,12 @@ class RewardManager:
             self.force_terminated = True
             reward -= 3
         
-        return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated
+        return reward, upright_reward, x_cart_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated
     
     def get_reward_components(self, state, current_step):
-        reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, force_terminated = self.calculate_reward(state, False, current_step)
+        reward, upright_reward, x_cart_penalty, non_alignement_penalty, stability_penalty, mse_penalty, force_terminated = self.calculate_reward(state, False, current_step)
         return {
-            'x_penalty': x_penalty,
+            'x_penalty': x_cart_penalty,
             'non_alignement_penalty': non_alignement_penalty,
             'upright_reward': upright_reward,
             'stability_penalty': stability_penalty,

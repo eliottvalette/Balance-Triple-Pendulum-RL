@@ -36,7 +36,7 @@ class RewardManager:
         # -----------------------
         # Real Reward Components
         # -----------------------
-        self.threshold_ratio = 0.85  # 60% of pendulum length (as per the formula)
+        self.threshold_ratio = 0.90  # 90% of pendulum length (as per the formula)
         self.time_over_threshold = 0
         self.prev_output = None
         self.output_deltas = []
@@ -181,20 +181,21 @@ class RewardManager:
         self.prev_output = end_node_y
 
         # Compute the score
-        reward = self.time_over_threshold / (1 + self.smoothed_variation) 
+        reward = self.time_over_threshold / (1 + self.smoothed_variation) + end_node_y * 10
 
         # Normalize reward
         border_penalty = 0.0
         if x < -1.6 or x > 1.6:
             border_penalty = 1
-        reward = np.minimum((reward / 50) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)), 10) - border_penalty + fake_reward * 0.0
+        reward = np.log(1 + (reward / 50) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2))) - border_penalty + fake_reward * 0.0
 
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
 
-        if end_node_y < self.max_height * self.threshold_ratio * 0.1:
+        if end_node_y < self.max_height * self.threshold_ratio :
             self.force_terminated = True
+            reward -= 3
         
         return reward, upright_reward, x_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated
     

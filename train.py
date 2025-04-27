@@ -74,7 +74,7 @@ class TriplePendulumTrainer:
         self.full_plot_frequency = plot_config.get('full_plot_frequency', 1000)
         
         self.total_steps = 0
-        self.max_steps = 500  # Maximum steps per episode
+        self.max_steps = 4_000  # Maximum steps per episode
         
         # Exploration parameters
         self.epsilon = 1.0  # Initial random action probability

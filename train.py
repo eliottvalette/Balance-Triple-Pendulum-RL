@@ -146,7 +146,7 @@ class TriplePendulumTrainer:
             
             if exploration_phase:
                 # Phase d'exploration initiale: mouvements plus amples
-                if num_steps % 25 == 0:  # Changement de direction périodique
+                if num_steps % 10 == 0:  # Changement de direction périodique
                     last_action = np.random.choice([-1, 1]) * np.random.uniform(0.5, 1.0)
                 action = last_action + self.ou_noise.sample() * 0.3
             else:
@@ -169,7 +169,7 @@ class TriplePendulumTrainer:
             
             # Render if rendering is enabled
             if self.env.render_mode == "human":
-                rendering_successful = self.env.render(episode, self.epsilon, num_steps)
+                rendering_successful = self.env.render(action, episode, self.epsilon, num_steps)
                 if not rendering_successful:
                     done = True
                     raise ValueError("Warning: Rendering failed")

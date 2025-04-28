@@ -17,7 +17,7 @@ class RewardManager:
         self.nodes_position_weight = 0.20
         self.termination_penalty = 1
         self.alignement_weight = 2.0
-        self.upright_weight = 1.5
+        self.upright_weight = 0.21 
         self.stability_weight = 0.02  # Weight for the stability reward
         self.mse_weight = 0.3  # Weight for the MSE penalty
         
@@ -48,6 +48,7 @@ class RewardManager:
         self.old_points_positions = None
         self.cached_velocity = 0
         self.update_step = 0
+        self.old_heraticness_penalty = 0
         self.previous_action = None
         self.old_points_positions = None
         
@@ -192,19 +193,23 @@ class RewardManager:
 
         # ----------------------- HERATICNESS PENALTY -----------------------
         heraticness_penalty = 0.0
-        print(f'previous_action: {self.previous_action} and current_action: {action}')
-        if self.previous_action is not None:
-            heraticness_penalty = abs(self.previous_action - action)
-        
-        if self.previous_action != action or self.previous_action is None:
+
+        if action is None:
+            pass
+        elif self.previous_action is None:
             self.previous_action = action
-        
+        elif action != self.previous_action:
+            heraticness_penalty = abs(self.previous_action - action)
+            self.old_heraticness_penalty = heraticness_penalty
+            self.previous_action = action
+        else:
+            heraticness_penalty = self.old_heraticness_penalty
 
         # Compute the score
         reward = self.time_over_threshold / (1 + self.smoothed_variation) + max(end_node_y * 5, 0) 
 
         # Normalize reward
-        reward = np.sqrt((reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2))) - border_penalty - heraticness_penalty
+        reward = np.sqrt((reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2))) - border_penalty - heraticness_penalty * 0.01
         
         # Apply termination penalty
         if terminated:
@@ -239,4 +244,5 @@ class RewardManager:
         self.prev_output = None
         self.time_over_threshold = 0
         self.output_deltas = []
-        
+        self.old_heraticness_penalty = 0
+        self.previous_action = None

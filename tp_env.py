@@ -26,6 +26,7 @@ class TriplePendulumEnv:
         self.current_state = None
         self.current_time = 0.0
         self.applied_force = 0.0
+        self.previous_action = 0.0
 
         # -----------------------------
         # Modèle symbolique
@@ -237,6 +238,7 @@ class TriplePendulumEnv:
         non_alignement_penalty = reward_components['non_alignement_penalty']
         stability_penalty = reward_components['stability_penalty']
         mse_penalty = reward_components['mse_penalty']
+        heraticness_penalty = reward_components['heraticness_penalty']
         consecutive_upright_steps = self.reward_manager.consecutive_upright_steps / 150
         have_been_upright_once = self.reward_manager.have_been_upright_once
         came_back_down = self.reward_manager.came_back_down
@@ -244,12 +246,16 @@ class TriplePendulumEnv:
         time_over_threshold = self.reward_manager.time_over_threshold / 150
         smoothed_variation = self.reward_manager.smoothed_variation
 
+
         # ----------------- Indicateurs logiques -------------------
         near_border = float(abs(adapted_state[0]) > 1.6)
         end_node_y = position_y3 if self.n == 3 else position_y2 if self.n == 2 else position_y1
         end_node_upright = float(end_node_y > self.reward_manager.max_height * self.reward_manager.threshold_ratio)
         is_node_on_right_of_cart = float(position_x3 > adapted_state[0])
         normalized_steps = self.num_steps / 500
+        direction = float(action > 0)
+        prev_action = self.previous_action
+        prev_direction = float(prev_action > 0)
 
         # ----------------- Feature Engineering -------------------
         q1, q2, q3 = adapted_state[1:4]
@@ -294,12 +300,13 @@ class TriplePendulumEnv:
         # ----------- Construction finale de l'état ---------------
         state_with_positions = np.hstack((
             adapted_state,
-            position_x1, position_y1, position_x2, position_y2, position_x3, position_y3,
-            x_penalty, upright_reward, non_alignement_penalty, stability_penalty, mse_penalty,
+            position_x1, position_y1, position_x2, position_y2, position_x3, position_y3, 
+            x_penalty, upright_reward, non_alignement_penalty, stability_penalty, mse_penalty, heraticness_penalty,
             consecutive_upright_steps, have_been_upright_once, came_back_down, steps_double_down,
-            near_border, end_node_y, end_node_upright, time_over_threshold, smoothed_variation, 
+            near_border, end_node_y, end_node_upright, time_over_threshold, smoothed_variation, direction, prev_action, prev_direction,
             is_node_on_right_of_cart, normalized_steps,
             sin_diff_12, cos_sum_23, v1_angle1, v2_angle2,
+            self.applied_force, action,
             KE, PE, d12, d23
         ))
 
@@ -358,6 +365,8 @@ class TriplePendulumEnv:
         self.current_time += self.dt
 
         terminated = False # abs(self.current_state[0]) > 1.6
+
+        self.previous_action = action
         
         return self.get_state(action), terminated
         

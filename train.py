@@ -280,10 +280,20 @@ class TriplePendulumTrainer:
             self.metrics.add_metric('actor_loss', losses['actor_loss'])
             self.metrics.add_metric('critic_loss', losses['critic_loss'])
             
-            # Track reward components
+            # Track reward components - s'assurer que ce sont bien des valeurs scalaires
             for component_name, values in reward_components_accumulated.items():
+                # Convertir en tableau numpy si ce n'est pas déjà le cas
                 values = np.array(values)
-                avg_value = np.mean(values)
+                
+                # Calculer la moyenne pour obtenir une seule valeur scalaire
+                if values.size > 0:
+                    if values.ndim > 1:  # Si le tableau a plus d'une dimension
+                        values = values.flatten()
+                    avg_value = float(np.mean(values))
+                else:
+                    avg_value = 0.0
+                
+                # Ajouter la valeur scalaire à la métrique
                 self.metrics.add_metric(component_name, avg_value)
             
             # Génération des graphiques selon la fréquence configurée

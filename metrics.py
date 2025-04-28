@@ -23,6 +23,19 @@ class MetricsTracker:
         self.enable_plots = plot_config.get('enable_plots', True)
         
     def add_metric(self, name, value):
+        # S'assurer que value est un nombre scalaire
+        if isinstance(value, np.ndarray):
+            if value.size == 1:
+                value = float(value)
+            else:
+                value = float(value.mean())
+        elif isinstance(value, (list, tuple)):
+            # Si c'est une liste ou un tuple, prendre la moyenne
+            if len(value) > 0:
+                value = float(np.mean(value))
+            else:
+                value = 0.0
+                
         self.metrics[name].append(value)
     
     def get_moving_average(self, name):

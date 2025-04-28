@@ -210,7 +210,7 @@ class TriplePendulumEnv:
         # Retourne un état de base avec uniquement les positions
         return adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3
     
-    def get_state(self, action = 0):
+    def get_state(self, action):
         """
         Renvoie l'état courant du système enrichi avec des combinaisons de features.
         """
@@ -509,7 +509,8 @@ class TriplePendulumEnv:
                     {"name": "Upright", "value": reward_components.get('upright_reward', 0), "color": (80, 180, 80)},
                     {"name": "Position", "value": reward_components.get('x_penalty', 0), "color": (200, 80, 80)},
                     {"name": "Alignment", "value": reward_components.get('non_alignement_penalty', 0), "color": (180, 130, 80)},
-                    {"name": "MSE", "value": reward_components.get('mse_penalty', 0), "color": (180, 130, 80)}
+                    {"name": "MSE", "value": reward_components.get('mse_penalty', 0), "color": (180, 130, 80)},
+                    {"name": "Hera", "value": reward_components.get('heraticness_penalty', 0), "color": (180, 130, 80)}
                 ]
                 
                 # Ajouter stability_penalty s'il existe
@@ -549,6 +550,13 @@ class TriplePendulumEnv:
                     
                     # Barre de valeur
                     value = comp["value"]
+                    
+                    # Vérifier si value est un tableau numpy et le convertir en float si nécessaire
+                    if isinstance(value, np.ndarray):
+                        if value.size == 1:
+                            value = float(value)
+                        else:
+                            value = float(value.mean())  # Si c'est un tableau à plusieurs éléments, prendre la moyenne
                     
                     if value != 0:
                         if value > 0:
@@ -689,4 +697,4 @@ if __name__ == "__main__":
     
     # Utilisation avec les nouvelles méthodes
     env.reset()
-    env.animate_pendulum_pygame(max_steps=10_000, manual_mode = True, title='Simulation Triple Pendule')
+    env.animate_pendulum_pygame(max_steps=10_000, manual_mode = False, title='Simulation Triple Pendule')

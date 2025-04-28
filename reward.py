@@ -197,7 +197,7 @@ class RewardManager:
         # Sauvegarder l'action précédente pour l'affichage
         old_action = self.previous_action
         
-        if action is None:
+        if action is None or action == 0.0:
             pass
         elif self.previous_action is None:
             # Initialisation
@@ -205,12 +205,11 @@ class RewardManager:
         else:
             # Si l'action est différente de la précédente, calculer la pénalité
             if action != self.previous_action:
-                heraticness_penalty = abs(self.previous_action - action)
-                print(f'heraticness_penalty : {heraticness_penalty} because of action {action} and previous action {old_action}')
+                # Convertir en valeur scalaire en utilisant float()
+                heraticness_penalty = float(abs(self.previous_action - action))
             else:
                 # Sinon, utiliser l'ancienne pénalité
                 heraticness_penalty = self.old_heraticness_penalty
-                print('old used')
             
             # Toujours mettre à jour l'action précédente pour la prochaine fois
             self.previous_action = action
@@ -218,19 +217,17 @@ class RewardManager:
         # Mettre à jour l'ancienne pénalité pour la prochaine fois
         self.old_heraticness_penalty = heraticness_penalty
         
-        
-
         # Compute the score
         reward = self.time_over_threshold / (1 + self.smoothed_variation) + max(end_node_y * 5, 0) 
 
         # Normalize reward
-        reward = np.sqrt((reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2))) - border_penalty - heraticness_penalty * 0.01
+        reward = np.sqrt((reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2))) - border_penalty - heraticness_penalty
         
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
 
-        if end_node_y < 0.0:
+        if end_node_y < - 0.1:
             self.force_terminated = True
             reward -= 3
         

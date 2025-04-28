@@ -129,7 +129,7 @@ class TriplePendulumTrainer:
         self.ou_noise.reset()
         
         # Variables pour l'exploration dirigée
-        last_action = 0.0  # Initialiser à 0.0 au lieu de None
+        last_action = 0.0
         action_history = []
         exploration_phase = episode < self.num_exploration_episodes  # Phase d'exploration initiale
         

@@ -56,14 +56,14 @@ class TriplePendulumTrainer:
         # Ajustement de la dimension d'état en fonction de l'environnement réel
         # Ici, la dimension est basée sur la taille de l'état retourné par reset()
         self.env.reset()
-        self.old_state = self.env.get_state()
-        initial_state = self.env.get_state()
+        self.old_state = self.env.get_state(action = 0)
+        initial_state = self.env.get_state(action = 0)
         state_dim = len(initial_state) * 2
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim, config['hidden_dim'])
         self.critic = TriplePendulumCritic(state_dim, action_dim, config['hidden_dim'])
-        self.num_exploration_episodes = 400
-
+        self.num_exploration_episodes = 1
+        
         # Optimizers
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=config['actor_lr'])
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=config['critic_lr'])
@@ -121,7 +121,7 @@ class TriplePendulumTrainer:
         done = False
         trajectory = []
         episode_reward = 0
-        reward_components = {}
+        reward_components_accumulated = {}
         num_steps = 0
         
         # Réinitialiser le RewardManager et le bruit
@@ -132,9 +132,11 @@ class TriplePendulumTrainer:
         last_action = 0
         action_history = []
         exploration_phase = episode < self.num_exploration_episodes  # Phase d'exploration initiale
+
+
         
         while not done and num_steps < self.max_steps:
-            current_state = self.env.get_state()
+            current_state = self.env.get_state(action = last_action)
             old_and_current_state = np.concatenate((self.old_state, current_state))
             old_and_current_state_tensor = torch.FloatTensor(old_and_current_state)
             
@@ -173,8 +175,7 @@ class TriplePendulumTrainer:
                     raise ValueError("Warning: Rendering failed")
             
             # Calculate custom reward and components
-            custom_reward, _, _, _, _, _, force_terminated = self.reward_manager.calculate_reward(next_state, terminated, num_steps)
-            reward_components = self.reward_manager.get_reward_components(next_state, num_steps)
+            custom_reward, reward_components, force_terminated = self.reward_manager.calculate_reward(next_state, terminated, num_steps, action)
             
             # Store transition in replay buffer with normalized reward
             current_and_next_state = np.concatenate((current_state, next_state))
@@ -189,15 +190,21 @@ class TriplePendulumTrainer:
             num_steps += 1
             self.old_state = current_state
 
+            for component_name, value in reward_components.items():
+                if component_name not in reward_components_accumulated:
+                    reward_components_accumulated[component_name] = []
+                reward_components_accumulated[component_name].append(value)
+
             if terminated or force_terminated:
                 done = True
                 break
+            
             
         # Decay exploration parameters
         self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
         print(f"Episode {episode} ended with {num_steps} steps")
 
-        return trajectory, episode_reward, reward_components
+        return trajectory, episode_reward, reward_components_accumulated
     
     def update_networks(self):
         if len(self.memory) < self.config['batch_size']:
@@ -252,7 +259,7 @@ class TriplePendulumTrainer:
                 self.env.render_mode = None
                 
             # Collect trajectory and store in replay buffer
-            trajectory, episode_reward, reward_components = self.collect_trajectory(episode)
+            trajectory, episode_reward, reward_components_accumulated = self.collect_trajectory(episode)
             
             # Only update after we have enough samples
             losses = {"critic_loss": 0, "actor_loss": 0}
@@ -274,8 +281,10 @@ class TriplePendulumTrainer:
             self.metrics.add_metric('critic_loss', losses['critic_loss'])
             
             # Track reward components
-            for component_name, value in reward_components.items():
-                self.metrics.add_metric(component_name, value)
+            for component_name, values in reward_components_accumulated.items():
+                values = np.array(values)
+                avg_value = np.mean(values)
+                self.metrics.add_metric(component_name, avg_value)
             
             # Génération des graphiques selon la fréquence configurée
             if episode % self.plot_frequency == self.plot_frequency - 1:

@@ -139,7 +139,7 @@ class TriplePendulumEnv:
     def reset(self):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
-        rd_angle = -pi/2 # rd.uniform(-pi, pi)
+        rd_angle = pi/2 # rd.uniform(-pi, pi)
         angles_initiaux = [rd_angle] + [rd_angle] * (len(self.positions) - 2)
         vitesses_initiales = 0.0
         state = hstack((
@@ -210,7 +210,7 @@ class TriplePendulumEnv:
         # Retourne un état de base avec uniquement les positions
         return adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3
     
-    def get_state(self):
+    def get_state(self, action = 0):
         """
         Renvoie l'état courant du système enrichi avec des combinaisons de features.
         """
@@ -225,9 +225,11 @@ class TriplePendulumEnv:
         adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3 = base_result
 
         # ---------------- Reward Components -----------------------
-        reward_components = self.reward_manager.get_reward_components(
+        _, reward_components, _ = self.reward_manager.calculate_reward (
             np.hstack((adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3)),
-            self.num_steps
+            False,
+            self.num_steps,
+            action
         )
         
         x_penalty = reward_components['x_penalty']
@@ -246,6 +248,8 @@ class TriplePendulumEnv:
         near_border = float(abs(adapted_state[0]) > 1.6)
         end_node_y = position_y3 if self.n == 3 else position_y2 if self.n == 2 else position_y1
         end_node_upright = float(end_node_y > self.reward_manager.max_height * self.reward_manager.threshold_ratio)
+        is_node_on_right_of_cart = float(position_x3 > adapted_state[0])
+        normalized_steps = self.num_steps / 500
 
         # ----------------- Feature Engineering -------------------
         q1, q2, q3 = adapted_state[1:4]
@@ -293,7 +297,8 @@ class TriplePendulumEnv:
             position_x1, position_y1, position_x2, position_y2, position_x3, position_y3,
             x_penalty, upright_reward, non_alignement_penalty, stability_penalty, mse_penalty,
             consecutive_upright_steps, have_been_upright_once, came_back_down, steps_double_down,
-            near_border, end_node_y, end_node_upright, time_over_threshold, smoothed_variation,
+            near_border, end_node_y, end_node_upright, time_over_threshold, smoothed_variation, 
+            is_node_on_right_of_cart, normalized_steps,
             sin_diff_12, cos_sum_23, v1_angle1, v2_angle2,
             KE, PE, d12, d23
         ))
@@ -354,7 +359,7 @@ class TriplePendulumEnv:
 
         terminated = False # abs(self.current_state[0]) > 1.6
         
-        return self.get_state(), terminated
+        return self.get_state(action), terminated
         
     def render(self, episode = 0, epsilon = 0, current_step = 0):
         """
@@ -455,7 +460,7 @@ class TriplePendulumEnv:
                 ))
                 
                 # Récupérer les composants de récompense
-                reward_components = self.reward_manager.get_reward_components(temp_state, current_step)
+                _, reward_components, _ = self.reward_manager.calculate_reward(temp_state, False, current_step, self.applied_force)
                 
                 # Dessiner un conteneur pour les récompenses
                 reward_panel_width = 300
@@ -652,7 +657,7 @@ class TriplePendulumEnv:
                         
                         # Afficher également les composants de récompense si disponibles
                         if self.reward_manager is not None:
-                            reward_components = self.reward_manager.get_reward_components(state, self.num_steps)
+                            _, reward_components, _ = self.reward_manager.calculate_reward(state, False, self.num_steps)
                             print('------- Composants de récompense -------')
                             for component, value in reward_components.items():
                                 print(f'{component}: {value:.4f}')

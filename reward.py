@@ -66,7 +66,7 @@ class RewardManager:
         self.old_angles = [0.0, 0.0, 0.0]
         self.old_alignement_penalty = None
 
-    def calculate_reward(self, state, terminated, current_step):
+    def calculate_reward(self, state, terminated, current_step, action = 0):
         """
         Calculate the reward based on the current state and termination status.
         
@@ -99,6 +99,7 @@ class RewardManager:
         # ----------------------- REWARD COMPONENTS -----------------------
         if current_step == 0 and self.update_step == 0:
             self.old_points_positions = [x, x1, y1, x2, y2, x3, y3]
+            self.old_force = action
             self.update_step = current_step
         
         # ----------------------- CART AND NODES POSITION REWARD -----------------------
@@ -183,40 +184,42 @@ class RewardManager:
 
         self.prev_output = end_node_y
 
-        # Compute the score
-        reward = self.time_over_threshold / (1 + self.smoothed_variation) + max(end_node_y * 5, 0)
-
-        # Normalize reward
+        # ----------------------- BORDER PENALTY -----------------------
         border_penalty = 0.0
         if x < -1.6 or x > 1.6:
             border_penalty = 1
-        reward = np.sqrt((reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2))) - border_penalty
 
+        # ----------------------- HERATICNESS PENALTY -----------------------
+        heraticness_penalty = 0.0
+        if self.old_points_positions :
+            heraticness_penalty = abs(self.old_force - f)
+            print(heraticness_penalty)
+
+        # Compute the score
+        reward = self.time_over_threshold / (1 + self.smoothed_variation) + max(end_node_y * 5, 0) 
+
+        # Normalize reward
+        reward = np.sqrt((reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2))) - border_penalty - heraticness_penalty
+        
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
 
-        if end_node_y < 0.0 and self.have_been_upright_once and False:
+        if end_node_y < 0.0:
             self.force_terminated = True
             reward -= 3
         
-        return reward, upright_reward, x_cart_penalty, non_alignement_penalty, stability_penalty, mse_penalty, self.force_terminated
-    
-    def get_reward_components(self, state, current_step):
-        reward, upright_reward, x_cart_penalty, non_alignement_penalty, stability_penalty, mse_penalty, force_terminated = self.calculate_reward(state, False, current_step)
-        return {
+        components_dict = {
+            'reward': reward,
             'x_penalty': x_cart_penalty,
             'non_alignement_penalty': non_alignement_penalty,
             'upright_reward': upright_reward,
             'stability_penalty': stability_penalty,
             'mse_penalty': mse_penalty,
-            'reward': reward,
-            'force_terminated': force_terminated,
-            'consecutive_upright_steps': self.consecutive_upright_steps,
-            'have_been_upright_once': self.have_been_upright_once,
-            'came_back_down': self.came_back_down,
-            'steps_double_down': self.steps_double_down
+            'heraticness_penalty': heraticness_penalty,
         }
+
+        return reward, components_dict, self.force_terminated
 
     def reset(self):
         """Reset the reward manager state"""

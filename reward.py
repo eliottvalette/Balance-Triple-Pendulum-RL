@@ -14,7 +14,7 @@ class RewardManager:
         # Reward weights
         # -----------------------
         self.cart_position_weight = 0.20
-        self.nodes_position_weight = 0.80
+        self.nodes_position_weight = 0.20
         self.termination_penalty = 1
         self.alignement_weight = 2.0
         self.upright_weight = 1.5
@@ -184,19 +184,19 @@ class RewardManager:
         self.prev_output = end_node_y
 
         # Compute the score
-        reward = self.time_over_threshold / (1 + self.smoothed_variation) + end_node_y * 5
+        reward = self.time_over_threshold / (1 + self.smoothed_variation) + max(end_node_y * 5, 0)
 
         # Normalize reward
         border_penalty = 0.0
         if x < -1.6 or x > 1.6:
             border_penalty = 1
-        reward = np.sqrt((reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2))) - border_penalty - x_nodes_penalty
+        reward = np.sqrt((reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2))) - border_penalty
 
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
 
-        if end_node_y < self.max_height * self.threshold_ratio :
+        if end_node_y < 0.0 and self.have_been_upright_once and False:
             self.force_terminated = True
             reward -= 3
         

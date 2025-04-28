@@ -62,7 +62,7 @@ class TriplePendulumTrainer:
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim, config['hidden_dim'])
         self.critic = TriplePendulumCritic(state_dim, action_dim, config['hidden_dim'])
-        self.num_exploration_episodes = 600
+        self.num_exploration_episodes = 200
 
         # Optimizers
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=config['actor_lr'])
@@ -75,7 +75,7 @@ class TriplePendulumTrainer:
         self.full_plot_frequency = plot_config.get('full_plot_frequency', 1000)
         
         self.total_steps = 0
-        self.max_steps = 4_000  # Maximum steps per episode
+        self.max_steps = 500  # Maximum steps per episode
         
         # Exploration parameters
         self.epsilon = 1.0  # Initial random action probability

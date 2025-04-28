@@ -153,12 +153,6 @@ class TriplePendulumTrainer:
                     action = action + self.ou_noise.sample() * self.epsilon
                 else:
                     action = action + self.ou_noise.sample() * 0.1  # Petit bruit continu
-            
-            """
-            # Smoothing
-            if abs(action - last_action) > 0.5:
-                action = last_action * 0.7 + action * 0.3
-            """
 
             # Limiter l'action
             action = np.clip(action, -1, 1)
@@ -202,8 +196,7 @@ class TriplePendulumTrainer:
             if terminated or force_terminated:
                 done = True
                 break
-            
-            
+        
         # Decay exploration parameters
         self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
         print(f"Episode {episode} ended with {num_steps} steps")

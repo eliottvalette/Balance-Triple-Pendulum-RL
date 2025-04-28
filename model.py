@@ -17,25 +17,25 @@ class TriplePendulumActor(nn.Module):
         self.norm1 = nn.LayerNorm(hidden_dim)
         
         # Second layer
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim//2)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         nn.init.orthogonal_(self.fc2.weight, gain=1.414)
         nn.init.constant_(self.fc2.bias, 0)
-        self.norm2 = nn.LayerNorm(hidden_dim//2)
+        self.norm2 = nn.LayerNorm(hidden_dim)
         
         # Third layer
-        self.fc3 = nn.Linear(hidden_dim//2, hidden_dim//4)
+        self.fc3 = nn.Linear(hidden_dim, hidden_dim)
         nn.init.orthogonal_(self.fc3.weight, gain=1.414)
         nn.init.constant_(self.fc3.bias, 0)
-        self.norm3 = nn.LayerNorm(hidden_dim//4)
+        self.norm3 = nn.LayerNorm(hidden_dim)
         
         # Fourth layer
-        self.fc4 = nn.Linear(hidden_dim//4, hidden_dim//8)
+        self.fc4 = nn.Linear(hidden_dim, hidden_dim)
         nn.init.orthogonal_(self.fc4.weight, gain=1.414)
         nn.init.constant_(self.fc4.bias, 0)
-        self.norm4 = nn.LayerNorm(hidden_dim//8)
+        self.norm4 = nn.LayerNorm(hidden_dim)
         
         # Fifth layer
-        self.fc5 = nn.Linear(hidden_dim//8 + state_dim, action_dim * 4)
+        self.fc5 = nn.Linear(hidden_dim + state_dim, action_dim * 4)
         nn.init.orthogonal_(self.fc5.weight, gain=1.414)
         nn.init.constant_(self.fc5.bias, 0)
         self.norm5 = nn.LayerNorm(action_dim * 4)
@@ -100,19 +100,19 @@ class TriplePendulumCritic(nn.Module):
         self.input_norm = nn.LayerNorm(state_dim + action_dim)
         
         # First layer
-        self.fc1 = nn.Linear(state_dim + action_dim, hidden_dim // 2)
+        self.fc1 = nn.Linear(state_dim + action_dim, hidden_dim)
         nn.init.orthogonal_(self.fc1.weight, gain=1.414)
         nn.init.constant_(self.fc1.bias, 0)
-        self.norm1 = nn.LayerNorm(hidden_dim // 2)
+        self.norm1 = nn.LayerNorm(hidden_dim)
         
         # Second layer
-        self.fc2 = nn.Linear(hidden_dim // 2, hidden_dim // 4)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         nn.init.orthogonal_(self.fc2.weight, gain=1.414)
         nn.init.constant_(self.fc2.bias, 0)
-        self.norm2 = nn.LayerNorm(hidden_dim // 4)
+        self.norm2 = nn.LayerNorm(hidden_dim)
 
         # Third layer
-        self.fc3 = nn.Linear(hidden_dim // 4 , action_dim * 32)
+        self.fc3 = nn.Linear(hidden_dim, action_dim * 32)
         nn.init.orthogonal_(self.fc3.weight, gain=1.414)
         nn.init.constant_(self.fc3.bias, 0)
         self.norm3 = nn.LayerNorm(action_dim * 32)

@@ -706,4 +706,4 @@ if __name__ == "__main__":
     
     # Utilisation avec les nouvelles méthodes
     env.reset()
-    env.animate_pendulum_pygame(max_steps=10_000, manual_mode = False, title='Simulation Triple Pendule')
+    env.animate_pendulum_pygame(max_steps=10_000, manual_mode = True, title='Simulation Triple Pendule')

@@ -253,9 +253,9 @@ class TriplePendulumEnv:
         end_node_upright = float(end_node_y > self.reward_manager.max_height * self.reward_manager.threshold_ratio)
         is_node_on_right_of_cart = float(position_x3 > adapted_state[0])
         normalized_steps = self.num_steps / 500
-        direction = float(action > 0)
+        direction = float(action > 0) if action is not None else 0.0
         prev_action = self.previous_action
-        prev_direction = float(prev_action > 0)
+        prev_direction = float(prev_action > 0) if prev_action is not None else 0.0
 
         # ----------------- Feature Engineering -------------------
         q1, q2, q3 = adapted_state[1:4]

@@ -129,11 +129,9 @@ class TriplePendulumTrainer:
         self.ou_noise.reset()
         
         # Variables pour l'exploration dirigée
-        last_action = 0
+        last_action = 0.0  # Initialiser à 0.0 au lieu de None
         action_history = []
         exploration_phase = episode < self.num_exploration_episodes  # Phase d'exploration initiale
-
-
         
         while not done and num_steps < self.max_steps:
             current_state = self.env.get_state(action = last_action)
@@ -156,6 +154,12 @@ class TriplePendulumTrainer:
                 else:
                     action = action + self.ou_noise.sample() * 0.1  # Petit bruit continu
             
+            """
+            # Smoothing
+            if abs(action - last_action) > 0.5:
+                action = last_action * 0.7 + action * 0.3
+            """
+
             # Limiter l'action
             action = np.clip(action, -1, 1)
             action_history.append(action)

@@ -48,6 +48,7 @@ class RewardManager:
         self.old_points_positions = None
         self.cached_velocity = 0
         self.update_step = 0
+        self.hera_update_step = 0
         self.old_heraticness_penalty = 0
         self.previous_action = None
         self.old_points_positions = None
@@ -193,17 +194,31 @@ class RewardManager:
 
         # ----------------------- HERATICNESS PENALTY -----------------------
         heraticness_penalty = 0.0
-
+        # Sauvegarder l'action précédente pour l'affichage
+        old_action = self.previous_action
+        
         if action is None:
             pass
         elif self.previous_action is None:
-            self.previous_action = action
-        elif action != self.previous_action:
-            heraticness_penalty = abs(self.previous_action - action)
-            self.old_heraticness_penalty = heraticness_penalty
+            # Initialisation
             self.previous_action = action
         else:
-            heraticness_penalty = self.old_heraticness_penalty
+            # Si l'action est différente de la précédente, calculer la pénalité
+            if action != self.previous_action:
+                heraticness_penalty = abs(self.previous_action - action)
+                print(f'heraticness_penalty : {heraticness_penalty} because of action {action} and previous action {old_action}')
+            else:
+                # Sinon, utiliser l'ancienne pénalité
+                heraticness_penalty = self.old_heraticness_penalty
+                print('old used')
+            
+            # Toujours mettre à jour l'action précédente pour la prochaine fois
+            self.previous_action = action
+        
+        # Mettre à jour l'ancienne pénalité pour la prochaine fois
+        self.old_heraticness_penalty = heraticness_penalty
+        
+        
 
         # Compute the score
         reward = self.time_over_threshold / (1 + self.smoothed_variation) + max(end_node_y * 5, 0) 
@@ -240,9 +255,11 @@ class RewardManager:
         self.force_terminated = False
         self.cached_velocity = 0
         self.update_step = 0
+        self.hera_update_step = 0
         self.smoothed_smoothness = 0.0
         self.prev_output = None
         self.time_over_threshold = 0
         self.output_deltas = []
         self.old_heraticness_penalty = 0
         self.previous_action = None
+        self.smoothed_variation = 0.0

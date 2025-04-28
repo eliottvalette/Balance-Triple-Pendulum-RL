@@ -48,6 +48,8 @@ class RewardManager:
         self.old_points_positions = None
         self.cached_velocity = 0
         self.update_step = 0
+        self.previous_action = None
+        self.old_points_positions = None
         
         # -----------------------
         # Target state
@@ -66,7 +68,7 @@ class RewardManager:
         self.old_angles = [0.0, 0.0, 0.0]
         self.old_alignement_penalty = None
 
-    def calculate_reward(self, state, terminated, current_step, action = 0):
+    def calculate_reward(self, state, terminated, current_step, action):
         """
         Calculate the reward based on the current state and termination status.
         
@@ -99,7 +101,6 @@ class RewardManager:
         # ----------------------- REWARD COMPONENTS -----------------------
         if current_step == 0 and self.update_step == 0:
             self.old_points_positions = [x, x1, y1, x2, y2, x3, y3]
-            self.previous_action = action
             self.update_step = current_step
         
         # ----------------------- CART AND NODES POSITION REWARD -----------------------
@@ -191,8 +192,13 @@ class RewardManager:
 
         # ----------------------- HERATICNESS PENALTY -----------------------
         heraticness_penalty = 0.0
+        print(f'previous_action: {self.previous_action} and current_action: {action}')
         if self.previous_action is not None:
             heraticness_penalty = abs(self.previous_action - action)
+        
+        if self.previous_action != action or self.previous_action is None:
+            self.previous_action = action
+        
 
         # Compute the score
         reward = self.time_over_threshold / (1 + self.smoothed_variation) + max(end_node_y * 5, 0) 
@@ -207,10 +213,6 @@ class RewardManager:
         if end_node_y < 0.0:
             self.force_terminated = True
             reward -= 3
-
-        # update old_points_positions and old_action
-        self.old_points_positions = [x, x1, y1, x2, y2, x3, y3]
-        self.previous_action = action
         
         components_dict = {
             'reward': reward,
@@ -237,6 +239,4 @@ class RewardManager:
         self.prev_output = None
         self.time_over_threshold = 0
         self.output_deltas = []
-        self.previous_action = None
-        self.old_points_positions = None
         

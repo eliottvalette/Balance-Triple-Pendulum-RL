@@ -361,7 +361,7 @@ class TriplePendulumEnv:
         
         return self.get_state(action), terminated
         
-    def render(self, episode = 0, epsilon = 0, current_step = 0):
+    def render(self, action, episode = 0, epsilon = 0, current_step = 0):
         """
         Affiche l'état actuel du pendule.
         """
@@ -460,7 +460,7 @@ class TriplePendulumEnv:
                 ))
                 
                 # Récupérer les composants de récompense
-                _, reward_components, _ = self.reward_manager.calculate_reward(temp_state, False, current_step, self.applied_force)
+                _, reward_components, _ = self.reward_manager.calculate_reward(temp_state, False, current_step, action)
                 
                 # Dessiner un conteneur pour les récompenses
                 reward_panel_width = 300
@@ -679,7 +679,7 @@ class TriplePendulumEnv:
             next_state, terminated = self.step(target_force, manual_mode)
             
             # Rendu avec informations sur l'épisode et epsilon
-            if not self.render(episode=episode, epsilon=epsilon, current_step=self.num_steps):
+            if not self.render(action=target_force, episode=episode, epsilon=epsilon, current_step=self.num_steps):
                 break
 
             if terminated:

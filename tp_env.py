@@ -12,7 +12,7 @@ GRAVITY = config['gravity']
 DT = 0.01
 
 class TriplePendulumEnv:
-    def __init__(self, reward_manager=None, render_mode=None, num_nodes=config['num_nodes'], arm_length=1./3, bob_mass=0.01/3, friction_coefficient=config['friction_coefficient'], manual_force=True):
+    def __init__(self, reward_manager=None, render_mode=None, num_nodes=config['num_nodes'], arm_length=1./3, bob_mass=0.01/3, friction_coefficient=config['friction_coefficient']):
         self.reward_manager = reward_manager
         self.render_mode = render_mode
         self.n = num_nodes
@@ -20,7 +20,6 @@ class TriplePendulumEnv:
         self.bob_mass = bob_mass
         self.friction_coefficient = friction_coefficient
         self.cart_friction = 0.1
-        self.manual_force = manual_force
 
         # Paramètre de simulation pas-à-pas
         self.dt = DT  # Durée d'un pas de simulation
@@ -302,13 +301,12 @@ class TriplePendulumEnv:
         return state_with_positions
 
 
-    def step(self, action=0.0):
+    def step(self, action=0.0, manual_mode=False):
         """
-        Effectue un pas de simulation avec l'action donnée.
+        Effectue un pas de simulation avec l'action donnée (force appliquée).
         
         Args:
-            action (float): Si manual_force est True, force appliquée au chariot.
-                          Si manual_force est False, vitesse cible du chariot.
+            action (float): Force appliquée au chariot
             
         Returns:
             np.array: Le nouvel état après le pas de simulation
@@ -316,24 +314,17 @@ class TriplePendulumEnv:
         if self.current_state is None:
             self.reset()
         
-        if self.manual_force:
-            # Mode force manuelle
-            if (self.current_state[0] > 1.65 and action > 0):
-                action = -0.1
-            elif (self.current_state[0] < -1.65 and action < 0):
-                action = 0.1
-                
-            # Appliquer le lissage à la force
-            force_smoothing = 0.1
+        if (self.current_state[0] > 1.65 and action > 0) :
+            action = -0.1
+        elif (self.current_state[0] < -1.65 and action < 0):
+            action = 0.1
+            
+        # Appliquer le lissage à la force
+        force_smoothing = 0.1
+        if manual_mode:
             self.applied_force += force_smoothing * (action - self.applied_force)
         else:
-            # Mode vitesse directe
-            num_joints = len(self.positions)
-            current_velocity = self.current_state[num_joints]
-            velocity_error = action - current_velocity
-            # Contrôleur PID simple pour atteindre la vitesse cible
-            kp = 2.0  # Gain proportionnel
-            self.applied_force = kp * velocity_error
+            self.applied_force = action
         
         # Calcul du nouvel état
         state_derivative = self.rhs(self.current_state, self.current_time, self.parameter_vals, lambda state: self.applied_force)
@@ -361,7 +352,7 @@ class TriplePendulumEnv:
         self.current_state = next_state
         self.current_time += self.dt
 
-        terminated = False
+        terminated = False # abs(self.current_state[0]) > 1.6
         
         return self.get_state(), terminated
         
@@ -591,7 +582,7 @@ class TriplePendulumEnv:
         
         return True
 
-    def animate_pendulum_pygame(self, max_steps, states=None, length=None, title='Pendulum', manual_mode = False):
+    def animate_pendulum_pygame(self, max_steps, manual_mode, title):
         """
         Anime le pendule en utilisant les méthodes step et render.
         
@@ -672,8 +663,7 @@ class TriplePendulumEnv:
                         target_force = 0.0
             
             # Mise à jour de la force et de l'état
-            self.applied_force += force_smoothing * (target_force - self.applied_force)
-            next_state, terminated = self.step(self.applied_force)
+            next_state, terminated = self.step(target_force, manual_mode)
             
             # Rendu avec informations sur l'épisode et epsilon
             if not self.render(episode=episode, epsilon=epsilon, current_step=self.num_steps):
@@ -694,4 +684,4 @@ if __name__ == "__main__":
     
     # Utilisation avec les nouvelles méthodes
     env.reset()
-    env.animate_pendulum_pygame(max_steps=10_000, title='Simulation Triple Pendule', manual_mode = True)
+    env.animate_pendulum_pygame(max_steps=10_000, manual_mode = True, title='Simulation Triple Pendule')

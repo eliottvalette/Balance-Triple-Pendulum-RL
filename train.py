@@ -62,7 +62,7 @@ class TriplePendulumTrainer:
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim, config['hidden_dim'])
         self.critic = TriplePendulumCritic(state_dim, action_dim, config['hidden_dim'])
-        self.num_exploration_episodes = 200
+        self.num_exploration_episodes = 400
 
         # Optimizers
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=config['actor_lr'])

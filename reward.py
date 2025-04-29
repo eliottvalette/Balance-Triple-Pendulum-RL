@@ -221,13 +221,13 @@ class RewardManager:
         reward = self.time_over_threshold / (1 + self.smoothed_variation) + max(end_node_y * 5, 0) 
 
         # Normalize reward
-        reward = (reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)) - border_penalty - heraticness_penalty * 0.5
+        reward = (1 + (reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)) / 5) ** 2 - border_penalty - x_nodes_penalty - heraticness_penalty * 0.1
         
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
 
-        if end_node_y < - 0.1:
+        if end_node_y < self.max_height * self.threshold_ratio * 0.9:
             self.force_terminated = True
             reward -= 3
         

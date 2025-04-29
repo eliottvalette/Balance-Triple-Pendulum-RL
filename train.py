@@ -144,7 +144,7 @@ class TriplePendulumTrainer:
             
             if exploration_phase:
                 # Phase d'exploration initiale: mouvements plus amples
-                if num_steps % 10 == 0:  # Changement de direction périodique
+                if num_steps % 3 == 0:  # Changement de direction périodique
                     last_action = np.random.choice([-1, 1]) * np.random.uniform(0.5, 1.0)
                 action = last_action + self.ou_noise.sample() * 0.3
             else:

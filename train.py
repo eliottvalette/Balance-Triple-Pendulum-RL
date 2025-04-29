@@ -154,6 +154,10 @@ class TriplePendulumTrainer:
                 else:
                     action = action + self.ou_noise.sample() * 0.1  # Petit bruit continu
 
+            # Smoothing
+            if action * last_action < 0:
+                action = action * 0.5 + last_action * 0.5
+
             # Limiter l'action
             action = np.clip(action, -1, 1)
             action_history.append(action)

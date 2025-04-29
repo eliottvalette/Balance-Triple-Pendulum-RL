@@ -1,9 +1,9 @@
 config = {
-    'num_episodes': 100_000,
+    'num_episodes': 20_000,
     'actor_lr': 3e-4,
     'critic_lr': 3e-4,
     'gamma': 0.99,
-    'batch_size': 16,
+    'batch_size': 64,
     'hidden_dim': 512,
     'buffer_capacity': 25_000,
     'updates_per_episode': 10,

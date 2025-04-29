@@ -140,7 +140,7 @@ class TriplePendulumEnv:
     def reset(self):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
-        rd_angle = pi/2 # rd.uniform(-pi, pi)
+        rd_angle = pi/2 + rd.uniform(-pi/8, pi/8)
         angles_initiaux = [rd_angle] + [rd_angle] * (len(self.positions) - 2)
         vitesses_initiales = 0.0
         state = hstack((

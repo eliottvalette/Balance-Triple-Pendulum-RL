@@ -1,5 +1,5 @@
 config = {
-    'num_episodes': 20_000,
+    'num_episodes': 10_000,
     'actor_lr': 3e-4,
     'critic_lr': 3e-4,
     'gamma': 0.99,

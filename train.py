@@ -62,7 +62,7 @@ class TriplePendulumTrainer:
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim, config['hidden_dim'])
         self.critic = TriplePendulumCritic(state_dim, action_dim, config['hidden_dim'])
-        self.num_exploration_episodes = 1
+        self.num_exploration_episodes = 400
         
         # Optimizers
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=config['actor_lr'])
@@ -79,7 +79,7 @@ class TriplePendulumTrainer:
         
         # Exploration parameters
         self.epsilon = 1.0  # Initial random action probability
-        self.epsilon_decay = 0.9985  # Epsilon decay rate
+        self.epsilon_decay = 0.999  # Epsilon decay rate
         self.min_epsilon = 0.001  # Minimum epsilon
         self.ou_noise = OrnsteinUhlenbeckNoise(action_dim=1)
         
@@ -150,16 +150,10 @@ class TriplePendulumTrainer:
             else:
                 # Phase d'apprentissage: bruit OU modulé par epsilon
                 if rd.random() < self.epsilon:
-                    action = action + self.ou_noise.sample() * self.epsilon
-                else:
-                    action = action + self.ou_noise.sample() * 0.1  # Petit bruit continu
-
-            # Smoothing
-            if action * last_action < 0:
-                action = action * 0.5 + last_action * 0.5
+                    action = action + rd.random() * 2 * self.epsilon
 
             # Limiter l'action
-            action = np.clip(action, -1, 1)
+            action = float(np.clip(action, -1, 1))
             action_history.append(action)
             
             # Take step in environment

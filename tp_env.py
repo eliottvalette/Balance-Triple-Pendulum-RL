@@ -140,7 +140,7 @@ class TriplePendulumEnv:
     def reset(self):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
-        rd_angle = pi/2 + rd.randint(-1, 1) * pi/16
+        rd_angle = pi/2 # rd.randint(-1, 1) * pi/16
         angles_initiaux = [rd_angle] + [rd_angle] * (len(self.positions) - 2)
         vitesses_initiales = 0.0
         state = hstack((
@@ -233,6 +233,7 @@ class TriplePendulumEnv:
             action
         )
         
+        reward = reward_components['reward']
         x_penalty = reward_components['x_penalty']
         upright_reward = reward_components['upright_reward']
         non_alignement_penalty = reward_components['non_alignement_penalty']
@@ -301,7 +302,7 @@ class TriplePendulumEnv:
         state_with_positions = np.hstack((
             adapted_state,
             position_x1, position_y1, position_x2, position_y2, position_x3, position_y3, 
-            x_penalty, upright_reward, non_alignement_penalty, stability_penalty, mse_penalty, heraticness_penalty,
+            reward, x_penalty, upright_reward, non_alignement_penalty, stability_penalty, mse_penalty, heraticness_penalty,
             consecutive_upright_steps, have_been_upright_once, came_back_down, steps_double_down,
             near_border, end_node_y, end_node_upright, time_over_threshold, smoothed_variation, direction, prev_action, prev_direction,
             is_node_on_right_of_cart, normalized_steps,

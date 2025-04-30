@@ -37,7 +37,7 @@ class RewardManager:
         # -----------------------
         # Real Reward Components
         # -----------------------
-        self.threshold_ratio = 0.95  # 95% of pendulum length (as per the formula)
+        self.threshold_ratio = 0.98  # 98% of pendulum length (as per the formula)
         self.time_over_threshold = 0
         self.prev_output = None
         self.output_deltas = []

@@ -150,7 +150,7 @@ class TriplePendulumTrainer:
             else:
                 # Phase d'apprentissage: bruit OU modulé par epsilon
                 if rd.random() < self.epsilon:
-                    action = action + rd.random() * 2 * self.epsilon
+                    action = action * (1 - self.epsilon) + (rd.random() * 2 - 1) * self.epsilon
 
             # Limiter l'action
             action = float(np.clip(action, -1, 1))

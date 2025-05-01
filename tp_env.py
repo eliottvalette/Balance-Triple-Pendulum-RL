@@ -140,7 +140,7 @@ class TriplePendulumEnv:
     def reset(self):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
-        rd_angle = pi/2 # rd.randint(-1, 1) * pi/16
+        rd_angle = pi/2 + rd.randint(-1, 1) * pi/32
         angles_initiaux = [rd_angle] + [rd_angle] * (len(self.positions) - 2)
         vitesses_initiales = 0.0
         state = hstack((
@@ -240,11 +240,11 @@ class TriplePendulumEnv:
         stability_penalty = reward_components['stability_penalty']
         mse_penalty = reward_components['mse_penalty']
         heraticness_penalty = reward_components['heraticness_penalty']
-        consecutive_upright_steps = self.reward_manager.consecutive_upright_steps / 150
+        consecutive_upright_steps = self.reward_manager.consecutive_upright_steps / 500
         have_been_upright_once = self.reward_manager.have_been_upright_once
         came_back_down = self.reward_manager.came_back_down
-        steps_double_down = self.reward_manager.steps_double_down / 150
-        time_over_threshold = self.reward_manager.time_over_threshold / 150
+        steps_double_down = self.reward_manager.steps_double_down / 500
+        time_over_threshold = self.reward_manager.time_over_threshold / 500
         smoothed_variation = self.reward_manager.smoothed_variation
 
 
@@ -286,7 +286,6 @@ class TriplePendulumEnv:
 
         # Approximation énergie
         KE = 0.5 * (u1 ** 2 + u2 ** 2 + u3 ** 2)
-        PE = -GRAVITY * end_node_y
 
         # Distances inter-masses
         if self.n > 1:
@@ -308,7 +307,7 @@ class TriplePendulumEnv:
             is_node_on_right_of_cart, normalized_steps,
             sin_diff_12, cos_sum_23, v1_angle1, v2_angle2,
             self.applied_force, action,
-            KE, PE, d12, d23
+            KE, d12, d23
         ))
 
         return state_with_positions

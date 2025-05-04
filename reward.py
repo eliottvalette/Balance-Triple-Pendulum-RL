@@ -169,24 +169,6 @@ class RewardManager:
         # ----------------------- FAKE REWARD -----------------------
         fake_reward = upright_reward - mse_penalty - non_alignement_penalty - stability_penalty
 
-        # ----------------------- REAL REWARD -----------------------
-        threshold = self.max_height * self.threshold_ratio
-
-        # Track time over threshold
-        if end_node_y > threshold:
-            self.time_over_threshold += 1
-        else:
-            self.time_over_threshold = 0
-
-        # Track smoothness with exponential moving average of variation
-        if self.prev_output is not None:
-            delta = abs(end_node_y - self.prev_output)
-            self.smoothed_variation = 0.99 * self.smoothed_variation + 0.1 * delta
-        else:
-            self.smoothed_variation = 0.0
-
-        self.prev_output = end_node_y
-
         # ----------------------- BORDER PENALTY -----------------------
         border_penalty = 0.0
         if x < -1.6 or x > 1.6:
@@ -217,20 +199,46 @@ class RewardManager:
         # Mettre à jour l'ancienne pénalité pour la prochaine fois
         self.old_heraticness_penalty = heraticness_penalty
         
-        # Compute the score
-        reward = self.time_over_threshold / (1 + self.smoothed_variation)
+        if self.current_step < 1000 :
+            # ----------------------- REAL REWARD -----------------------
+            threshold = self.max_height * self.threshold_ratio
 
-        # Normalize reward
-        reward = (1 + (reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)) / 5) ** 2 - 1
+            # Track time over threshold
+            if end_node_y > threshold:
+                self.time_over_threshold += 1
+            else:
+                self.time_over_threshold = 0
+
+            # Track smoothness with exponential moving average of variation
+            if self.prev_output is not None:
+                delta = abs(end_node_y - self.prev_output)
+                self.smoothed_variation = 0.99 * self.smoothed_variation + 0.1 * delta
+            else:
+                self.smoothed_variation = 0.0
+
+            self.prev_output = end_node_y
+            
+            # Compute the score
+            reward = self.time_over_threshold / (1 + self.smoothed_variation)
+
+            if reward > 0 :
+                self.have_been_upright_once = True
+
+            # Normalize reward
+            reward = (1 + (reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)) / 5) ** 2 - 1
+            
+            # Cap reward
+            reward = min(reward, 5) - border_penalty + end_node_y * 0.1 - x_nodes_penalty - heraticness_penalty * 0.05
+
         
-        # Cap reward
-        reward = min(reward, 5) - border_penalty + end_node_y * 0.1  # - x_nodes_penalty - heraticness_penalty * 0.05
-
+        
+        
+        
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
-
-        if end_node_y < self.max_height * self.threshold_ratio * 0.85 and False :
+        
+        if end_node_y < self.max_height * self.threshold_ratio * 0.75 and self.have_been_upright_once and False :
             self.force_terminated = True
             reward -= 3
         

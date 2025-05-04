@@ -245,6 +245,7 @@ class TriplePendulumEnv:
         came_back_down = self.reward_manager.came_back_down
         steps_double_down = self.reward_manager.steps_double_down / 500
         time_over_threshold = self.reward_manager.time_over_threshold / 500
+        time_under_threshold = self.reward_manager.time_under_threshold / 500
         smoothed_variation = self.reward_manager.smoothed_variation
 
 
@@ -254,6 +255,7 @@ class TriplePendulumEnv:
         end_node_upright = float(end_node_y > self.reward_manager.max_height * self.reward_manager.threshold_ratio)
         is_node_on_right_of_cart = float(position_x3 > adapted_state[0])
         normalized_steps = self.num_steps / 500
+        phase = float(self.num_steps < 250)
         direction = float(action > 0) if action is not None else 0.0
         prev_action = self.previous_action
         prev_direction = float(prev_action > 0) if prev_action is not None else 0.0
@@ -303,8 +305,8 @@ class TriplePendulumEnv:
             position_x1, position_y1, position_x2, position_y2, position_x3, position_y3, 
             reward, x_penalty, upright_reward, non_alignement_penalty, stability_penalty, mse_penalty, heraticness_penalty,
             consecutive_upright_steps, have_been_upright_once, came_back_down, steps_double_down,
-            near_border, end_node_y, end_node_upright, time_over_threshold, smoothed_variation, direction, prev_action, prev_direction,
-            is_node_on_right_of_cart, normalized_steps,
+            near_border, end_node_y, end_node_upright, time_over_threshold, time_under_threshold, smoothed_variation, direction, prev_action, prev_direction,
+            is_node_on_right_of_cart, normalized_steps, phase,
             sin_diff_12, cos_sum_23, v1_angle1, v2_angle2,
             self.applied_force, action,
             KE, d12, d23

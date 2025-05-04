@@ -39,6 +39,7 @@ class RewardManager:
         # -----------------------
         self.threshold_ratio = 0.98  # 98% of pendulum length (as per the formula)
         self.time_over_threshold = 0
+        self.time_under_threshold = 0
         self.prev_output = None
         self.output_deltas = []
 
@@ -199,12 +200,12 @@ class RewardManager:
         # Mettre à jour l'ancienne pénalité pour la prochaine fois
         self.old_heraticness_penalty = heraticness_penalty
         
-        if self.current_step < 1000 :
+        if current_step < 250 : # Be Straight Up
             # ----------------------- REAL REWARD -----------------------
-            threshold = self.max_height * self.threshold_ratio
+            threshold_y2 = self.max_height * self.threshold_ratio
 
             # Track time over threshold
-            if end_node_y > threshold:
+            if end_node_y > threshold_y2:
                 self.time_over_threshold += 1
             else:
                 self.time_over_threshold = 0
@@ -230,15 +231,54 @@ class RewardManager:
             # Cap reward
             reward = min(reward, 5) - border_penalty + end_node_y * 0.1 - x_nodes_penalty - heraticness_penalty * 0.05
 
-        
-        
-        
+        else : # First Edge Up and Second Edge Down (I mean folded but the first node is up and the second node is at the same level as the cart)
+            # ----------------------- REAL REWARD -----------------------
+            threshold_y1 = self.max_height * self.threshold_ratio / 2 
+            threshold_y2 = 0.02
+
+            first_node_y = y1
+
+            # Track time over threshold
+            if first_node_y > threshold_y1:
+                self.time_over_threshold += 1
+            else:
+                self.time_over_threshold = 0
+
+            # Track time under threshold
+            if first_node_y < threshold_y2:
+                self.time_under_threshold += 1
+            else:
+                self.time_under_threshold = 0
+
+            # Track smoothness with exponential moving average of variation
+            if self.prev_output is not None:
+                delta = abs(first_node_y - self.prev_output)
+                self.smoothed_variation = 0.99 * self.smoothed_variation + 0.1 * delta
+            else:
+                self.smoothed_variation = 0.0
+
+            self.prev_output = first_node_y
+            
+            # Compute the score
+            if first_node_y > end_node_y:
+                reward = self.time_over_threshold / (1 + self.smoothed_variation) + self.time_under_threshold / (1 + self.smoothed_variation)
+            else:
+                reward = 0
+
+            if reward > 0 :
+                self.have_been_upright_once = True
+
+            # Normalize reward
+            reward = (1 + (reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)) / 5) ** 2 - 1
+            
+            # Cap reward
+            reward = min(reward, 5) - border_penalty + end_node_y * 0.1 - x_nodes_penalty - heraticness_penalty * 0.05
         
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
         
-        if end_node_y < self.max_height * self.threshold_ratio * 0.75 and self.have_been_upright_once and False :
+        if end_node_y < self.max_height * self.threshold_ratio * 0.00 :
             self.force_terminated = True
             reward -= 3
         
@@ -267,6 +307,7 @@ class RewardManager:
         self.smoothed_smoothness = 0.0
         self.prev_output = None
         self.time_over_threshold = 0
+        self.time_under_threshold = 0
         self.output_deltas = []
         self.old_heraticness_penalty = 0
         self.previous_action = None

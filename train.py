@@ -50,14 +50,14 @@ class TriplePendulumTrainer:
     def __init__(self, config):
         self.config = config
         self.reward_manager = RewardManager()
-        self.env = TriplePendulumEnv(reward_manager=self.reward_manager, render_mode="human", num_nodes=config['num_nodes'])  # Enable rendering from the start
+        self.env = TriplePendulumEnv(reward_manager=self.reward_manager, render_mode="human", num_nodes=config['num_nodes'], max_steps=1000)  # Enable rendering from the start
         
         # Initialize models
         # Ajustement de la dimension d'état en fonction de l'environnement réel
         # Ici, la dimension est basée sur la taille de l'état retourné par reset()
         self.env.reset()
-        self.old_state = self.env.get_state(action = 0)
-        initial_state = self.env.get_state(action = 0)
+        self.old_state = self.env.get_state(action = 0, phase = 1)
+        initial_state = self.env.get_state(action = 0, phase = 1)
         state_dim = len(initial_state) * 2
         action_dim = 1
         self.actor = TriplePendulumActor(state_dim, action_dim, config['hidden_dim'])
@@ -73,9 +73,10 @@ class TriplePendulumTrainer:
         self.metrics = MetricsTracker(plot_config)
         self.plot_frequency = plot_config.get('plot_frequency', 500)
         self.full_plot_frequency = plot_config.get('full_plot_frequency', 1000)
+        self.phase_cumulated_rewards = {1: 0, -1: 0}
         
         self.total_steps = 0
-        self.max_steps = 500  # Maximum steps per episode
+        self.max_steps = 1000  # Maximum steps per episode
         
         # Exploration parameters
         self.epsilon = 1.0  # Initial random action probability
@@ -127,6 +128,12 @@ class TriplePendulumTrainer:
         # Réinitialiser le RewardManager et le bruit
         self.reward_manager.reset()
         self.ou_noise.reset()
+
+        # Episode phase
+        phase_keys = [-1, 1]
+        phase_rewards = np.array([self.phase_cumulated_rewards[k] for k in phase_keys])
+        softmax_phase_probabilities = np.exp(phase_rewards) / np.sum(np.exp(phase_rewards))
+        phase = np.random.choice(phase_keys, p=softmax_phase_probabilities)
         
         # Variables pour l'exploration dirigée
         last_action = 0.0
@@ -134,7 +141,7 @@ class TriplePendulumTrainer:
         exploration_phase = episode < self.num_exploration_episodes  # Phase d'exploration initiale
         
         while not done and num_steps < self.max_steps:
-            current_state = self.env.get_state(action = last_action)
+            current_state = self.env.get_state(action = last_action, phase = phase)
             old_and_current_state = np.concatenate((self.old_state, current_state))
             old_and_current_state_tensor = torch.FloatTensor(old_and_current_state)
             
@@ -157,7 +164,7 @@ class TriplePendulumTrainer:
             action_history.append(action)
             
             # Take step in environment
-            next_state, terminated = self.env.step(action)
+            next_state, terminated = self.env.step(action = action, phase = phase)
             
             if np.isnan(np.sum(next_state)):
                 print('state:', next_state)
@@ -165,13 +172,13 @@ class TriplePendulumTrainer:
             
             # Render if rendering is enabled
             if self.env.render_mode == "human":
-                rendering_successful = self.env.render(action, episode, self.epsilon, num_steps)
+                rendering_successful = self.env.render(action = action, episode = episode, epsilon = self.epsilon, current_step = num_steps, phase = phase)
                 if not rendering_successful:
                     done = True
                     raise ValueError("Warning: Rendering failed")
             
             # Calculate custom reward and components
-            custom_reward, reward_components, force_terminated = self.reward_manager.calculate_reward(next_state, terminated, num_steps, action)
+            custom_reward, reward_components, force_terminated = self.reward_manager.calculate_reward(next_state, terminated, num_steps, action, phase)
             
             # Store transition in replay buffer with normalized reward
             current_and_next_state = np.concatenate((current_state, next_state))
@@ -198,6 +205,9 @@ class TriplePendulumTrainer:
         # Decay exploration parameters
         self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
         print(f"Episode {episode} ended with {num_steps} steps")
+
+        # Update the cumulated rewards
+        self.phase_cumulated_rewards[phase] += episode_reward
 
         return trajectory, episode_reward, reward_components_accumulated
     

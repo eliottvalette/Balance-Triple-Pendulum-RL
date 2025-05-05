@@ -12,7 +12,7 @@ GRAVITY = config['gravity']
 DT = 0.01
 
 class TriplePendulumEnv:
-    def __init__(self, reward_manager=None, render_mode=None, num_nodes=config['num_nodes'], arm_length=1./3, bob_mass=0.01/3, friction_coefficient=config['friction_coefficient']):
+    def __init__(self, reward_manager=None, render_mode=None, num_nodes=config['num_nodes'], arm_length=1./3, bob_mass=0.01/3, friction_coefficient=config['friction_coefficient'], max_steps=500):
         self.reward_manager = reward_manager
         self.render_mode = render_mode
         self.n = num_nodes
@@ -20,7 +20,7 @@ class TriplePendulumEnv:
         self.bob_mass = bob_mass
         self.friction_coefficient = friction_coefficient
         self.cart_friction = 0.1
-
+        self.max_steps = max_steps
         # Paramètre de simulation pas-à-pas
         self.dt = DT  # Durée d'un pas de simulation
         self.current_state = None
@@ -211,7 +211,7 @@ class TriplePendulumEnv:
         # Retourne un état de base avec uniquement les positions
         return adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3
     
-    def get_state(self, action):
+    def get_state(self, action, phase = None):
         """
         Renvoie l'état courant du système enrichi avec des combinaisons de features.
         """
@@ -230,7 +230,8 @@ class TriplePendulumEnv:
             np.hstack((adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3)),
             False,
             self.num_steps,
-            action
+            action,
+            phase
         )
         
         reward = reward_components['reward']
@@ -244,9 +245,11 @@ class TriplePendulumEnv:
         have_been_upright_once = self.reward_manager.have_been_upright_once
         came_back_down = self.reward_manager.came_back_down
         steps_double_down = self.reward_manager.steps_double_down / 500
-        time_over_threshold = self.reward_manager.time_over_threshold / 500
-        time_under_threshold = self.reward_manager.time_under_threshold / 500
-        smoothed_variation = self.reward_manager.smoothed_variation
+        time_over_threshold_1 = self.reward_manager.time_over_threshold_1 / 500
+        time_over_threshold_2 = self.reward_manager.time_over_threshold_2 / 500
+        time_under_threshold_2 = self.reward_manager.time_under_threshold_2 / 500
+        smoothed_variation_1 = self.reward_manager.smoothed_variation_1
+        smoothed_variation_2 = self.reward_manager.smoothed_variation_2
 
 
         # ----------------- Indicateurs logiques -------------------
@@ -255,7 +258,8 @@ class TriplePendulumEnv:
         end_node_upright = float(end_node_y > self.reward_manager.max_height * self.reward_manager.threshold_ratio)
         is_node_on_right_of_cart = float(position_x3 > adapted_state[0])
         normalized_steps = self.num_steps / 500
-        phase = float(self.num_steps < 250)
+        phase_1 = phase == 1
+        phase_2 = phase == -1
         direction = float(action > 0) if action is not None else 0.0
         prev_action = self.previous_action
         prev_direction = float(prev_action > 0) if prev_action is not None else 0.0
@@ -305,17 +309,17 @@ class TriplePendulumEnv:
             position_x1, position_y1, position_x2, position_y2, position_x3, position_y3, 
             reward, x_penalty, upright_reward, non_alignement_penalty, stability_penalty, mse_penalty, heraticness_penalty,
             consecutive_upright_steps, have_been_upright_once, came_back_down, steps_double_down,
-            near_border, end_node_y, end_node_upright, time_over_threshold, time_under_threshold, smoothed_variation, direction, prev_action, prev_direction,
+            near_border, end_node_y, end_node_upright, time_over_threshold_1, time_over_threshold_2, time_under_threshold_2, smoothed_variation_1, smoothed_variation_2, direction, prev_action, prev_direction,
             is_node_on_right_of_cart, normalized_steps, phase,
             sin_diff_12, cos_sum_23, v1_angle1, v2_angle2,
             self.applied_force, action,
-            KE, d12, d23
+            KE, d12, d23, phase_1, phase_2
         ))
 
         return state_with_positions
 
 
-    def step(self, action=0.0, manual_mode=False):
+    def step(self, action=0.0, manual_mode=False, phase = None):
         """
         Effectue un pas de simulation avec l'action donnée (force appliquée).
         
@@ -369,10 +373,12 @@ class TriplePendulumEnv:
         terminated = False # abs(self.current_state[0]) > 1.6
 
         self.previous_action = action
+
+        if phase is None:
+            raise ValueError("Phase is None")
+        return self.get_state(action = action, phase = phase), terminated
         
-        return self.get_state(action), terminated
-        
-    def render(self, action, episode = 0, epsilon = 0, current_step = 0):
+    def render(self, action, episode = 0, epsilon = 0, current_step = 0, phase = None):
         """
         Affiche l'état actuel du pendule.
         """
@@ -471,7 +477,7 @@ class TriplePendulumEnv:
                 ))
                 
                 # Récupérer les composants de récompense
-                _, reward_components, _ = self.reward_manager.calculate_reward(temp_state, False, current_step, action)
+                _, reward_components, _ = self.reward_manager.calculate_reward(temp_state, False, current_step, action, phase)
                 
                 # Dessiner un conteneur pour les récompenses
                 reward_panel_width = 300

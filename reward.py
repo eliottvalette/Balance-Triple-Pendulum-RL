@@ -20,6 +20,8 @@ class RewardManager:
         self.upright_weight = 0.21 
         self.stability_weight = 0.02  # Weight for the stability reward
         self.mse_weight = 0.3  # Weight for the MSE penalty
+        self.heraticness_weight = 0.05
+        self.x_nodes_penalty_weight = 0.05
         
         # -----------------------
         # Upright tracking parameters
@@ -37,9 +39,10 @@ class RewardManager:
         # -----------------------
         # Real Reward Components
         # -----------------------
-        self.threshold_ratio = 0.98  # 98% of pendulum length (as per the formula)
-        self.time_over_threshold = 0
-        self.time_under_threshold = 0
+        self.threshold_ratio = 0.95  # 95% of pendulum length (as per the formula)
+        self.time_over_threshold_1 = 0
+        self.time_over_threshold_2 = 0
+        self.time_under_threshold_2 = 0
         self.prev_output = None
         self.output_deltas = []
 
@@ -71,7 +74,7 @@ class RewardManager:
         self.old_angles = [0.0, 0.0, 0.0]
         self.old_alignement_penalty = None
 
-    def calculate_reward(self, state, terminated, current_step, action):
+    def calculate_reward(self, state, terminated, current_step, action, phase = None):
         """
         Calculate the reward based on the current state and termination status.
         
@@ -97,6 +100,12 @@ class RewardManager:
         y2 = state[11]
         x3 = state[12]
         y3 = state[13]
+        if phase is None:
+            phase_1 = state[-2] == 1
+            phase_2 = state[-1] == 1
+        else:
+            phase_1 = phase == 1
+            phase_2 = phase == -1
 
         end_node_x = x3 if self.num_nodes == 3 else x2 if self.num_nodes == 2 else x1
         end_node_y = y3 if self.num_nodes == 3 else y2 if self.num_nodes == 2 else y1
@@ -200,27 +209,27 @@ class RewardManager:
         # Mettre à jour l'ancienne pénalité pour la prochaine fois
         self.old_heraticness_penalty = heraticness_penalty
         
-        if current_step < 250 : # Be Straight Up
+        if phase_1 : # Be Straight Up
             # ----------------------- REAL REWARD -----------------------
             threshold_y2 = self.max_height * self.threshold_ratio
 
             # Track time over threshold
             if end_node_y > threshold_y2:
-                self.time_over_threshold += 1
+                self.time_over_threshold_1 += 1
             else:
-                self.time_over_threshold = 0
+                self.time_over_threshold_1 = 0
 
             # Track smoothness with exponential moving average of variation
             if self.prev_output is not None:
                 delta = abs(end_node_y - self.prev_output)
-                self.smoothed_variation = 0.99 * self.smoothed_variation + 0.1 * delta
+                self.smoothed_variation_1 = 0.99 * self.smoothed_variation_1 + 0.1 * delta
             else:
-                self.smoothed_variation = 0.0
+                self.smoothed_variation_1 = 0.0
 
             self.prev_output = end_node_y
             
             # Compute the score
-            reward = self.time_over_threshold / (1 + self.smoothed_variation)
+            reward = self.time_over_threshold_1 / (1 + self.smoothed_variation_1)
 
             if reward > 0 :
                 self.have_been_upright_once = True
@@ -229,39 +238,39 @@ class RewardManager:
             reward = (1 + (reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)) / 5) ** 2 - 1
             
             # Cap reward
-            reward = min(reward, 5) - border_penalty + end_node_y * 0.1 - x_nodes_penalty - heraticness_penalty * 0.05
+            reward = min(reward, 5) - border_penalty - x_nodes_penalty * self.x_nodes_penalty_weight - heraticness_penalty * self.heraticness_weight
 
-        else : # First Edge Up and Second Edge Down (I mean folded but the first node is up and the second node is at the same level as the cart)
+        elif phase_2 : # First Edge Up and Second Edge Down (I mean folded but the first node is up and the second node is at the same level as the cart)
             # ----------------------- REAL REWARD -----------------------
             threshold_y1 = self.max_height * self.threshold_ratio / 2 
-            threshold_y2 = 0.02
+            threshold_y2 = 0.05
 
             first_node_y = y1
 
             # Track time over threshold
             if first_node_y > threshold_y1:
-                self.time_over_threshold += 1
+                self.time_over_threshold_2 += 1
             else:
-                self.time_over_threshold = 0
+                self.time_over_threshold_2 = 0
 
             # Track time under threshold
             if first_node_y < threshold_y2:
-                self.time_under_threshold += 1
+                self.time_under_threshold_2 += 1
             else:
-                self.time_under_threshold = 0
+                self.time_under_threshold_2 = 0
 
             # Track smoothness with exponential moving average of variation
             if self.prev_output is not None:
                 delta = abs(first_node_y - self.prev_output)
-                self.smoothed_variation = 0.99 * self.smoothed_variation + 0.1 * delta
+                self.smoothed_variation_2 = 0.99 * self.smoothed_variation_2 + 0.1 * delta
             else:
-                self.smoothed_variation = 0.0
+                self.smoothed_variation_2 = 0.0
 
             self.prev_output = first_node_y
             
             # Compute the score
             if first_node_y > end_node_y:
-                reward = self.time_over_threshold / (1 + self.smoothed_variation) + self.time_under_threshold / (1 + self.smoothed_variation)
+                reward = self.time_over_threshold_2 / (1 + self.smoothed_variation_2) + self.time_under_threshold_2 / (1 + self.smoothed_variation_2)
             else:
                 reward = 0
 
@@ -272,13 +281,13 @@ class RewardManager:
             reward = (1 + (reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)) / 5) ** 2 - 1
             
             # Cap reward
-            reward = min(reward, 5) - border_penalty + end_node_y * 0.1 - x_nodes_penalty - heraticness_penalty * 0.05
+            reward = min(reward, 5) - border_penalty - x_nodes_penalty * self.x_nodes_penalty_weight - heraticness_penalty * self.heraticness_weight
         
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
         
-        if end_node_y < self.max_height * self.threshold_ratio * 0.00 :
+        if end_node_y < -0.05 :
             self.force_terminated = True
             reward -= 3
         
@@ -306,9 +315,11 @@ class RewardManager:
         self.hera_update_step = 0
         self.smoothed_smoothness = 0.0
         self.prev_output = None
-        self.time_over_threshold = 0
-        self.time_under_threshold = 0
+        self.time_over_threshold_1 = 0
+        self.time_over_threshold_2 = 0
+        self.time_under_threshold_2 = 0
         self.output_deltas = []
         self.old_heraticness_penalty = 0
         self.previous_action = None
-        self.smoothed_variation = 0.0
+        self.smoothed_variation_1 = 0.0
+        self.smoothed_variation_2 = 0.0

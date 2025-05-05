@@ -39,7 +39,7 @@ class RewardManager:
         # -----------------------
         # Real Reward Components
         # -----------------------
-        self.threshold_ratio = 0.95  # 95% of pendulum length (as per the formula)
+        self.threshold_ratio = 0.98  # 98% of pendulum length (as per the formula)
         self.time_over_threshold_1 = 0
         self.time_over_threshold_2 = 0
         self.time_under_threshold_2 = 0
@@ -269,7 +269,7 @@ class RewardManager:
             self.prev_output = first_node_y
             
             # Compute the score
-            if first_node_y > end_node_y:
+            if first_node_y > end_node_y and end_node_y < 0.1:
                 reward = self.time_over_threshold_2 / (1 + self.smoothed_variation_2) + self.time_under_threshold_2 / (1 + self.smoothed_variation_2)
             else:
                 reward = 0

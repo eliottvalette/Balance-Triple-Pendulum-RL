@@ -73,14 +73,16 @@ class TriplePendulumTrainer:
         self.metrics = MetricsTracker(plot_config)
         self.plot_frequency = plot_config.get('plot_frequency', 500)
         self.full_plot_frequency = plot_config.get('full_plot_frequency', 1000)
+        self.previous_phase_cumulated_rewards = {1: 0, -1: 0}
         self.phase_cumulated_rewards = {1: 0, -1: 0}
+        self.phase_counts = {1: 0, -1: 0}
         
         self.total_steps = 0
-        self.max_steps = 1000  # Maximum steps per episode
+        self.max_steps = 500  # Maximum steps per episode
         
         # Exploration parameters
         self.epsilon = 1.0  # Initial random action probability
-        self.epsilon_decay = 0.999  # Epsilon decay rate
+        self.epsilon_decay = 0.9985  # Epsilon decay rate
         self.min_epsilon = 0.001  # Minimum epsilon
         self.ou_noise = OrnsteinUhlenbeckNoise(action_dim=1)
         
@@ -131,9 +133,17 @@ class TriplePendulumTrainer:
 
         # Episode phase
         phase_keys = [-1, 1]
-        phase_rewards = np.array([self.phase_cumulated_rewards[k] for k in phase_keys])
-        softmax_phase_probabilities = np.exp(phase_rewards) / np.sum(np.exp(phase_rewards))
-        phase = np.random.choice(phase_keys, p=softmax_phase_probabilities)
+        phase_rewards = np.array([self.previous_phase_cumulated_rewards[k] for k in phase_keys])
+        # Use negative rewards to favor the phase with the lowest reward
+        softmax_phase_probabilities = np.exp(-phase_rewards) / np.sum(np.exp(-phase_rewards))
+        # Make sure one probability is no < 0.1
+        if softmax_phase_probabilities[0] < 0.1:
+            softmax_phase_probabilities[0] = 0.1
+            softmax_phase_probabilities[1] = 0.9
+        if softmax_phase_probabilities[1] < 0.1:
+            softmax_phase_probabilities[1] = 0.1
+            softmax_phase_probabilities[0] = 0.9
+        phase = np.random.choice(phase_keys, p=softmax_phase_probabilities)  # Higher prob for lowest reward phase
         
         # Variables pour l'exploration dirigée
         last_action = 0.0
@@ -207,8 +217,8 @@ class TriplePendulumTrainer:
         print(f"Episode {episode} ended with {num_steps} steps")
 
         # Update the cumulated rewards
-        self.phase_cumulated_rewards[phase] += episode_reward
-
+        self.phase_cumulated_rewards[phase] += episode_reward / self.config['num_episodes']
+        self.phase_counts[phase] += 1
         return trajectory, episode_reward, reward_components_accumulated
     
     def update_networks(self):
@@ -259,6 +269,11 @@ class TriplePendulumTrainer:
             
             # Activer ou désactiver le rendu en fonction du numéro d'épisode
             if episode % 50 == 0 and episode > self.num_exploration_episodes:
+                print(f"Resetting phase cumulated rewards", self.phase_cumulated_rewards)
+                print(f"Phase counts", self.phase_counts)
+                self.previous_phase_cumulated_rewards = self.phase_cumulated_rewards
+                self.phase_cumulated_rewards = {1: 0, -1: 0}
+                self.phase_counts = {1: 0, -1: 0}
                 self.env.render_mode = "human"
             else:
                 self.env.render_mode = None

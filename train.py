@@ -217,7 +217,7 @@ class TriplePendulumTrainer:
         print(f"Episode {episode} ended with {num_steps} steps")
 
         # Update the cumulated rewards
-        self.phase_cumulated_rewards[phase].append(episode_reward / self.config['num_episodes'])
+        self.phase_cumulated_rewards[phase].append(episode_reward / 2000)
         self.phase_counts[phase] += 1
         return trajectory, episode_reward, reward_components_accumulated
     
@@ -269,7 +269,7 @@ class TriplePendulumTrainer:
             
             # Activer ou désactiver le rendu en fonction du numéro d'épisode
             if episode % 50 == 0 and episode > self.num_exploration_episodes:
-                print(f"Resetting phase cumulated rewards -1: {np.mean(self.phase_cumulated_rewards[-1])} -1: {np.mean(self.phase_cumulated_rewards[1])}")
+                print(f"Resetting phase cumulated rewards -1: {np.mean(self.phase_cumulated_rewards[-1])}, 1: {np.mean(self.phase_cumulated_rewards[1])}")
                 print(f"Phase counts", self.phase_counts)
                 self.previous_phase_cumulated_rewards = self.phase_cumulated_rewards
                 self.phase_cumulated_rewards = {1: [], -1: []}

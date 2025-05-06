@@ -78,7 +78,7 @@ class TriplePendulumTrainer:
         self.phase_counts = {1: 0, -1: 0}
         
         self.total_steps = 0
-        self.max_steps = 500  # Maximum steps per episode
+        self.max_steps = 1_000  # Maximum steps per episode
         
         # Exploration parameters
         self.epsilon = 1.0  # Initial random action probability
@@ -124,6 +124,7 @@ class TriplePendulumTrainer:
         self.ou_noise.reset()
 
         # Episode phase
+        '''
         phase_keys = [-1, 1]
         phase_rewards = np.array([np.mean(self.previous_phase_cumulated_rewards[k]) for k in phase_keys])
         # Use negative rewards to favor the phase with the lowest reward
@@ -136,9 +137,13 @@ class TriplePendulumTrainer:
             softmax_phase_probabilities[1] = 0.1
             softmax_phase_probabilities[0] = 0.9
         phase = np.random.choice(phase_keys, p=softmax_phase_probabilities)  # Higher prob for lowest reward phase
+        '''
+
+        # FORCE PHASE 1
+        phase = 1
 
         # Reset before collecting trajectory
-        self.env.reset(phase = phase)
+        self.env.reset(phase = -phase)
         done = False
         trajectory = []
         episode_reward = 0
@@ -151,6 +156,9 @@ class TriplePendulumTrainer:
         exploration_phase = episode < self.num_exploration_episodes  # Phase d'exploration initiale
         
         while not done and num_steps < self.max_steps:
+            if num_steps == self.max_steps // 2:
+                phase = -phase
+
             current_state = self.env.get_state(action = last_action, phase = phase)
             old_and_current_state = np.concatenate((self.old_state, current_state))
             old_and_current_state_tensor = torch.FloatTensor(old_and_current_state)

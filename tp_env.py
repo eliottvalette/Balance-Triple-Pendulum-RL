@@ -144,10 +144,10 @@ class TriplePendulumEnv:
     def reset(self, phase = None):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
-        if phase == 1:
+        if phase == -1:
             rd_angle = pi/2 + rd.randint(-1, 1) * pi/16
             angles_initiaux = [rd_angle] + [rd_angle] * (len(self.positions) - 2)
-        elif phase == -1:
+        elif phase == 1:
             first_angle = pi/2 + rd.randint(-1, 1) * pi/16
             second_angle = -pi/2 + rd.randint(-1, 1) * pi/16
             angles_initiaux = [first_angle, second_angle] + [second_angle] * (len(self.positions) - 3)

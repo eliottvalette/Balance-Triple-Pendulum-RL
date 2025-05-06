@@ -128,8 +128,12 @@ class TriplePendulumEnv:
         mass_matrix = self.kane.mass_matrix_full.subs(kindiff_dict).subs(dummy_dict)
         forcing_vector = self.kane.forcing_full.subs(kindiff_dict).subs(dummy_dict)
 
+        # Vérifier le nombre d'arguments attendus
         self.M_func = lambdify(dummy_symbols + parameters, mass_matrix)
         self.F_func = lambdify(dummy_symbols + parameters, forcing_vector)
+
+        # Stocker le nombre d'arguments attendus
+        self.num_args = len(dummy_symbols) + len(parameters)
 
     def rhs(self, state, time, args, controller=None):
         control_input = controller(state) if controller else 0.0
@@ -137,11 +141,16 @@ class TriplePendulumEnv:
         state_derivative = np.array(solve(self.M_func(*arguments), self.F_func(*arguments))).T[0]
         return state_derivative
 
-    def reset(self):
+    def reset(self, phase = None):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
-        rd_angle = pi/2 + rd.randint(-1, 1) * pi/16
-        angles_initiaux = [rd_angle] + [rd_angle] * (len(self.positions) - 2)
+        if phase == 1:
+            rd_angle = pi/2 + rd.randint(-1, 1) * pi/16
+            angles_initiaux = [rd_angle] + [rd_angle] * (len(self.positions) - 2)
+        elif phase == -1:
+            first_angle = pi/2 + rd.randint(-1, 1) * pi/16
+            second_angle = -pi/2 + rd.randint(-1, 1) * pi/16
+            angles_initiaux = [first_angle, second_angle] + [second_angle] * (len(self.positions) - 3)
         vitesses_initiales = 0.0
         state = hstack((
             position_initiale_chariot,
@@ -325,12 +334,14 @@ class TriplePendulumEnv:
         
         Args:
             action (float): Force appliquée au chariot
+            manual_mode (bool): Mode manuel ou automatique
+            phase (int): Phase actuelle (1 ou -1)
             
         Returns:
             np.array: Le nouvel état après le pas de simulation
         """
         if self.current_state is None:
-            self.reset()
+            self.reset(phase=phase)
         
         if (self.current_state[0] > 1.65 and action > 0) :
             action = -0.1
@@ -457,10 +468,12 @@ class TriplePendulumEnv:
         force_value = float(self.applied_force) if isinstance(self.applied_force, np.ndarray) else self.applied_force
         force_text = self.font.render(f'force = {force_value:.2f}', True, self.TEXT_COLOR)
         info_text = self.font.render('Utilisez les flèches gauche/droite pour appliquer une force', True, self.TEXT_COLOR)
+        phase_text = self.font.render(f'Phase: {phase} (Touches 1 et 2 pour changer)', True, self.TEXT_COLOR)
         
         self.screen.blit(time_text, (20, 20))
         self.screen.blit(force_text, (20, 45))
         self.screen.blit(info_text, (20, self.height - 30))
+        self.screen.blit(phase_text, (20, self.height - 55))
         
         # Afficher les composants de récompense si le reward_manager est disponible
         if self.reward_manager is not None:
@@ -618,9 +631,8 @@ class TriplePendulumEnv:
         
         Args:
             max_steps (int): Nombre maximal de pas de simulation avant réinitialisation
-            states (np.array, optional): États préalablement calculés. Si None, ils seront générés.
-            length (float, optional): Longueur des bras du pendule. Si None, utilise self.arm_length.
-            title (str, optional): Titre de la fenêtre.
+            manual_mode (bool): Mode manuel ou automatique
+            title (str): Titre de la fenêtre.
         """
         self._init_pygame()
         pygame.display.set_caption(title)
@@ -634,7 +646,7 @@ class TriplePendulumEnv:
                 print("ATTENTION: Impossible d'importer RewardManager. Les récompenses ne seront pas affichées.")
         
         if self.current_state is None:
-            self.reset()
+            self.reset(phase=1)  # Phase initiale par défaut
         
         force_increment = 0.5
         target_force = 0.0
@@ -642,10 +654,11 @@ class TriplePendulumEnv:
         running = True
         episode = 0
         epsilon = 1.0
+        current_phase = 1  # Phase initiale
         
         while running:
             if self.num_steps >= max_steps:
-                self.reset()
+                self.reset(phase=current_phase)  # Réinitialiser avec la phase courante
                 self.num_steps = 0
                 episode += 1
                 epsilon *= 0.995  # Simuler une décroissance d'epsilon
@@ -660,9 +673,12 @@ class TriplePendulumEnv:
                         target_force = force_increment
                     elif event.key == pygame.K_SPACE:
                         target_force = 0.0
-                        self.reset()
+                        self.reset(phase=current_phase)
+                    elif event.key == pygame.K_p:  # Changer vers la phase 1
+                        current_phase = 1 if current_phase == -1 else -1
+                        self.reset(phase=current_phase)
                     elif event.key == pygame.K_s:
-                        state = self.get_state()
+                        state = self.get_state(action=target_force, phase=current_phase)
                         print(f'State: {state}, length: {len(state)}')
                         print('------- Details: -------')
                         print(f'x: {state[0]}')
@@ -682,7 +698,7 @@ class TriplePendulumEnv:
                         
                         # Afficher également les composants de récompense si disponibles
                         if self.reward_manager is not None:
-                            _, reward_components, _ = self.reward_manager.calculate_reward(state, False, self.num_steps)
+                            _, reward_components, _ = self.reward_manager.calculate_reward(state, False, self.num_steps, target_force, current_phase)
                             print('------- Composants de récompense -------')
                             for component, value in reward_components.items():
                                 print(f'{component}: {value:.4f}')
@@ -693,14 +709,14 @@ class TriplePendulumEnv:
                         target_force = 0.0
             
             # Mise à jour de la force et de l'état
-            next_state, terminated = self.step(target_force, manual_mode)
+            next_state, terminated = self.step(target_force, manual_mode, phase=current_phase)
             
             # Rendu avec informations sur l'épisode et epsilon
-            if not self.render(action=target_force, episode=episode, epsilon=epsilon, current_step=self.num_steps):
+            if not self.render(action=target_force, episode=episode, epsilon=epsilon, current_step=self.num_steps, phase=current_phase):
                 break
 
             if terminated:
-                self.reset()
+                self.reset(phase=current_phase)
 
             self.num_steps += 1
         
@@ -713,5 +729,5 @@ if __name__ == "__main__":
     env = TriplePendulumEnv()
     
     # Utilisation avec les nouvelles méthodes
-    env.reset()
+    env.reset(phase = 1)
     env.animate_pendulum_pygame(max_steps=10_000, manual_mode = True, title='Simulation Triple Pendule')

@@ -55,7 +55,7 @@ class TriplePendulumTrainer:
         # Initialize models
         # Ajustement de la dimension d'état en fonction de l'environnement réel
         # Ici, la dimension est basée sur la taille de l'état retourné par reset()
-        self.env.reset()
+        self.env.reset(phase = 1)
         self.old_state = self.env.get_state(action = 0, phase = 1)
         initial_state = self.env.get_state(action = 0, phase = 1)
         state_dim = len(initial_state) * 2
@@ -119,15 +119,7 @@ class TriplePendulumTrainer:
         normalized_reward = (reward - self.reward_running_mean) / std
         return normalized_reward * self.reward_scale
 
-    def collect_trajectory(self, episode):
-        self.env.reset()
-        done = False
-        trajectory = []
-        episode_reward = 0
-        reward_components_accumulated = {}
-        num_steps = 0
-        
-        # Réinitialiser le RewardManager et le bruit
+    def collect_trajectory(self, episode):# Réinitialiser le RewardManager et le bruit
         self.reward_manager.reset()
         self.ou_noise.reset()
 
@@ -144,6 +136,14 @@ class TriplePendulumTrainer:
             softmax_phase_probabilities[1] = 0.1
             softmax_phase_probabilities[0] = 0.9
         phase = np.random.choice(phase_keys, p=softmax_phase_probabilities)  # Higher prob for lowest reward phase
+
+        # Reset before collecting trajectory
+        self.env.reset(phase = phase)
+        done = False
+        trajectory = []
+        episode_reward = 0
+        reward_components_accumulated = {}
+        num_steps = 0
         
         # Variables pour l'exploration dirigée
         last_action = 0.0

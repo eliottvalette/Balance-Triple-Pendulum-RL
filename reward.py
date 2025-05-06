@@ -43,6 +43,8 @@ class RewardManager:
         self.time_over_threshold_1 = 0
         self.time_over_threshold_2 = 0
         self.time_under_threshold_2 = 0
+        self.smoothed_variation_1 = 0.0
+        self.smoothed_variation_2 = 0.0
         self.prev_output = None
         self.output_deltas = []
 

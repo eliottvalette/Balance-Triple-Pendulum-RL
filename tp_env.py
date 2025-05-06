@@ -608,7 +608,7 @@ class TriplePendulumEnv:
                 self.screen.blit(epsilon_text, (20, 95))
         
         pygame.display.flip()
-        self.clock.tick(60)
+        self.clock.tick(120)
         
         return True
 

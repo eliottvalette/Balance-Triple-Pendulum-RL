@@ -254,7 +254,7 @@ class RewardManager:
                 self.time_over_threshold_2 = 0
 
             # Track time under threshold
-            if first_node_y < threshold_y2:
+            if end_node_y < threshold_y2:
                 self.time_under_threshold_2 += 1
             else:
                 self.time_under_threshold_2 = 0
@@ -270,18 +270,21 @@ class RewardManager:
             
             # Compute the score
             if first_node_y > end_node_y and end_node_y < 0.1:
-                reward = self.time_over_threshold_2 / (1 + self.smoothed_variation_2) + self.time_under_threshold_2 / (1 + self.smoothed_variation_2)
+                reward_first_node = self.time_over_threshold_2 / (1 + self.smoothed_variation_2)
+                reward_end_node = self.time_under_threshold_2 / (1 + self.smoothed_variation_2)
             else:
-                reward = 0
+                reward_first_node = 0
+                reward_end_node = 0
 
-            if reward > 0 :
+            if reward_first_node > 0 and reward_end_node > 0:
                 self.have_been_upright_once = True
 
             # Normalize reward
-            reward = (1 + (reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)) / 5) ** 2 - 1
+            reward_first_node = (1 + (reward_first_node / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)) / 5) ** 2 - 1
+            reward_end_node = (1 + (reward_end_node / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)) / 5) ** 2 - 1
             
             # Cap reward
-            reward = min(reward, 5) - border_penalty - x_nodes_penalty * self.x_nodes_penalty_weight - heraticness_penalty * self.heraticness_weight
+            reward = min(reward_first_node, 2.5) + min(reward_end_node, 2.5) - border_penalty - x_nodes_penalty * self.x_nodes_penalty_weight - heraticness_penalty * self.heraticness_weight
         
         # Apply termination penalty
         if terminated:

@@ -74,7 +74,7 @@ class TriplePendulumTrainer:
         self.plot_frequency = plot_config.get('plot_frequency', 500)
         self.full_plot_frequency = plot_config.get('full_plot_frequency', 1000)
         self.previous_phase_cumulated_rewards = {1: 0, -1: 0}
-        self.phase_cumulated_rewards = {1: 0, -1: 0}
+        self.phase_cumulated_rewards = {1: [], -1: []}
         self.phase_counts = {1: 0, -1: 0}
         
         self.total_steps = 0
@@ -133,7 +133,7 @@ class TriplePendulumTrainer:
 
         # Episode phase
         phase_keys = [-1, 1]
-        phase_rewards = np.array([self.previous_phase_cumulated_rewards[k] for k in phase_keys])
+        phase_rewards = np.array([np.mean(self.previous_phase_cumulated_rewards[k]) for k in phase_keys])
         # Use negative rewards to favor the phase with the lowest reward
         softmax_phase_probabilities = np.exp(-phase_rewards) / np.sum(np.exp(-phase_rewards))
         # Make sure one probability is no < 0.1
@@ -217,7 +217,7 @@ class TriplePendulumTrainer:
         print(f"Episode {episode} ended with {num_steps} steps")
 
         # Update the cumulated rewards
-        self.phase_cumulated_rewards[phase] += episode_reward / self.config['num_episodes']
+        self.phase_cumulated_rewards[phase].append(episode_reward / self.config['num_episodes'])
         self.phase_counts[phase] += 1
         return trajectory, episode_reward, reward_components_accumulated
     
@@ -269,11 +269,10 @@ class TriplePendulumTrainer:
             
             # Activer ou désactiver le rendu en fonction du numéro d'épisode
             if episode % 50 == 0 and episode > self.num_exploration_episodes:
-                print(f"Resetting phase cumulated rewards", self.phase_cumulated_rewards)
+                print(f"Resetting phase cumulated rewards -1: {np.mean(self.phase_cumulated_rewards[-1])} -1: {np.mean(self.phase_cumulated_rewards[1])}")
                 print(f"Phase counts", self.phase_counts)
                 self.previous_phase_cumulated_rewards = self.phase_cumulated_rewards
-                self.phase_cumulated_rewards = {1: 0, -1: 0}
-                self.phase_counts = {1: 0, -1: 0}
+                self.phase_cumulated_rewards = {1: [], -1: []}
                 self.env.render_mode = "human"
             else:
                 self.env.render_mode = None

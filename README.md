@@ -45,7 +45,7 @@ Gradients are clipped to stabilize training.
 
 Exploration uses Ornstein–Uhlenbeck noise
 \[
-\xi_{t+1} = \xi_t + \theta(\mu-\xi_t)\,\Delta t + \sigma \sqrt{\Delta t}\,\mathcal N(0,1),
+\x_{t+1} = \x_t + \theta(\mu-\x_t)\,\Delta t + \sigma \sqrt{\Delta t}\,\mathcal N(0,1),
 \]
 combined with an $\varepsilon$-greedy strategy during early episodes. The noise encourages smooth actions while random episodes help escaping local optima.
 

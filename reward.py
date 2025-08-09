@@ -1,3 +1,4 @@
+# reward.py
 import numpy as np
 import random as rd
 from config import config
@@ -20,7 +21,7 @@ class RewardManager:
         self.upright_weight = 0.21 
         self.stability_weight = 0.02  # Weight for the stability reward
         self.mse_weight = 0.3  # Weight for the MSE penalty
-        self.heraticness_weight = 0.05
+        self.heraticness_weight = 0.00
         self.x_nodes_penalty_weight = 0.05
         
         # -----------------------
@@ -286,7 +287,7 @@ class RewardManager:
             reward_end_node = (1 + (reward_end_node / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)) / 5) ** 2 - 1
             
             # Cap reward
-            reward = min(reward_first_node, 2.5) + min(reward_end_node, 2.5) - border_penalty - x_nodes_penalty * self.x_nodes_penalty_weight - heraticness_penalty * self.heraticness_weight
+            reward = min(reward_first_node, 2.5) + min(reward_end_node, 2.5) - border_penalty - x_nodes_penalty * self.x_nodes_penalty_weight - 1
         
         # Apply termination penalty
         if terminated:

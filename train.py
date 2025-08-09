@@ -1,3 +1,4 @@
+# train.py
 import gym
 import torch
 import pygame
@@ -59,14 +60,15 @@ class TriplePendulumTrainer:
         self.old_state = self.env.get_state(action = 0, phase = 1)
         initial_state = self.env.get_state(action = 0, phase = 1)
         state_dim = len(initial_state) * 2
-        action_dim = 1
-        self.actor = TriplePendulumActor(state_dim, action_dim, config['hidden_dim'])
-        self.critic = TriplePendulumCritic(state_dim, action_dim, config['hidden_dim'])
+        action_dim = 2
+        self.actor_model = TriplePendulumActor(state_dim, action_dim, config['hidden_dim'])
+        self.critic_model = TriplePendulumCritic(state_dim, config['hidden_dim'])
+        self.critic_target = TriplePendulumCritic(state_dim, config['hidden_dim'])
         self.num_exploration_episodes = 0
         
         # Optimizers
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=config['actor_lr'])
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=config['critic_lr'])
+        self.actor_optimizer = torch.optim.Adam(self.actor_model.parameters(), lr=config['actor_lr'])
+        self.critic_optimizer = torch.optim.Adam(self.critic_model.parameters(), lr=config['critic_lr'])
         
         # Metrics tracking avec la configuration des plots
         plot_config = config.get('plot_config', {})
@@ -94,6 +96,7 @@ class TriplePendulumTrainer:
         self.reward_running_mean = 0
         self.reward_running_std = 1
         self.reward_alpha = 0.001  # For running statistics update
+        self.polyak_tau = 0.995
         
         # Create directories for saving results
         os.makedirs('results', exist_ok=True)
@@ -124,23 +127,13 @@ class TriplePendulumTrainer:
         self.ou_noise.reset()
 
         # Episode phase
-        '''
         phase_keys = [-1, 1]
         phase_rewards = np.array([np.mean(self.previous_phase_cumulated_rewards[k]) for k in phase_keys])
         # Use negative rewards to favor the phase with the lowest reward
         softmax_phase_probabilities = np.exp(-phase_rewards) / np.sum(np.exp(-phase_rewards))
-        # Make sure one probability is no < 0.1
-        if softmax_phase_probabilities[0] < 0.1:
-            softmax_phase_probabilities[0] = 0.1
-            softmax_phase_probabilities[1] = 0.9
-        if softmax_phase_probabilities[1] < 0.1:
-            softmax_phase_probabilities[1] = 0.1
-            softmax_phase_probabilities[0] = 0.9
+        softmax_phase_probabilities = np.clip(softmax_phase_probabilities, 0.1, 0.9)
+        print('softmax_phase_probabilities', softmax_phase_probabilities)
         phase = np.random.choice(phase_keys, p=softmax_phase_probabilities)  # Higher prob for lowest reward phase
-        '''
-
-        # FORCE PHASE 1
-        phase = 1
 
         # Reset before collecting trajectory
         self.env.reset(phase = -phase)
@@ -153,7 +146,6 @@ class TriplePendulumTrainer:
         # Variables pour l'exploration dirigée
         last_action = 0.0
         action_history = []
-        exploration_phase = episode < self.num_exploration_episodes  # Phase d'exploration initiale
         
         while not done and num_steps < self.max_steps:
             if num_steps == self.max_steps // 2:
@@ -165,20 +157,15 @@ class TriplePendulumTrainer:
             
             # Exploration: combinaison de bruit OU et exploration dirigée
             with torch.no_grad():
-                action = self.actor(old_and_current_state_tensor).squeeze().numpy()
+                action_probs = self.actor_model(old_and_current_state_tensor).squeeze().numpy()
+
+            action_side = np.argmax(action_probs)
+            action = - (action_side * 2 - 1)
             
-            if exploration_phase:
-                # Phase d'exploration initiale: mouvements plus amples
-                if num_steps % 3 == 0:  # Changement de direction périodique
-                    last_action = np.random.choice([-1, 1]) * np.random.uniform(0.5, 1.0)
-                action = last_action + self.ou_noise.sample() * 0.3
-            else:
-                # Phase d'apprentissage: bruit OU modulé par epsilon
-                if rd.random() < self.epsilon:
-                    action = action * (1 - self.epsilon) + (rd.random() * 2 - 1) * self.epsilon
+            if rd.random() < self.epsilon: # Add Noise  
+                action = action * (1 - self.epsilon) + (rd.random() * 2 - 1) * self.epsilon
 
             # Limiter l'action
-            action = float(np.clip(action, -1, 1))
             action_history.append(action)
             
             # Take step in environment
@@ -235,36 +222,49 @@ class TriplePendulumTrainer:
 
         # Sample batch from replay buffer
         states, actions, rewards, next_states, dones = self.memory.sample(self.config['batch_size'])
+        
         # Convert to tensors
-        states = torch.FloatTensor(states)
+        states_tensor = torch.FloatTensor(states)
         actions = torch.FloatTensor(actions).unsqueeze(-1)
-        rewards = torch.FloatTensor(rewards).unsqueeze(-1)
-        next_states = torch.FloatTensor(next_states)
-        dones = torch.FloatTensor(dones).unsqueeze(-1)
+        rewards_tensor = torch.FloatTensor(rewards).unsqueeze(-1)
+        next_states_tensor = torch.FloatTensor(next_states)
+        dones_tensor = torch.FloatTensor(dones).unsqueeze(-1)
         
-        # Reshape states to handle sequence properly
-        batch_size = states.shape[0]
-        
-        # Update critic
-        current_q = self.critic(states, actions)
-        with torch.no_grad():
-            next_actions = self.actor(next_states)
-            target_q = rewards + (1 - dones) * self.config['gamma'] * self.critic(next_states, next_actions)
-        
-        critic_loss = F.mse_loss(current_q, target_q)
+        # Critic forward
+        state_values = self.critic_model(states_tensor).squeeze(1)
+        next_state_values = self.critic_target(next_states_tensor).squeeze(1).detach()
+
+        # TD target et advantage
+        td_targets = rewards_tensor + self.config['gamma'] * next_state_values * (1 - dones_tensor)
+        advantages = td_targets - state_values.detach()
+
+        # Critic loss
+        critic_loss = F.mse_loss(state_values, td_targets)
+
+        # Actor loss
+        probs = self.actor_model(states_tensor)                      # (B, 8, 3)
+        max_probs = torch.max(probs, axis=1)
+        log_max_prob = torch.log(max_probs.values)
+
+        actor_loss = -(advantages * log_max_prob).mean()
+
+        # Optim Critic
         self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        # Add gradient clipping for critic
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=1.0)
+        critic_loss.backward(retain_graph=True)
+        torch.nn.utils.clip_grad_norm_(self.critic_model.parameters(), max_norm=1.0)
         self.critic_optimizer.step()
-        
-        # Update actor - we want to maximize the critic output (Q-value)
-        actor_loss = -self.critic(states, self.actor(states)).mean()
+
+        # Optim Actor
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
-        # Add gradient clipping for actor
-        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.actor_model.parameters(), max_norm=1.0)
         self.actor_optimizer.step()
+
+        # Polyak update
+        with torch.no_grad():
+            for param, target_param in zip(self.critic_model.parameters(), self.critic_target.parameters()):
+                target_param.data.mul_(self.polyak_tau)
+                target_param.data.add_((1 - self.polyak_tau) * param.data)
         
         return {
             'critic_loss': critic_loss.item(),
@@ -339,10 +339,10 @@ class TriplePendulumTrainer:
                         samples = self.memory.sample(100)
                         sample_states = torch.FloatTensor(samples[0])
                         self.metrics.plot_model_analysis(
-                            self.actor, 
-                            self.critic, 
+                            self.actor_model, 
+                            self.critic_model, 
                             sample_states,
-                            f'results/model_analysis_{episode+1}.png'
+                            f'results/model_analysis.png'
                         )
                     
                     # Génération de tous les graphiques
@@ -352,8 +352,8 @@ class TriplePendulumTrainer:
                 self.save_models(f"models/checkpoint")
     
     def save_models(self, path):
-        torch.save(self.actor.state_dict(), path + '_actor.pth')
-        torch.save(self.critic.state_dict(), path + '_critic.pth')
+        torch.save(self.actor_model.state_dict(), path + '_actor.pth')
+        torch.save(self.critic_model.state_dict(), path + '_critic.pth')
         torch.save(self.actor_optimizer.state_dict(), path + '_actor_optimizer.pth')
         torch.save(self.critic_optimizer.state_dict(), path + '_critic_optimizer.pth')
         
@@ -361,14 +361,14 @@ class TriplePendulumTrainer:
         episode_num = len(self.metrics.metrics['episode_reward'])
         if episode_num > 0 and episode_num % 1000 == 0:  # Sauvegarde tous les 1000 épisodes
             checkpoint_path = f"models/checkpoint"
-            torch.save(self.actor.state_dict(), checkpoint_path + '_actor.pth')
-            torch.save(self.critic.state_dict(), checkpoint_path + '_critic.pth')
+            torch.save(self.actor_model.state_dict(), checkpoint_path + '_actor.pth')
+            torch.save(self.critic_model.state_dict(), checkpoint_path + '_critic.pth')
 
     def load_models(self):
         if os.path.exists('models/checkpoint_actor.pth'):
             print("Loading models")
-            self.actor.load_state_dict(torch.load('models/checkpoint_actor.pth', weights_only=True))
-            self.critic.load_state_dict(torch.load('models/checkpoint_critic.pth', weights_only=True))
+            self.actor_model.load_state_dict(torch.load('models/checkpoint_actor.pth', weights_only=True))
+            self.critic_model.load_state_dict(torch.load('models/checkpoint_critic.pth', weights_only=True))
             self.actor_optimizer.load_state_dict(torch.load('models/checkpoint_actor_optimizer.pth', weights_only=True))
             self.critic_optimizer.load_state_dict(torch.load('models/checkpoint_critic_optimizer.pth', weights_only=True))
 

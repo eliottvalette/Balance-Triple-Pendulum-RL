@@ -145,7 +145,7 @@ class TriplePendulumEnv:
     def reset(self, phase = None):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
-        if phase == -1:
+        if phase == -1 or True : # TODO : Remove True when working model on basic mode
             rd_angle = pi/2 + rd.randint(-1, 1) * pi/16
             angles_initiaux = [rd_angle] + [rd_angle] * (len(self.positions) - 2)
         elif phase == 1:

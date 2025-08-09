@@ -127,6 +127,7 @@ class TriplePendulumTrainer:
         self.ou_noise.reset()
 
         # Episode phase
+        """
         phase_keys = [-1, 1]
         phase_rewards = np.array([np.mean(self.previous_phase_cumulated_rewards[k]) for k in phase_keys])
         # Use negative rewards to favor the phase with the lowest reward
@@ -134,6 +135,8 @@ class TriplePendulumTrainer:
         softmax_phase_probabilities = np.clip(softmax_phase_probabilities, 0.1, 0.9)
         print('softmax_phase_probabilities', softmax_phase_probabilities)
         phase = np.random.choice(phase_keys, p=softmax_phase_probabilities)  # Higher prob for lowest reward phase
+        """
+        phase = 1 # TODO: Remove this when model is ok on basic mode
 
         # Reset before collecting trajectory
         self.env.reset(phase = -phase)
@@ -231,8 +234,8 @@ class TriplePendulumTrainer:
         dones_tensor = torch.FloatTensor(dones).unsqueeze(-1)
         
         # Critic forward
-        state_values = self.critic_model(states_tensor).squeeze(1)
-        next_state_values = self.critic_target(next_states_tensor).squeeze(1).detach()
+        state_values = self.critic_model(states_tensor)
+        next_state_values = self.critic_target(next_states_tensor).detach()
 
         # TD target et advantage
         td_targets = rewards_tensor + self.config['gamma'] * next_state_values * (1 - dones_tensor)

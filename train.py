@@ -51,24 +51,30 @@ class TriplePendulumTrainer:
     def __init__(self, config):
         self.config = config
         self.reward_manager = RewardManager()
-        self.env = TriplePendulumEnv(reward_manager=self.reward_manager, render_mode="human", num_nodes=config['num_nodes'], max_steps=1000)  # Enable rendering from the start
+        self.env = TriplePendulumEnv(reward_manager=self.reward_manager, render_mode="human", num_nodes=config['num_nodes'], max_steps=config['max_steps'])  # Enable rendering from the start
         
         # Initialize models
         # Ajustement de la dimension d'état en fonction de l'environnement réel
         # Ici, la dimension est basée sur la taille de l'état retourné par reset()
         self.env.reset(phase = 1)
-        self.old_state = self.env.get_state(action = 0, phase = 1)
+        # Initialize for first state
         initial_state = self.env.get_state(action = 0, phase = 1)
-        state_dim = len(initial_state) * 2
+        state_dim = len(initial_state)  # FIX: Ne pas multiplier par 2, l'état est déjà complet
+        if config['debug']:
+            print(f"DEBUG: Initial state length: {len(initial_state)}, state_dim for models: {state_dim}")
         action_dim = 2
+        if config['debug']:
+            print(f"DEBUG: Creating models with state_dim={state_dim}, action_dim={action_dim}, hidden_dim={config['hidden_dim']}")
         self.actor_model = TriplePendulumActor(state_dim, action_dim, config['hidden_dim'])
         self.critic_model = TriplePendulumCritic(state_dim, config['hidden_dim'])
         self.critic_target = TriplePendulumCritic(state_dim, config['hidden_dim'])
+        # Initialize target network with same weights as main network
+        self.critic_target.load_state_dict(self.critic_model.state_dict())
         self.num_exploration_episodes = 0
         
-        # Optimizers
-        self.actor_optimizer = torch.optim.Adam(self.actor_model.parameters(), lr=config['actor_lr'])
-        self.critic_optimizer = torch.optim.Adam(self.critic_model.parameters(), lr=config['critic_lr'])
+        # Optimizers - Réduire le learning rate pour plus de stabilité
+        self.actor_optimizer = torch.optim.Adam(self.actor_model.parameters(), lr=config['actor_lr'] * 0.1)
+        self.critic_optimizer = torch.optim.Adam(self.critic_model.parameters(), lr=config['critic_lr'] * 0.1)
         
         # Metrics tracking avec la configuration des plots
         plot_config = config.get('plot_config', {})
@@ -80,12 +86,12 @@ class TriplePendulumTrainer:
         self.phase_counts = {1: 0, -1: 0}
         
         self.total_steps = 0
-        self.max_steps = 1_000  # Maximum steps per episode
+        self.max_steps = config['max_steps']
         
-        # Exploration parameters
+        # Exploration parameters - Augmenter l'exploration
         self.epsilon = 1.0  # Initial random action probability
-        self.epsilon_decay = 0.9985  # Epsilon decay rate
-        self.min_epsilon = 0.001  # Minimum epsilon
+        self.epsilon_decay = 0.999  # Slower epsilon decay rate
+        self.min_epsilon = 0.1  # Higher minimum epsilon for more exploration
         self.ou_noise = OrnsteinUhlenbeckNoise(action_dim=1)
         
         # Replay buffer
@@ -96,7 +102,7 @@ class TriplePendulumTrainer:
         self.reward_running_mean = 0
         self.reward_running_std = 1
         self.reward_alpha = 0.001  # For running statistics update
-        self.polyak_tau = 0.995
+        self.polyak_tau = 0.05  # Mise à jour plus lente et stable du target network
         
         # Create directories for saving results
         os.makedirs('results', exist_ok=True)
@@ -151,22 +157,29 @@ class TriplePendulumTrainer:
         action_history = []
         
         while not done and num_steps < self.max_steps:
-            if num_steps == self.max_steps // 2:
-                phase = -phase
+            #if num_steps == self.max_steps // 2:
+            #    phase = -phase
 
             current_state = self.env.get_state(action = last_action, phase = phase)
-            old_and_current_state = np.concatenate((self.old_state, current_state))
-            old_and_current_state_tensor = torch.FloatTensor(old_and_current_state)
+            # FIX: Utiliser directement l'état courant, pas de concaténation confuse
+            state_tensor = torch.FloatTensor(current_state)
             
             # Exploration: combinaison de bruit OU et exploration dirigée
             with torch.no_grad():
-                action_probs = self.actor_model(old_and_current_state_tensor).squeeze().numpy()
+                action_probs = self.actor_model(state_tensor).squeeze().numpy()
 
-            action_side = np.argmax(action_probs)
-            action = - (action_side * 2 - 1)
-            
-            if rd.random() < self.epsilon: # Add Noise  
-                action = action * (1 - self.epsilon) + (rd.random() * 2 - 1) * self.epsilon
+            # Améliorer la sélection d'action avec plus d'exploration
+            if rd.random() < self.epsilon:
+                # Exploration pure : action aléatoire
+                action = rd.random() * 2 - 1  # Random entre -1 et 1
+            else:
+                # Exploitation CONTINUE au lieu de discret !
+                # Convertir les probabilities [p_left, p_right] en action continue
+                p_right = action_probs[1]
+                action = (p_right - 0.5) * 2  # Convertit [0,1] vers [-1,1] de façon continue
+                
+            if config['debug']:
+                print(f"DEBUG: Action probs: {action_probs}, final action: {action}, epsilon: {self.epsilon}")
 
             # Limiter l'action
             action_history.append(action)
@@ -188,18 +201,17 @@ class TriplePendulumTrainer:
             # Calculate custom reward and components
             custom_reward, reward_components, force_terminated = self.reward_manager.calculate_reward(next_state, terminated, num_steps, action, phase)
             
-            # Store transition in replay buffer with normalized reward
-            current_and_next_state = np.concatenate((current_state, next_state))
-            current_and_next_state_tensor = torch.FloatTensor(current_and_next_state)  # Convert to tensor
-
-            # Stocker dans le buffer de replay
-            self.memory.push(old_and_current_state_tensor, action, custom_reward, current_and_next_state_tensor, terminated)
+            if config['debug']:
+                print(f"DEBUG: Custom reward: {custom_reward:.4f}, reward components: {reward_components}")
             
-            trajectory.append((old_and_current_state_tensor, action, custom_reward, current_and_next_state_tensor, terminated))
+            # Stocker dans le buffer de replay
+            self.memory.push(current_state, action, custom_reward, next_state, terminated)
+            
+            trajectory.append((current_state, action, custom_reward, next_state, terminated))
             episode_reward += custom_reward
             self.total_steps += 1
             num_steps += 1
-            self.old_state = current_state
+            # Update states for next iteration (not needed anymore with simplified logic)
 
             for component_name, value in reward_components.items():
                 if component_name not in reward_components_accumulated:
@@ -210,9 +222,14 @@ class TriplePendulumTrainer:
                 done = True
                 break
         
+        print(f"Episode Ended, num_steps: {num_steps}, episode_reward: {episode_reward}")
+        
         # Decay exploration parameters
+        old_epsilon = self.epsilon
         self.epsilon = max(self.min_epsilon, self.epsilon * self.epsilon_decay)
-        print(f"Episode {episode} ended with {num_steps} steps")
+        if config['debug']:
+            print(f"Episode {episode} ended with {num_steps} steps")
+            print(f"DEBUG: Epsilon decayed from {old_epsilon:.4f} to {self.epsilon:.4f}")
 
         # Update the cumulated rewards
         self.phase_cumulated_rewards[phase].append(episode_reward / 2000)
@@ -221,10 +238,14 @@ class TriplePendulumTrainer:
     
     def update_networks(self):
         if len(self.memory) < self.config['batch_size']:
+            print(f"DEBUG: Not enough samples in memory: {len(self.memory)} < {self.config['batch_size']}")
             return {"critic_loss": 0, "actor_loss": 0}  # Not enough samples yet
 
         # Sample batch from replay buffer
         states, actions, rewards, next_states, dones = self.memory.sample(self.config['batch_size'])
+        
+        if config['debug']:
+            print(f"DEBUG: Reward stats - mean: {np.mean(rewards):.4f}, std: {np.std(rewards):.4f}, min: {np.min(rewards):.4f}, max: {np.max(rewards):.4f}")
         
         # Convert to tensors
         states_tensor = torch.FloatTensor(states)
@@ -233,35 +254,72 @@ class TriplePendulumTrainer:
         next_states_tensor = torch.FloatTensor(next_states)
         dones_tensor = torch.FloatTensor(dones).unsqueeze(-1)
         
+        if config['debug']:
+            print(f"DEBUG: Tensor shapes - states: {states_tensor.shape}, actions: {actions.shape}, rewards: {rewards_tensor.shape}")
+        
         # Critic forward
         state_values = self.critic_model(states_tensor)
         next_state_values = self.critic_target(next_states_tensor).detach()
+
+        if config['debug']:
+            print(f"DEBUG: Value predictions - current: {state_values.mean().item():.4f}, next: {next_state_values.mean().item():.4f}")
 
         # TD target et advantage
         td_targets = rewards_tensor + self.config['gamma'] * next_state_values * (1 - dones_tensor)
         advantages = td_targets - state_values.detach()
 
+        if config['debug']:
+            print(f"DEBUG: TD targets mean: {td_targets.mean().item():.4f}, advantages mean: {advantages.mean().item():.4f}")
+
         # Critic loss
         critic_loss = F.mse_loss(state_values, td_targets)
+        
+        if config['debug']:
+            print(f"DEBUG: Losses - critic: {critic_loss.item():.6f}")
 
         # Actor loss
         probs = self.actor_model(states_tensor)                      # (B, 8, 3)
-        max_probs = torch.max(probs, axis=1)
-        log_max_prob = torch.log(max_probs.values)
+        if config['debug']:
+            print(f"DEBUG: Actor probs shape: {probs.shape}, mean probs: {probs.mean(dim=0)}")
+        
+        # Convertir les actions en indices pour le calcul de la log-probabilité
+        action_indices = torch.where(actions.squeeze() > 0, 1, 0)  # 1 si action > 0, 0 sinon
+        log_probs = torch.log(probs + 1e-8)  # Ajouter epsilon pour éviter log(0)
+        selected_log_probs = log_probs.gather(1, action_indices.unsqueeze(1)).squeeze()
+        
+        if config['debug']:
+            print(f"DEBUG: Action indices shape: {action_indices.shape}, selected log probs: {selected_log_probs.mean().item():.4f}")
 
-        actor_loss = -(advantages * log_max_prob).mean()
+        actor_loss = -(advantages.squeeze() * selected_log_probs).mean()
+        
+        if config['debug']:
+            print(f"DEBUG: Actor loss: {actor_loss.item():.6f}")
 
         # Optim Critic
         self.critic_optimizer.zero_grad()
         critic_loss.backward(retain_graph=True)
-        torch.nn.utils.clip_grad_norm_(self.critic_model.parameters(), max_norm=1.0)
+        
+        critic_grad_norm = torch.nn.utils.clip_grad_norm_(self.critic_model.parameters(), max_norm=1.0)
+        if config['debug']:
+            print(f"DEBUG: Critic grad norm: {critic_grad_norm:.6f}")
+        
         self.critic_optimizer.step()
 
         # Optim Actor
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.actor_model.parameters(), max_norm=1.0)
+        
+        actor_grad_norm = torch.nn.utils.clip_grad_norm_(self.actor_model.parameters(), max_norm=1.0)
+        if config['debug']:
+            print(f"DEBUG: Actor grad norm: {actor_grad_norm:.6f}")
+        
         self.actor_optimizer.step()
+        
+        if hasattr(self, 'last_actor_weight'):
+            weight_change = torch.norm(self.actor_model.action_head[0].weight - self.last_actor_weight).item()
+            if config['debug']:
+                print(f"DEBUG: Actor weight change: {weight_change:.8f}")
+        self.last_actor_weight = self.actor_model.action_head[0].weight.clone().detach()
 
         # Polyak update
         with torch.no_grad():
@@ -337,17 +395,6 @@ class TriplePendulumTrainer:
                 
                 # Génération complète des graphiques à une fréquence moins élevée
                 if episode % self.full_plot_frequency == self.full_plot_frequency - 1:
-                    # Analyse du modèle
-                    if len(self.memory) >= 100:
-                        samples = self.memory.sample(100)
-                        sample_states = torch.FloatTensor(samples[0])
-                        self.metrics.plot_model_analysis(
-                            self.actor_model, 
-                            self.critic_model, 
-                            sample_states,
-                            f'results/model_analysis.png'
-                        )
-                    
                     # Génération de tous les graphiques
                     self.metrics.generate_all_plots()
                 
@@ -362,7 +409,7 @@ class TriplePendulumTrainer:
         
         # Sauvegarde supplémentaire avec numéro d'épisode pour suivre l'évolution
         episode_num = len(self.metrics.metrics['episode_reward'])
-        if episode_num > 0 and episode_num % 1000 == 0:  # Sauvegarde tous les 1000 épisodes
+        if episode_num > 0 and episode_num % 500 == 0:  # Sauvegarde tous les 1000 épisodes
             checkpoint_path = f"models/checkpoint"
             torch.save(self.actor_model.state_dict(), checkpoint_path + '_actor.pth')
             torch.save(self.critic_model.state_dict(), checkpoint_path + '_critic.pth')

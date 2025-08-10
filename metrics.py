@@ -102,7 +102,7 @@ class MetricsTracker:
         
         # Plot reward components
         ax = axes[0, 2]
-        reward_components = ['reward', 'upright_reward', 'x_penalty','non_alignement_penalty', 'stability_penalty', 'mse_penalty', 'heraticness_penalty']
+        reward_components = ['reward', 'positive_reward', 'penalty', 'x_penalty', 'non_alignement_penalty', 'stability_penalty', 'mse_penalty', 'heraticness_penalty']
         for component in reward_components:
             if component in self.metrics and len(self.metrics[component]) > 0:
                 comp_ds, comp_indices = self._downsample_if_needed(self.metrics[component])
@@ -332,51 +332,3 @@ class MetricsTracker:
         self.plot_reward_distribution(f'{base_path}/reward_distribution.png')
         
         print(f"Tous les graphiques ont été générés dans le dossier {base_path}")
-    
-    def plot_model_analysis(self, actor, critic, sample_states, save_path=None):
-        """Analyse les réponses des modèles d'acteur et de critique sur des états échantillonnés
-        
-        Args:
-            actor: Le modèle d'acteur
-            critic: Le modèle de critique
-            sample_states: Un tenseur d'états échantillonnés pour l'analyse
-            save_path: Chemin où sauvegarder le graphique
-        """
-        if not self.enable_plots or not isinstance(sample_states, torch.Tensor):
-            return
-            
-        with torch.no_grad():
-            # Générer des actions pour chaque état
-            actions = actor(sample_states)
-            
-            # Obtenir les valeurs Q pour ces paires état-action
-            q_values = critic(sample_states, actions)
-            
-            # Convertir en numpy pour le tracé
-            actions_np = actions.cpu().numpy()
-            q_values_np = q_values.cpu().numpy()
-            
-        plt.figure(figsize=(15, 10))
-        
-        # Distribution des actions
-        plt.subplot(2, 1, 1)
-        sns.histplot(actions_np, kde=True)
-        plt.title('Distribution des actions générées par le modèle d\'acteur')
-        plt.xlabel('Action')
-        plt.ylabel('Fréquence')
-        plt.xlim(max(-1, min(actions_np) - 0.2), min(max(actions_np) + 0.2, 1))
-
-        # Distribution des valeurs Q
-        plt.subplot(2, 1, 2)
-        sns.histplot(q_values_np, kde=True)
-        plt.title('Distribution des valeurs Q générées par le modèle de critique')
-        plt.xlabel('Valeur Q')
-        plt.ylabel('Fréquence')
-        
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=self.plot_dpi)
-            plt.close()
-        else:
-            plt.show() 

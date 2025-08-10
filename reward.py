@@ -17,12 +17,12 @@ class RewardManager:
         self.cart_position_weight = 0.20
         self.nodes_position_weight = 0.20
         self.termination_penalty = 1
-        self.alignement_weight = 2.0
-        self.upright_weight = 0.21 
-        self.stability_weight = 0.02  # Weight for the stability reward
-        self.mse_weight = 0.3  # Weight for the MSE penalty
-        self.heraticness_weight = 0.00
-        self.x_nodes_penalty_weight = 0.05
+        self.alignement_weight = 0.1
+        self.upright_weight = 0.2
+        self.stability_weight = 0.04  # Weight for the stability reward
+        self.mse_weight = 0.2  # Weight for the MSE penalty
+        self.heraticness_weight = 0.001
+        self.x_nodes_penalty_weight = 0.5
         
         # -----------------------
         # Upright tracking parameters
@@ -40,7 +40,7 @@ class RewardManager:
         # -----------------------
         # Real Reward Components
         # -----------------------
-        self.threshold_ratio = 0.98  # 98% of pendulum length (as per the formula)
+        self.threshold_ratio = 0.90  # 90% of pendulum length (as per the formula)
         self.time_over_threshold_1 = 0
         self.time_over_threshold_2 = 0
         self.time_under_threshold_2 = 0
@@ -57,7 +57,6 @@ class RewardManager:
         self.update_step = 0
         self.hera_update_step = 0
         self.old_heraticness_penalty = 0
-        self.previous_action = None
         self.old_points_positions = None
         
         # -----------------------
@@ -179,9 +178,6 @@ class RewardManager:
         
         mse_penalty = self.mse_weight * (mse_sum / len(state))
 
-        # ----------------------- FAKE REWARD -----------------------
-        fake_reward = upright_reward - mse_penalty - non_alignement_penalty - stability_penalty
-
         # ----------------------- BORDER PENALTY -----------------------
         border_penalty = 0.0
         if x < -1.6 or x > 1.6:
@@ -189,29 +185,15 @@ class RewardManager:
 
         # ----------------------- HERATICNESS PENALTY -----------------------
         heraticness_penalty = 0.0
-        # Sauvegarder l'action précédente pour l'affichage
-        old_action = self.previous_action
         
-        if action is None or action == 0.0:
-            pass
-        elif self.previous_action is None:
-            # Initialisation
-            self.previous_action = action
-        else:
-            # Si l'action est différente de la précédente, calculer la pénalité
-            if action != self.previous_action:
-                # Convertir en valeur scalaire en utilisant float()
-                heraticness_penalty = float(abs(self.previous_action - action))
-            else:
-                # Sinon, utiliser l'ancienne pénalité
-                heraticness_penalty = self.old_heraticness_penalty
-            
-            # Toujours mettre à jour l'action précédente pour la prochaine fois
-            self.previous_action = action
+        # Récupérer la force appliquée depuis l'état
+        applied_force = state[7]  # f dans l'état adapté
         
-        # Mettre à jour l'ancienne pénalité pour la prochaine fois
-        self.old_heraticness_penalty = heraticness_penalty
+        if action:
+            force_delta = float(abs(applied_force - action))
+            heraticness_penalty = force_delta
         
+        # ----------------------- PHASE SPECIFIC REWARD -----------------------
         if phase_1 : # Be Straight Up
             # ----------------------- REAL REWARD -----------------------
             threshold_y2 = self.max_height * self.threshold_ratio
@@ -232,17 +214,26 @@ class RewardManager:
             self.prev_output = end_node_y
             
             # Compute the score
-            reward = self.time_over_threshold_1 / (1 + self.smoothed_variation_1)
+            positive_reward = self.time_over_threshold_1 / (1 + self.smoothed_variation_1)
 
-            if reward > 0 :
+            if positive_reward > 0 :
                 self.have_been_upright_once = True
 
             # Normalize reward
-            reward = (1 + (reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)) / 5) ** 2 - 1
+            positive_reward = min(5, (1 + (positive_reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)) / 5) ** 2 - 1)
+
+            # Penalty 
+            penalty = border_penalty \
+                + x_nodes_penalty * self.x_nodes_penalty_weight \
+                + heraticness_penalty * self.heraticness_weight\
+                + stability_penalty * self.stability_weight \
+                + mse_penalty * self.mse_weight \
+                + non_alignement_penalty * self.alignement_weight
             
             # Cap reward
-            reward = min(reward, 5) - border_penalty - x_nodes_penalty * self.x_nodes_penalty_weight - heraticness_penalty * self.heraticness_weight
+            reward = positive_reward - penalty
 
+        """
         elif phase_2 : # First Edge Up and Second Edge Down (I mean folded but the first node is up and the second node is at the same level as the cart)
             # ----------------------- REAL REWARD -----------------------
             threshold_y1 = self.max_height * self.threshold_ratio / 2 
@@ -288,23 +279,25 @@ class RewardManager:
             
             # Cap reward
             reward = min(reward_first_node, 2.5) + min(reward_end_node, 2.5) - border_penalty - x_nodes_penalty * self.x_nodes_penalty_weight - 1
-        
+        """
+
         # Apply termination penalty
         if terminated:
             reward -= self.termination_penalty
         
-        if end_node_y < -0.05 :
+        if end_node_y < self.max_height * self.threshold_ratio / 2:
             self.force_terminated = True
-            reward -= 3
+            reward = -10
         
         components_dict = {
             'reward': reward,
-            'x_penalty': x_cart_penalty,
-            'non_alignement_penalty': non_alignement_penalty,
-            'upright_reward': upright_reward,
-            'stability_penalty': stability_penalty,
-            'mse_penalty': mse_penalty,
-            'heraticness_penalty': heraticness_penalty,
+            'positive_reward': positive_reward,
+            'penalty': penalty,
+            'x_penalty': x_nodes_penalty * self.nodes_position_weight,
+            'non_alignement_penalty': non_alignement_penalty * self.alignement_weight,
+            'stability_penalty': stability_penalty * self.stability_weight,
+            'mse_penalty': mse_penalty * self.mse_weight,
+            'heraticness_penalty': heraticness_penalty * self.heraticness_weight,
         }
 
         return reward, components_dict, self.force_terminated
@@ -326,6 +319,5 @@ class RewardManager:
         self.time_under_threshold_2 = 0
         self.output_deltas = []
         self.old_heraticness_penalty = 0
-        self.previous_action = None
         self.smoothed_variation_1 = 0.0
         self.smoothed_variation_2 = 0.0

@@ -245,12 +245,12 @@ class TriplePendulumEnv:
         )
         
         reward = reward_components['reward']
+        positive_reward = reward_components['positive_reward']
+        heraticness_penalty = reward_components['heraticness_penalty']
         x_penalty = reward_components['x_penalty']
-        upright_reward = reward_components['upright_reward']
         non_alignement_penalty = reward_components['non_alignement_penalty']
         stability_penalty = reward_components['stability_penalty']
         mse_penalty = reward_components['mse_penalty']
-        heraticness_penalty = reward_components['heraticness_penalty']
         consecutive_upright_steps = self.reward_manager.consecutive_upright_steps / 500
         have_been_upright_once = self.reward_manager.have_been_upright_once
         came_back_down = self.reward_manager.came_back_down
@@ -317,7 +317,7 @@ class TriplePendulumEnv:
         state_with_positions = np.hstack((
             adapted_state,
             position_x1, position_y1, position_x2, position_y2, position_x3, position_y3, 
-            reward, x_penalty, upright_reward, non_alignement_penalty, stability_penalty, mse_penalty, heraticness_penalty,
+            reward, positive_reward, x_penalty,  non_alignement_penalty, stability_penalty, mse_penalty, heraticness_penalty,
             consecutive_upright_steps, have_been_upright_once, came_back_down, steps_double_down,
             near_border, end_node_y, end_node_upright, time_over_threshold_1, time_over_threshold_2, time_under_threshold_2, smoothed_variation_1, smoothed_variation_2, direction, prev_action, prev_direction,
             is_node_on_right_of_cart, normalized_steps, phase,
@@ -329,7 +329,7 @@ class TriplePendulumEnv:
         return state_with_positions
 
 
-    def step(self, action=0.0, manual_mode=False, phase = None):
+    def step(self, action=0.0, phase = None):
         """
         Effectue un pas de simulation avec l'action donnée (force appliquée).
         
@@ -343,7 +343,7 @@ class TriplePendulumEnv:
         """
         if self.current_state is None:
             self.reset(phase=phase)
-        
+
         if (self.current_state[0] > 1.65 and action > 0) :
             action = -0.1
         elif (self.current_state[0] < -1.65 and action < 0):
@@ -351,10 +351,7 @@ class TriplePendulumEnv:
             
         # Appliquer le lissage à la force
         force_smoothing = 0.1
-        if manual_mode:
-            self.applied_force += force_smoothing * (action - self.applied_force)
-        else:
-            self.applied_force = action
+        self.applied_force += force_smoothing * (action - self.applied_force)
         
         # Calcul du nouvel état
         state_derivative = self.rhs(self.current_state, self.current_time, self.parameter_vals, lambda state: self.applied_force)
@@ -495,7 +492,7 @@ class TriplePendulumEnv:
                 
                 # Dessiner un conteneur pour les récompenses
                 reward_panel_width = 300
-                reward_panel_height = 240
+                reward_panel_height = 270
                 reward_panel_x = self.width - reward_panel_width - 10
                 reward_panel_y = 10
                 
@@ -536,22 +533,16 @@ class TriplePendulumEnv:
                 
                 # Définir les composants de récompense avec leurs couleurs spécifiques
                 reward_components_display = [
-                    {"name": "Base", "value": reward_components.get('reward', 0), "color": (100, 100, 200)},
-                    {"name": "Upright", "value": reward_components.get('upright_reward', 0), "color": (80, 180, 80)},
+                    {"name": "Reward", "value": reward_components.get('reward', 0), "color": (100, 100, 200)},
+                    {"name": "Positive", "value": reward_components.get('positive_reward', 0), "color": (100, 200, 100)},
+                    {"name": "Penalty", "value": reward_components.get('penalty', 0), "color": (200, 80, 80)},
                     {"name": "Position", "value": reward_components.get('x_penalty', 0), "color": (200, 80, 80)},
                     {"name": "Alignment", "value": reward_components.get('non_alignement_penalty', 0), "color": (180, 130, 80)},
+                    {"name": "Stability", "value": reward_components.get('stability_penalty', 0), "color": (180, 130, 80)},
                     {"name": "MSE", "value": reward_components.get('mse_penalty', 0), "color": (180, 130, 80)},
                     {"name": "Hera", "value": reward_components.get('heraticness_penalty', 0), "color": (180, 130, 80)}
                 ]
-                
-                # Ajouter stability_penalty s'il existe
-                if 'stability_penalty' in reward_components:
-                    reward_components_display.append({"name": "Stability", "value": reward_components.get('stability_penalty', 0), "color": (150, 80, 150)})
-                
-                # Ajouter x_dot_penalty s'il existe
-                if 'x_dot_penalty' in reward_components:
-                    reward_components_display.append({"name": "Velocity", "value": reward_components.get('x_dot_penalty', 0), "color": (180, 80, 180)})
-                
+             
                 # Dessiner les barres de récompense
                 for comp in reward_components_display:
                     # Nom du composant

@@ -1,6 +1,7 @@
 # config.py
 config = {
     'num_episodes': 10_000,
+    'max_steps': 1000,
     'actor_lr': 3e-4,
     'critic_lr': 3e-4,
     'gamma': 0.99,
@@ -8,10 +9,11 @@ config = {
     'hidden_dim': 512,
     'buffer_capacity': 25_000,
     'updates_per_episode': 10,
-    'load_models': False,
+    'load_models': True,
     'num_nodes': 2,
-    'gravity': 9.81,
+    'gravity': 0.81,
     'friction_coefficient': 0.1,
+    'debug': False,
     
     # Options de visualisation et de plots
     'plot_config': {

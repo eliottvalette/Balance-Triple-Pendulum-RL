@@ -146,7 +146,7 @@ class TriplePendulumEnv:
         # Initialisation de l'état
         position_initiale_chariot = 0.0
         if phase == -1 or True : # TODO : Remove True when working model on basic mode
-            rd_angle = pi/2 + rd.randint(-1, 1) * pi/16
+            rd_angle = pi/2 + rd.randint(-1, 1) * pi/16 * 0
             angles_initiaux = [rd_angle] + [rd_angle] * (len(self.positions) - 2)
         elif phase == 1:
             first_angle = pi/2 + rd.randint(-1, 1) * pi/16
@@ -701,7 +701,7 @@ class TriplePendulumEnv:
                         target_force = 0.0
             
             # Mise à jour de la force et de l'état
-            next_state, terminated = self.step(target_force, manual_mode, phase=current_phase)
+            next_state, terminated = self.step(target_force, phase=current_phase)
             
             # Rendu avec informations sur l'épisode et epsilon
             if not self.render(action=target_force, episode=episode, epsilon=epsilon, current_step=self.num_steps, phase=current_phase):

@@ -59,10 +59,10 @@ class TriplePendulumTrainer:
         self.env.reset(phase = 1)
         # Initialize for first state
         initial_state = self.env.get_state(action = 0, phase = 1)
-        state_dim = len(initial_state)  # FIX: Ne pas multiplier par 2, l'état est déjà complet
+        state_dim = len(initial_state)
         if config['debug']:
             print(f"DEBUG: Initial state length: {len(initial_state)}, state_dim for models: {state_dim}")
-        action_dim = 2
+        action_dim = 3
         if config['debug']:
             print(f"DEBUG: Creating models with state_dim={state_dim}, action_dim={action_dim}, hidden_dim={config['hidden_dim']}")
         self.actor_model = TriplePendulumActor(state_dim, action_dim, config['hidden_dim'])
@@ -89,9 +89,9 @@ class TriplePendulumTrainer:
         self.max_steps = config['max_steps']
         
         # Exploration parameters - Augmenter l'exploration
-        self.epsilon = 1.0  # Initial random action probability
+        self.epsilon = 0.9  # Initial random action probability
         self.epsilon_decay = 0.999  # Slower epsilon decay rate
-        self.min_epsilon = 0.1  # Higher minimum epsilon for more exploration
+        self.min_epsilon = 0.01  # Higher minimum epsilon for more exploration
         self.ou_noise = OrnsteinUhlenbeckNoise(action_dim=1)
         
         # Replay buffer
@@ -102,7 +102,7 @@ class TriplePendulumTrainer:
         self.reward_running_mean = 0
         self.reward_running_std = 1
         self.reward_alpha = 0.001  # For running statistics update
-        self.polyak_tau = 0.05  # Mise à jour plus lente et stable du target network
+        self.polyak_tau = 0.005  # Mise à jour lente et stable du target network
         
         # Create directories for saving results
         os.makedirs('results', exist_ok=True)
@@ -168,15 +168,16 @@ class TriplePendulumTrainer:
             with torch.no_grad():
                 action_probs = self.actor_model(state_tensor).squeeze().numpy()
 
-            # Améliorer la sélection d'action avec plus d'exploration
+            # Sélection d'action pour 3 actions discrètes : [left, neutral, right]
             if rd.random() < self.epsilon:
-                # Exploration pure : action aléatoire
-                action = rd.random() * 2 - 1  # Random entre -1 et 1
+                # Exploration pure : action aléatoire parmi les 3 actions
+                action_idx = np.random.choice(3)  # 0, 1, ou 2
             else:
-                # Exploitation CONTINUE au lieu de discret !
-                # Convertir les probabilities [p_left, p_right] en action continue
-                p_right = action_probs[1]
-                action = (p_right - 0.5) * 2  # Convertit [0,1] vers [-1,1] de façon continue
+                # Exploitation : utiliser les probabilités de l'acteur
+                action_idx = np.argmax(action_probs)  # Prendre l'action avec la plus haute probabilité
+            
+            # 0 -> -0.5 (gauche), 1 -> 0.0 (neutre), 2 -> +0.5 (droite)
+            action = float(action_idx - 1) * 0.5
                 
             if config['debug']:
                 print(f"DEBUG: Action probs: {action_probs}, final action: {action}, epsilon: {self.epsilon}")
@@ -222,7 +223,7 @@ class TriplePendulumTrainer:
                 done = True
                 break
         
-        print(f"Episode Ended, num_steps: {num_steps}, episode_reward: {episode_reward}")
+        print(f"Episode Ended, num_steps: {num_steps}, episode_reward: {episode_reward}, epsilon: {self.epsilon}")
         
         # Decay exploration parameters
         old_epsilon = self.epsilon
@@ -282,13 +283,16 @@ class TriplePendulumTrainer:
         if config['debug']:
             print(f"DEBUG: Actor probs shape: {probs.shape}, mean probs: {probs.mean(dim=0)}")
         
-        # Convertir les actions en indices pour le calcul de la log-probabilité
-        action_indices = torch.where(actions.squeeze() > 0, 1, 0)  # 1 si action > 0, 0 sinon
+        # Convertir les actions continues en indices discrets pour les 3 actions
+        # actions: -0.5 -> 0, 0.0 -> 1, +0.5 -> 2
+        action_indices = ((actions.squeeze() + 0.5) * 2).long()  # Convertir [-0.5,0,0.5] vers [0,1,2]
+        action_indices = torch.clamp(action_indices, 0, 2)  # S'assurer que les indices sont valides
         log_probs = torch.log(probs + 1e-8)  # Ajouter epsilon pour éviter log(0)
         selected_log_probs = log_probs.gather(1, action_indices.unsqueeze(1)).squeeze()
         
         if config['debug']:
-            print(f"DEBUG: Action indices shape: {action_indices.shape}, selected log probs: {selected_log_probs.mean().item():.4f}")
+            print(f"DEBUG: Action indices shape: {action_indices.shape}, action_indices values: {action_indices[:5]}")
+            print(f"DEBUG: Selected log probs: {selected_log_probs.mean().item():.4f}")
 
         actor_loss = -(advantages.squeeze() * selected_log_probs).mean()
         
@@ -337,7 +341,7 @@ class TriplePendulumTrainer:
             print(f"Episode {episode} started")
             
             # Activer ou désactiver le rendu en fonction du numéro d'épisode
-            if episode % 50 == 0 and episode > self.num_exploration_episodes:
+            if episode % 200 == 0 and episode > self.num_exploration_episodes:
                 print(f"Resetting phase cumulated rewards -1: {np.mean(self.phase_cumulated_rewards[-1])}, 1: {np.mean(self.phase_cumulated_rewards[1])}")
                 print(f"Phase counts", self.phase_counts)
                 self.previous_phase_cumulated_rewards = self.phase_cumulated_rewards
@@ -353,15 +357,10 @@ class TriplePendulumTrainer:
             losses = {"critic_loss": 0, "actor_loss": 0}
             if len(self.memory) >= self.config['batch_size']:
                 # Perform multiple updates per episode
-                for _ in range(self.config['updates_per_episode']):
-                    update_losses = self.update_networks()
-                    # Accumulate losses for reporting
-                    losses['critic_loss'] += update_losses['critic_loss']
-                    losses['actor_loss'] += update_losses['actor_loss']
-                
-                # Average the losses
-                losses['critic_loss'] /= self.config['updates_per_episode']
-                losses['actor_loss'] /= self.config['updates_per_episode']
+                update_losses = self.update_networks()
+                # Accumulate losses for reporting
+                losses['critic_loss'] = update_losses['critic_loss']
+                losses['actor_loss'] = update_losses['actor_loss']
             
             # Track metrics
             self.metrics.add_metric('episode_reward', episode_reward)

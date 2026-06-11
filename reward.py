@@ -144,7 +144,7 @@ class RewardManager:
         # Calculate exponential reward multiplier
         if self.consecutive_upright_steps > 40:
             exponential_multiplier = min(
-                self.exponential_base ** (self.consecutive_upright_steps / 10),  # Divide by 100 to make it grow more slowly
+                self.exponential_base ** (self.consecutive_upright_steps / 100),  # Divide by 100 to make it grow more slowly
                 self.max_exponential
             )
         else:
@@ -231,7 +231,7 @@ class RewardManager:
                 + non_alignement_penalty * self.alignement_weight
             
             # Cap reward
-            reward = positive_reward - penalty
+            reward = (positive_reward - penalty) * 1.0  # Retour à l'échelle normale
 
         """
         elif phase_2 : # First Edge Up and Second Edge Down (I mean folded but the first node is up and the second node is at the same level as the cart)
@@ -285,9 +285,9 @@ class RewardManager:
         if terminated:
             reward -= self.termination_penalty
         
-        if end_node_y < self.max_height * self.threshold_ratio / 2:
+        if end_node_y < self.max_height * self.threshold_ratio * 0.90:
             self.force_terminated = True
-            reward = -10
+            reward = 0
         
         components_dict = {
             'reward': reward,

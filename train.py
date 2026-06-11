@@ -71,6 +71,7 @@ class TriplePendulumTrainer:
         self.full_plot_frequency = cfg.get("plot_config", {}).get("full_plot_frequency", 1000)
         self.memory = ReplayBuffer(capacity=cfg["buffer_capacity"])
         self.total_it = 0
+        self.total_env_steps = 0
 
         os.makedirs("results", exist_ok=True)
         os.makedirs("models", exist_ok=True)
@@ -115,6 +116,7 @@ class TriplePendulumTrainer:
                     info["termination_reason"] = "render_closed"
 
             self.memory.push(state, action, reward, next_state, done)
+            self.total_env_steps += 1
             action_values.append(action)
             episode_reward += reward
 
@@ -129,8 +131,8 @@ class TriplePendulumTrainer:
                 hold_after.append(in_target)
             phase_hold[int(info["phase"])].append(in_target)
 
-            if len(self.memory) >= self.config["batch_size"]:
-                for _ in range(self.config.get("updates_per_step", 1)):
+            if self._should_update():
+                for _ in range(self.config.get("updates_per_train", 1)):
                     self.update_networks()
 
             state = next_state
@@ -160,6 +162,14 @@ class TriplePendulumTrainer:
             return True
         render_every = self.config.get("render_every_episodes", 200)
         return render_every > 0 and episode % render_every == 0
+
+    def _should_update(self):
+        if len(self.memory) < self.config["batch_size"]:
+            return False
+        if self.total_env_steps < self.config.get("learning_starts", self.config["batch_size"]):
+            return False
+        train_every = self.config.get("train_every_steps", 1)
+        return train_every <= 1 or self.total_env_steps % train_every == 0
 
     def update_networks(self):
         states, actions, rewards, next_states, dones = self.memory.sample(self.config["batch_size"])
@@ -216,21 +226,28 @@ class TriplePendulumTrainer:
                 target_param.data.add_(tau * param.data)
 
     def train(self):
-        for episode in range(self.config["num_episodes"]):
-            summary = self.collect_trajectory(episode)
-            self._record_episode_metrics(summary)
+        try:
+            for episode in range(self.config["num_episodes"]):
+                summary = self.collect_trajectory(episode)
+                self._record_episode_metrics(summary)
 
-            if episode % 10 == 0:
-                print(
-                    f"Episode {episode} | reward={summary['episode_reward']:.2f} "
-                    f"len={summary['episode_length']} "
-                    f"hold_before={summary['hold_before_switch']:.2f} "
-                    f"hold_after={summary['hold_after_switch']:.2f}"
-                )
+                if episode % 10 == 0:
+                    print(
+                        f"Episode {episode} | reward={summary['episode_reward']:.2f} "
+                        f"len={summary['episode_length']} "
+                        f"hold_before={summary['hold_before_switch']:.2f} "
+                        f"hold_after={summary['hold_after_switch']:.2f}"
+                    )
 
-            if episode % self.plot_frequency == self.plot_frequency - 1:
-                self.metrics.generate_all_plots()
-                self.save_models("models/checkpoint")
+                if episode % self.plot_frequency == self.plot_frequency - 1:
+                    self.metrics.generate_all_plots()
+                    self.save_models("models/checkpoint", episode=episode)
+        except KeyboardInterrupt:
+            episode = len(self.metrics.metrics["episode_reward"])
+            self.save_models("models/checkpoint", episode=episode, interrupted=True)
+            self.save_models("models/interrupted", episode=episode, interrupted=True)
+            print(f"\nKeyboardInterrupt: saved checkpoint at episode {episode}")
+            raise
 
     def _record_episode_metrics(self, summary):
         scalar_keys = [
@@ -251,7 +268,7 @@ class TriplePendulumTrainer:
             if values:
                 self.metrics.add_metric(component_name, float(np.mean(values)))
 
-    def save_models(self, path):
+    def save_models(self, path, episode=None, interrupted=False):
         torch.save(self.actor_model.state_dict(), path + "_actor.pth")
         torch.save(self.critic_model.state_dict(), path + "_critic.pth")
         torch.save(self.actor_optimizer.state_dict(), path + "_actor_optimizer.pth")
@@ -262,6 +279,12 @@ class TriplePendulumTrainer:
             "action_dim": self.action_dim,
             "max_action": self.max_action,
             "num_nodes": self.config["num_nodes"],
+            "episode": episode,
+            "total_updates": self.total_it,
+            "total_env_steps": self.total_env_steps,
+            "interrupted": interrupted,
+            "hidden_dim": self.config["hidden_dim"],
+            "model_version": 2,
         }
         with open(path + "_metadata.json", "w", encoding="utf-8") as metadata_file:
             json.dump(metadata, metadata_file, indent=2)
@@ -273,7 +296,13 @@ class TriplePendulumTrainer:
             return
         with open(metadata_path, encoding="utf-8") as metadata_file:
             metadata = json.load(metadata_file)
-        expected = {"algorithm": "td3", "state_dim": self.state_dim, "action_dim": self.action_dim}
+        expected = {
+            "algorithm": "td3",
+            "state_dim": self.state_dim,
+            "action_dim": self.action_dim,
+            "hidden_dim": self.config["hidden_dim"],
+            "model_version": 2,
+        }
         for key, value in expected.items():
             if metadata.get(key) != value:
                 print(f"Skipping checkpoint load: {key} is {metadata.get(key)}, expected {value}")

@@ -243,90 +243,86 @@ class TriplePendulumEnv:
     
     def get_state(self, action, phase = None):
         """
-        Renvoie l'état courant du système enrichi avec des combinaisons de features.
+        Renvoie une observation pure: physique normalisée, contexte de phase,
+        cinématique cartésienne et erreurs vers la cible active.
         """
         if self.current_state is None:
             return None
 
-        # Obtenir l'état de base (positions sans récompenses)
         base_result = self._calculate_base_state()
         if base_result is None:
             return None
 
         adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3 = base_result
-
-        # ----------------- Indicateurs logiques -------------------
-        near_border = float(abs(adapted_state[0]) > 1.6)
-        end_node_y = position_y3 if self.n == 3 else position_y2 if self.n == 2 else position_y1
-        end_node_upright = float(end_node_y > self.reward_manager.max_height * self.reward_manager.threshold_ratio)
-        is_node_on_right_of_cart = float(position_x3 > adapted_state[0])
-        normalized_steps = self.num_steps / max(1, self.max_steps)
-        normalized_switch_step = self.switch_step / max(1, self.max_steps)
         phase = self.current_phase if phase is None else phase
+        action = 0.0 if action is None else float(action)
+
+        x = adapted_state[0]
+        q1, q2, q3 = adapted_state[1:4]
+        x_dot, q1_dot, q2_dot, q3_dot = adapted_state[4:8]
+        arm = self.arm_length
+
+        vx1 = x_dot - arm * np.sin(q1) * q1_dot
+        vy1 = arm * np.cos(q1) * q1_dot
+        vx2 = vx1 - arm * np.sin(q2) * q2_dot
+        vy2 = vy1 + arm * np.cos(q2) * q2_dot
+        vx3 = vx2 - arm * np.sin(q3) * q3_dot
+        vy3 = vy2 + arm * np.cos(q3) * q3_dot
+
+        end_node_x = position_x3 if self.n == 3 else position_x2 if self.n == 2 else position_x1
+        end_node_y = position_y3 if self.n == 3 else position_y2 if self.n == 2 else position_y1
+        end_node_vx = vx3 if self.n == 3 else vx2 if self.n == 2 else vx1
+        end_node_vy = vy3 if self.n == 3 else vy2 if self.n == 2 else vy1
+
+        normalized_steps = self.num_steps / max(1, self.max_steps)
+        time_to_switch = (self.switch_step - self.num_steps) / max(1, self.max_steps)
+        has_switched = float(self.has_switched)
         phase_1 = float(phase == 1)
         phase_2 = float(phase == -1)
-        direction = float(action > 0) if action is not None else 0.0
-        prev_action = self.previous_action
-        prev_direction = float(prev_action > 0) if prev_action is not None else 0.0
 
-        # ----------------- Feature Engineering -------------------
-        q1, q2, q3 = adapted_state[1:4]
-        u1, u2, u3 = adapted_state[4:7]
+        phase1_end_y_error = self.reward_manager.max_height - end_node_y
+        phase1_end_x_error = end_node_x - x
+        phase1_alignment_error = (1.0 - np.cos(q1 - q2)) + (1.0 - np.cos(q2 - q3))
 
-        # Combinaisons d'angles
-        if self.n > 1:
-            sin_diff_12 = np.sin(q1 - q2)
+        phase2_y1_error = self.arm_length - position_y1
+        phase2_end_y_error = end_node_y
+        phase2_end_x_error = end_node_x - x
+        phase2_fold_error = 1.0 + np.cos(q1 - q2)
+
+        if phase == 1:
+            active_height_error = phase1_end_y_error
+            active_x_error = phase1_end_x_error
+            active_shape_error = phase1_alignment_error
         else:
-            sin_diff_12 = 0
-        
-        if self.n > 2:
-            cos_sum_23 = np.cos(q2 + q3)
-        else:
-            cos_sum_23 = 0
+            active_height_error = phase2_end_y_error
+            active_x_error = phase2_end_x_error
+            active_shape_error = phase2_fold_error
 
-        # Interaction angle × vitesse
-        if self.n > 1:
-            v1_angle1 = u1 * q1
-        else:
-            v1_angle1 = 0
+        target_velocity_norm = np.sqrt(end_node_vx**2 + end_node_vy**2)
 
-        if self.n > 2:
-            v2_angle2 = u2 * q2
-        else:
-            v2_angle2 = 0
-
-        # Approximation énergie
-        KE = 0.5 * (u1 ** 2 + u2 ** 2 + u3 ** 2)
-
-        # Distances inter-masses
-        if self.n > 1:
-            d12 = np.linalg.norm([position_x2 - position_x1, position_y2 - position_y1])
-        else:
-            d12 = 0
-
-        if self.n > 2:
-            d23 = np.linalg.norm([position_x3 - position_x2, position_y3 - position_y2])
-        else:
-            d23 = 0
-        # ----------- Construction finale de l'état ---------------
-        state_with_positions = np.hstack((
-            adapted_state,
-            position_x1, position_y1, position_x2, position_y2, position_x3, position_y3, 
-            near_border, end_node_y, end_node_upright, direction, prev_action, prev_direction,
-            is_node_on_right_of_cart, normalized_steps, normalized_switch_step, float(phase),
-            sin_diff_12, cos_sum_23, v1_angle1, v2_angle2,
-            self.applied_force, action,
-            KE, d12, d23, phase_1, phase_2
+        return np.hstack((
+            x, x_dot,
+            np.sin(q1), np.cos(q1), q1_dot,
+            np.sin(q2), np.cos(q2), q2_dot,
+            np.sin(q3), np.cos(q3), q3_dot,
+            position_x1, position_y1, position_x2, position_y2, position_x3, position_y3,
+            vx1, vy1, vx2, vy2, vx3, vy3,
+            self.applied_force, self.previous_action, action,
+            phase_1, phase_2, normalized_steps, time_to_switch, has_switched,
+            active_height_error, active_x_error, active_shape_error,
+            phase1_end_y_error, phase1_end_x_error, phase1_alignment_error,
+            phase2_y1_error, phase2_end_y_error, phase2_end_x_error, phase2_fold_error,
+            target_velocity_norm, x
         ))
-
-        return state_with_positions
 
     def get_physical_state(self):
         base_result = self._calculate_base_state()
         if base_result is None:
             return None
         adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3 = base_result
-        return np.hstack((adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3))
+        physical_state = np.array(adapted_state, dtype=float).copy()
+        physical_state[7] = self.applied_force
+        return np.hstack((physical_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3))
 
 
     def step(self, action=0.0, phase = None):

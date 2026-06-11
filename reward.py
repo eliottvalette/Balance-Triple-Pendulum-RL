@@ -15,11 +15,17 @@ class RewardManager:
         self.phase_2_end_height_tolerance = 0.12
         self.cart_limit = 1.8
 
-    def calculate_reward(self, state, terminated, current_step, action, phase=None):
-        reward, components, force_terminated = self.evaluate(state, action, phase, terminated)
+    def calculate_reward(self, state, terminated, current_step, action, phase=None, has_switched=False):
+        reward, components, force_terminated = self.evaluate(
+            state,
+            action,
+            phase,
+            terminated,
+            has_switched=has_switched,
+        )
         return reward, components, force_terminated
 
-    def evaluate(self, physical_state, action, phase, terminated=False):
+    def evaluate(self, physical_state, action, phase, terminated=False, has_switched=False):
         if phase not in (-1, 1):
             raise ValueError(f"phase must be -1 or 1, got {phase}")
 
@@ -38,6 +44,7 @@ class RewardManager:
             end_x_error = end_x - x
             alignment_error = (1.0 - np.cos(q1 - q2)) + (1.0 - np.cos(q2 - q3))
             target_score = np.exp(-8.0 * height_error**2 - 2.0 * end_x_error**2)
+            target_error = abs(height_error) + 0.5 * abs(end_x_error) + 0.25 * alignment_error
             shape_penalty = 0.20 * alignment_error
             in_target = (
                 abs(height_error) < self.phase_1_height_tolerance
@@ -54,6 +61,7 @@ class RewardManager:
                 -10.0 * end_y_error**2
                 -1.5 * end_x_error**2
             )
+            target_error = abs(y1_error) + abs(end_y_error) + 0.5 * abs(end_x_error) + 0.25 * folded_error
             shape_penalty = 0.20 * folded_error
             in_target = (
                 abs(y1_error) < 0.10
@@ -61,6 +69,10 @@ class RewardManager:
                 and abs(end_x_error) < 0.35
                 and abs(u1) + abs(u2) + abs(u3) < 3.0
             )
+
+        low_score_penalty = 0.0
+        if has_switched and target_score < config.get("post_switch_low_score_threshold", 0.2):
+            low_score_penalty = config.get("post_switch_low_score_penalty", 0.5)
 
         reward = (
             2.0 * target_score
@@ -70,16 +82,23 @@ class RewardManager:
             - cart_penalty
             - action_penalty
             - terminal_penalty
+            - low_score_penalty
         )
+        post_switch_weight = config.get("post_switch_reward_weight", 2.0) if has_switched else 1.0
+        reward *= post_switch_weight
 
         components = {
             "reward": float(reward),
             "target_score": float(target_score),
+            "target_error": float(target_error),
             "shape_penalty": float(shape_penalty),
             "velocity_penalty": float(velocity_penalty),
             "cart_penalty": float(cart_penalty),
             "action_penalty": float(action_penalty),
             "terminal_penalty": float(terminal_penalty),
+            "low_score_penalty": float(low_score_penalty),
+            "post_switch_weight": float(post_switch_weight),
+            "has_switched": float(has_switched),
             "in_target": float(in_target),
             "end_y": float(end_y),
             "end_x": float(end_x),

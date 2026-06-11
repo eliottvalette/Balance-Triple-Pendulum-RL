@@ -40,6 +40,7 @@ class TriplePendulumTrainer:
             render_mode=None,
             num_nodes=cfg["num_nodes"],
             max_steps=cfg["max_steps"],
+            env_config=cfg,
         )
 
         initial_state = self.env.reset()
@@ -98,6 +99,15 @@ class TriplePendulumTrainer:
         phase_hold = {1: [], -1: []}
         switch_step = self.env.switch_step
         termination_reason = None
+        initial_phase = self.env.initial_phase
+        initial_pose_mode = getattr(self.env, "initial_pose_mode", "target")
+        if initial_pose_mode == "down":
+            transition_direction = "down_to_up"
+        else:
+            transition_direction = "up_to_fold" if initial_phase == 1 else "fold_to_up"
+        previous_post_switch_target_error = None
+        transition_rewards = []
+        in_target_history = []
 
         for step_idx in range(self.config["max_steps"]):
             noise_std = self.config.get("exploration_noise", 0.10)
@@ -115,16 +125,31 @@ class TriplePendulumTrainer:
                     done = True
                     info["termination_reason"] = "render_closed"
 
+            components = info.get("reward_components", {})
+            transition_reward = 0.0
+            if info.get("switched"):
+                previous_post_switch_target_error = None
+            if self.env.has_switched:
+                target_error = float(components.get("target_error", 0.0))
+                if previous_post_switch_target_error is not None:
+                    improvement = previous_post_switch_target_error - target_error
+                    transition_reward = self.config.get("transition_improvement_weight", 0.5) * improvement
+                    reward += transition_reward
+                previous_post_switch_target_error = target_error
+            components["transition_reward"] = float(transition_reward)
+            components["reward"] = float(reward)
+            transition_rewards.append(transition_reward)
+
             self.memory.push(state, action, reward, next_state, done)
             self.total_env_steps += 1
             action_values.append(action)
             episode_reward += reward
 
-            components = info.get("reward_components", {})
             for component_name, value in components.items():
                 reward_components_accumulated.setdefault(component_name, []).append(value)
 
             in_target = float(info.get("in_target", 0.0))
+            in_target_history.append(in_target)
             if step_idx < switch_step:
                 hold_before.append(in_target)
             else:
@@ -141,14 +166,37 @@ class TriplePendulumTrainer:
                 break
 
         episode_length = step_idx + 1
+        hold_before_switch = float(np.mean(hold_before)) if hold_before else 0.0
+        hold_after_switch = float(np.mean(hold_after)) if hold_after else 0.0
+        final_window = max(1, int(0.2 * len(in_target_history)))
+        final_hold = float(np.mean(in_target_history[-final_window:])) if in_target_history else 0.0
+        if transition_direction == "down_to_up":
+            hold_after_switch = final_hold
+            balanced_hold = final_hold
+            episode_success = float(final_hold > 0.8)
+        else:
+            balanced_hold = min(hold_before_switch, hold_after_switch)
+            episode_success = float(hold_before_switch > 0.8 and hold_after_switch > 0.8)
         return {
             "episode_reward": episode_reward,
             "episode_length": episode_length,
             "reward_components": reward_components_accumulated,
-            "hold_before_switch": float(np.mean(hold_before)) if hold_before else 0.0,
-            "hold_after_switch": float(np.mean(hold_after)) if hold_after else 0.0,
+            "hold_before_switch": hold_before_switch,
+            "hold_after_switch": hold_after_switch,
+            "balanced_hold": balanced_hold,
+            "episode_success": episode_success,
+            "final_hold": final_hold,
             "success_rate_phase_1": float(np.mean(phase_hold[1])) if phase_hold[1] else 0.0,
             "success_rate_phase_2": float(np.mean(phase_hold[-1])) if phase_hold[-1] else 0.0,
+            "initial_phase": initial_phase,
+            "initial_pose_mode": initial_pose_mode,
+            "transition_direction": transition_direction,
+            f"{transition_direction}_hold_before": hold_before_switch,
+            f"{transition_direction}_hold_after": hold_after_switch,
+            f"{transition_direction}_balanced_hold": balanced_hold,
+            f"{transition_direction}_success": episode_success,
+            f"{transition_direction}_final_hold": final_hold,
+            "transition_reward_mean": float(np.mean(transition_rewards)) if transition_rewards else 0.0,
             "action_mean": float(np.mean(action_values)) if action_values else 0.0,
             "action_std": float(np.std(action_values)) if action_values else 0.0,
             "action_abs_mean": float(np.mean(np.abs(action_values))) if action_values else 0.0,
@@ -233,10 +281,13 @@ class TriplePendulumTrainer:
 
                 if episode % 10 == 0:
                     print(
-                        f"Episode {episode} | reward={summary['episode_reward']:.2f} "
-                        f"len={summary['episode_length']} "
-                        f"hold_before={summary['hold_before_switch']:.2f} "
-                        f"hold_after={summary['hold_after_switch']:.2f}"
+                        f"Episode {episode:5d} | "
+                        f"reward={summary['episode_reward']:8.2f} | "
+                        f"len={summary['episode_length']:4d} | "
+                        f"dir={summary['transition_direction']:<10s} | "
+                        f"before={summary['hold_before_switch']:4.2f} | "
+                        f"after={summary['hold_after_switch']:4.2f} | "
+                        f"balanced={summary['balanced_hold']:4.2f}"
                     )
 
                 if episode % self.plot_frequency == self.plot_frequency - 1:
@@ -255,8 +306,12 @@ class TriplePendulumTrainer:
             "episode_length",
             "hold_before_switch",
             "hold_after_switch",
+            "balanced_hold",
+            "episode_success",
+            "final_hold",
             "success_rate_phase_1",
             "success_rate_phase_2",
+            "transition_reward_mean",
             "action_mean",
             "action_std",
             "action_abs_mean",
@@ -267,6 +322,12 @@ class TriplePendulumTrainer:
         for component_name, values in summary["reward_components"].items():
             if values:
                 self.metrics.add_metric(component_name, float(np.mean(values)))
+
+        for direction in ("up_to_fold", "fold_to_up", "down_to_up"):
+            for suffix in ("hold_before", "hold_after", "balanced_hold", "success", "final_hold"):
+                key = f"{direction}_{suffix}"
+                if key in summary:
+                    self.metrics.add_metric(key, summary[key])
 
     def save_models(self, path, episode=None, interrupted=False):
         torch.save(self.actor_model.state_dict(), path + "_actor.pth")

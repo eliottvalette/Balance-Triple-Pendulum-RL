@@ -104,11 +104,13 @@ class MetricsTracker:
         ax = axes[0, 2]
         reward_components = [
             'target_score',
+            'target_error',
             'shape_penalty',
             'velocity_penalty',
             'cart_penalty',
             'action_penalty',
-            'terminal_penalty',
+            'low_score_penalty',
+            'transition_reward',
         ]
         for component in reward_components:
             if component in self.metrics and len(self.metrics[component]) > 0:
@@ -135,7 +137,14 @@ class MetricsTracker:
         
         # Plot hold-rate metrics
         ax = axes[1, 1]
-        for hold_metric in ['hold_before_switch', 'hold_after_switch', 'success_rate_phase_1', 'success_rate_phase_2']:
+        for hold_metric in [
+            'hold_before_switch',
+            'hold_after_switch',
+            'balanced_hold',
+            'up_to_fold_balanced_hold',
+            'fold_to_up_balanced_hold',
+            'down_to_up_balanced_hold',
+        ]:
             if hold_metric in self.metrics and len(self.metrics[hold_metric]) > 0:
                 hold_ds, hold_indices = self._downsample_if_needed(self.metrics[hold_metric])
                 ax.plot(hold_indices, hold_ds, label=hold_metric)
@@ -197,12 +206,15 @@ class MetricsTracker:
         plt.subplot(2, 1, 2)
         reward_components = [
             'target_score',
+            'target_error',
             'shape_penalty',
             'velocity_penalty',
             'cart_penalty',
             'action_penalty',
+            'transition_reward',
             'hold_before_switch',
             'hold_after_switch',
+            'balanced_hold',
         ]
         
         for component in reward_components:

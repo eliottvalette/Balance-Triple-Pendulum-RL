@@ -28,6 +28,10 @@ class TriplePendulumEnv:
         self.current_time = 0.0
         self.applied_force = 0.0
         self.previous_action = 0.0
+        self.current_phase = 1
+        self.initial_phase = 1
+        self.switch_step = int(max_steps * 0.5)
+        self.has_switched = False
 
         # -----------------------------
         # Modèle symbolique
@@ -145,26 +149,42 @@ class TriplePendulumEnv:
     def reset(self, phase = None):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
-        if phase == -1 or True : # TODO : Remove True when working model on basic mode
-            rd_angle = pi/2 + rd.randint(-1, 1) * pi/16 * 0
-            angles_initiaux = [rd_angle] + [rd_angle] * (len(self.positions) - 2)
-        elif phase == 1:
-            first_angle = pi/2 + rd.randint(-1, 1) * pi/16
-            second_angle = -pi/2 + rd.randint(-1, 1) * pi/16
-            angles_initiaux = [first_angle, second_angle] + [second_angle] * (len(self.positions) - 3)
-        vitesses_initiales = 0.0
+        self.initial_phase = phase if phase in (-1, 1) else rd.choice([-1, 1])
+        self.current_phase = self.initial_phase
+        low = int(self.max_steps * 0.40)
+        high = int(self.max_steps * 0.60)
+        self.switch_step = rd.randint(low, max(low, high))
+        self.has_switched = False
+
+        angle_noise = config.get('initial_angle_noise', pi / 28)
+        velocity_noise = config.get('initial_velocity_noise', 0.04)
+        if self.current_phase == 1:
+            base_angles = [pi / 2] * (len(self.positions) - 1)
+        else:
+            base_angles = [pi / 2, -pi / 2] + [-pi / 2] * (len(self.positions) - 3)
+
+        angles_initiaux = [
+            base_angle + rd.uniform(-angle_noise, angle_noise)
+            for base_angle in base_angles
+        ]
+        vitesses_initiales = np.array([
+            rd.uniform(-velocity_noise, velocity_noise)
+            for _ in range(len(self.velocities))
+        ])
         state = hstack((
             position_initiale_chariot,
             angles_initiaux,
-            vitesses_initiales * ones(len(self.velocities))
+            vitesses_initiales
         ))
         self.current_state = state.copy()  # On stocke l'état courant
         self.current_time = 0.0            # Réinitialisation du temps courant
         self.dt = DT
         self.num_steps = 0
+        self.applied_force = 0.0
+        self.previous_action = 0.0
         if self.reward_manager is not None:
             self.reward_manager.reset()
-        return state
+        return self.get_state(action=0.0, phase=self.current_phase)
 
     def _init_pygame(self):
         if not self.pygame_initialized:
@@ -235,41 +255,16 @@ class TriplePendulumEnv:
 
         adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3 = base_result
 
-        # ---------------- Reward Components -----------------------
-        _, reward_components, _ = self.reward_manager.calculate_reward (
-            np.hstack((adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3)),
-            False,
-            self.num_steps,
-            action,
-            phase
-        )
-        
-        reward = reward_components['reward']
-        positive_reward = reward_components['positive_reward']
-        heraticness_penalty = reward_components['heraticness_penalty']
-        x_penalty = reward_components['x_penalty']
-        non_alignement_penalty = reward_components['non_alignement_penalty']
-        stability_penalty = reward_components['stability_penalty']
-        mse_penalty = reward_components['mse_penalty']
-        consecutive_upright_steps = self.reward_manager.consecutive_upright_steps / 500
-        have_been_upright_once = self.reward_manager.have_been_upright_once
-        came_back_down = self.reward_manager.came_back_down
-        steps_double_down = self.reward_manager.steps_double_down / 500
-        time_over_threshold_1 = self.reward_manager.time_over_threshold_1 / 500
-        time_over_threshold_2 = self.reward_manager.time_over_threshold_2 / 500
-        time_under_threshold_2 = self.reward_manager.time_under_threshold_2 / 500
-        smoothed_variation_1 = self.reward_manager.smoothed_variation_1
-        smoothed_variation_2 = self.reward_manager.smoothed_variation_2
-
-
         # ----------------- Indicateurs logiques -------------------
         near_border = float(abs(adapted_state[0]) > 1.6)
         end_node_y = position_y3 if self.n == 3 else position_y2 if self.n == 2 else position_y1
         end_node_upright = float(end_node_y > self.reward_manager.max_height * self.reward_manager.threshold_ratio)
         is_node_on_right_of_cart = float(position_x3 > adapted_state[0])
-        normalized_steps = self.num_steps / 500
-        phase_1 = phase == 1
-        phase_2 = phase == -1
+        normalized_steps = self.num_steps / max(1, self.max_steps)
+        normalized_switch_step = self.switch_step / max(1, self.max_steps)
+        phase = self.current_phase if phase is None else phase
+        phase_1 = float(phase == 1)
+        phase_2 = float(phase == -1)
         direction = float(action > 0) if action is not None else 0.0
         prev_action = self.previous_action
         prev_direction = float(prev_action > 0) if prev_action is not None else 0.0
@@ -317,16 +312,21 @@ class TriplePendulumEnv:
         state_with_positions = np.hstack((
             adapted_state,
             position_x1, position_y1, position_x2, position_y2, position_x3, position_y3, 
-            reward, positive_reward, x_penalty,  non_alignement_penalty, stability_penalty, mse_penalty, heraticness_penalty,
-            consecutive_upright_steps, have_been_upright_once, came_back_down, steps_double_down,
-            near_border, end_node_y, end_node_upright, time_over_threshold_1, time_over_threshold_2, time_under_threshold_2, smoothed_variation_1, smoothed_variation_2, direction, prev_action, prev_direction,
-            is_node_on_right_of_cart, normalized_steps, phase,
+            near_border, end_node_y, end_node_upright, direction, prev_action, prev_direction,
+            is_node_on_right_of_cart, normalized_steps, normalized_switch_step, float(phase),
             sin_diff_12, cos_sum_23, v1_angle1, v2_angle2,
             self.applied_force, action,
             KE, d12, d23, phase_1, phase_2
         ))
 
         return state_with_positions
+
+    def get_physical_state(self):
+        base_result = self._calculate_base_state()
+        if base_result is None:
+            return None
+        adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3 = base_result
+        return np.hstack((adapted_state, position_x1, position_y1, position_x2, position_y2, position_x3, position_y3))
 
 
     def step(self, action=0.0, phase = None):
@@ -344,6 +344,16 @@ class TriplePendulumEnv:
         if self.current_state is None:
             self.reset(phase=phase)
 
+        if phase is not None:
+            self.current_phase = phase
+
+        switched = False
+        if not self.has_switched and self.num_steps >= self.switch_step:
+            self.current_phase *= -1
+            self.has_switched = True
+            switched = True
+
+        action = float(np.clip(action, -config.get('max_action', 0.5), config.get('max_action', 0.5)))
         if (self.current_state[0] > 1.65 and action > 0) :
             action = -0.1
         elif (self.current_state[0] < -1.65 and action < 0):
@@ -379,13 +389,36 @@ class TriplePendulumEnv:
         self.current_state = next_state
         self.current_time += self.dt
 
-        terminated = False # abs(self.current_state[0]) > 1.6
+        self.num_steps += 1
+        physical_state = self.get_physical_state()
+        terminated = bool(
+            np.isnan(np.sum(self.current_state))
+            or abs(self.current_state[0]) >= self.xmax - self.cart_width / (2 * self.scale)
+            or self.num_steps >= self.max_steps
+        )
+        reward = 0.0
+        reward_components = {}
+        if self.reward_manager is not None:
+            reward, reward_components, _ = self.reward_manager.calculate_reward(
+                physical_state,
+                terminated,
+                self.num_steps,
+                action,
+                self.current_phase,
+            )
 
         self.previous_action = action
-
-        if phase is None:
-            raise ValueError("Phase is None")
-        return self.get_state(action = action, phase = phase), terminated
+        info = {
+            "phase": self.current_phase,
+            "initial_phase": self.initial_phase,
+            "switch_step": self.switch_step,
+            "switched": switched,
+            "reward_components": reward_components,
+            "target_score": reward_components.get("target_score", 0.0),
+            "in_target": reward_components.get("in_target", 0.0),
+            "termination_reason": "max_steps" if self.num_steps >= self.max_steps else "cart_or_nan" if terminated else None,
+        }
+        return self.get_state(action=action, phase=self.current_phase), reward, terminated, info
         
     def render(self, action, episode = 0, epsilon = 0, current_step = 0, phase = None):
         """
@@ -534,13 +567,13 @@ class TriplePendulumEnv:
                 # Définir les composants de récompense avec leurs couleurs spécifiques
                 reward_components_display = [
                     {"name": "Reward", "value": reward_components.get('reward', 0), "color": (100, 100, 200)},
-                    {"name": "Positive", "value": reward_components.get('positive_reward', 0), "color": (100, 200, 100)},
-                    {"name": "Penalty", "value": reward_components.get('penalty', 0), "color": (200, 80, 80)},
-                    {"name": "Position", "value": reward_components.get('x_penalty', 0), "color": (200, 80, 80)},
-                    {"name": "Alignment", "value": reward_components.get('non_alignement_penalty', 0), "color": (180, 130, 80)},
-                    {"name": "Stability", "value": reward_components.get('stability_penalty', 0), "color": (180, 130, 80)},
-                    {"name": "MSE", "value": reward_components.get('mse_penalty', 0), "color": (180, 130, 80)},
-                    {"name": "Hera", "value": reward_components.get('heraticness_penalty', 0), "color": (180, 130, 80)}
+                    {"name": "Target", "value": reward_components.get('target_score', 0), "color": (100, 200, 100)},
+                    {"name": "Shape", "value": reward_components.get('shape_penalty', 0), "color": (200, 80, 80)},
+                    {"name": "Velocity", "value": reward_components.get('velocity_penalty', 0), "color": (180, 130, 80)},
+                    {"name": "Cart", "value": reward_components.get('cart_penalty', 0), "color": (200, 80, 80)},
+                    {"name": "Action", "value": reward_components.get('action_penalty', 0), "color": (180, 130, 80)},
+                    {"name": "Terminal", "value": reward_components.get('terminal_penalty', 0), "color": (200, 80, 80)},
+                    {"name": "In Target", "value": reward_components.get('in_target', 0), "color": (100, 200, 100)}
                 ]
              
                 # Dessiner les barres de récompense

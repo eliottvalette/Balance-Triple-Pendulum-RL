@@ -12,6 +12,18 @@ config = {
     'num_nodes': 2,
     'gravity': 9.81,
     'friction_coefficient': 0.1,
+    'max_action': 0.5,
+    'exploration_noise': 0.10,
+    'policy_noise': 0.08,
+    'noise_clip': 0.15,
+    'policy_delay': 2,
+    'polyak_tau': 0.005,
+    'updates_per_step': 1,
+    'initial_angle_noise': 0.1122,
+    'initial_velocity_noise': 0.04,
+    'render_training': False,
+    'render_every_episodes': 200,
+    'render_first_episode': True,
     'debug': False,
     
     # Options de visualisation et de plots

@@ -102,7 +102,14 @@ class MetricsTracker:
         
         # Plot reward components
         ax = axes[0, 2]
-        reward_components = ['reward', 'positive_reward', 'penalty', 'x_penalty', 'non_alignement_penalty', 'stability_penalty', 'mse_penalty', 'heraticness_penalty']
+        reward_components = [
+            'target_score',
+            'shape_penalty',
+            'velocity_penalty',
+            'cart_penalty',
+            'action_penalty',
+            'terminal_penalty',
+        ]
         for component in reward_components:
             if component in self.metrics and len(self.metrics[component]) > 0:
                 comp_ds, comp_indices = self._downsample_if_needed(self.metrics[component])
@@ -126,36 +133,31 @@ class MetricsTracker:
         ax.set_ylabel('Value')
         ax.legend()
         
-        # Plot stability metrics
+        # Plot hold-rate metrics
         ax = axes[1, 1]
-        if 'stability_penalty' in self.metrics and len(self.metrics['stability_penalty']) > 0:
-            stab_ds, stab_indices = self._downsample_if_needed(self.metrics['stability_penalty'])
-            ax.plot(stab_indices, stab_ds, label='Stability Penalty')
-            
-            if len(self.metrics['stability_penalty']) >= self.episode_window:
-                moving_avg = np.convolve(self.metrics['stability_penalty'], 
-                                      np.ones(self.episode_window)/self.episode_window, 
+        for hold_metric in ['hold_before_switch', 'hold_after_switch', 'success_rate_phase_1', 'success_rate_phase_2']:
+            if hold_metric in self.metrics and len(self.metrics[hold_metric]) > 0:
+                hold_ds, hold_indices = self._downsample_if_needed(self.metrics[hold_metric])
+                ax.plot(hold_indices, hold_ds, label=hold_metric)
+
+            if hold_metric in self.metrics and len(self.metrics[hold_metric]) >= self.episode_window:
+                moving_avg = np.convolve(self.metrics[hold_metric],
+                                      np.ones(self.episode_window)/self.episode_window,
                                       mode='valid')
                 ma_ds, ma_indices = self._downsample_if_needed(moving_avg)
-                ax.plot(ma_indices + self.episode_window - 1, ma_ds, label='Stability Penalty (MA)')
-        ax.set_title('Stability Metrics')
+                ax.plot(ma_indices + self.episode_window - 1, ma_ds, label=f'{hold_metric} (MA)')
+        ax.set_title('Hold-rate Metrics')
         ax.set_xlabel('Episode')
-        ax.set_ylabel('Value')
+        ax.set_ylabel('Rate')
         ax.legend()
         
-        # Plot alignment metrics
+        # Plot action metrics
         ax = axes[1, 2]
-        if 'non_alignement_penalty' in self.metrics and len(self.metrics['non_alignement_penalty']) > 0:
-            align_ds, align_indices = self._downsample_if_needed(self.metrics['non_alignement_penalty'])
-            ax.plot(align_indices, align_ds, label='Alignment Penalty')
-            
-            if len(self.metrics['non_alignement_penalty']) >= self.episode_window:
-                moving_avg = np.convolve(self.metrics['non_alignement_penalty'], 
-                                      np.ones(self.episode_window)/self.episode_window, 
-                                      mode='valid')
-                ma_ds, ma_indices = self._downsample_if_needed(moving_avg)
-                ax.plot(ma_indices + self.episode_window - 1, ma_ds, label='Alignment Penalty (MA)')
-        ax.set_title('Alignment Metrics')
+        for action_metric in ['action_mean', 'action_std', 'action_abs_mean']:
+            if action_metric in self.metrics and len(self.metrics[action_metric]) > 0:
+                action_ds, action_indices = self._downsample_if_needed(self.metrics[action_metric])
+                ax.plot(action_indices, action_ds, label=action_metric)
+        ax.set_title('Action Metrics')
         ax.set_xlabel('Episode')
         ax.set_ylabel('Value')
         ax.legend()
@@ -193,8 +195,15 @@ class MetricsTracker:
         
         # Tracer les composantes de récompense
         plt.subplot(2, 1, 2)
-        reward_components = ['upright_reward', 'x_penalty', 
-                             'non_alignement_penalty', 'stability_penalty', 'mse_penalty']
+        reward_components = [
+            'target_score',
+            'shape_penalty',
+            'velocity_penalty',
+            'cart_penalty',
+            'action_penalty',
+            'hold_before_switch',
+            'hold_after_switch',
+        ]
         
         for component in reward_components:
             if component in self.metrics and len(self.metrics[component]) > 0:

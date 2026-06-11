@@ -1,323 +1,93 @@
-# reward.py
 import numpy as np
-import random as rd
+
 from config import config
 
+
 class RewardManager:
+    """Pure reward and success metrics for the two-phase pendulum task."""
+
     def __init__(self):
-        # -----------------------
-        # Configuration
-        # -----------------------
-        self.num_nodes = config['num_nodes']
-        self.length = 0.33  # Pendulum length
-        
-        # -----------------------
-        # Reward weights
-        # -----------------------
-        self.cart_position_weight = 0.20
-        self.nodes_position_weight = 0.20
-        self.termination_penalty = 1
-        self.alignement_weight = 0.1
-        self.upright_weight = 0.2
-        self.stability_weight = 0.04  # Weight for the stability reward
-        self.mse_weight = 0.2  # Weight for the MSE penalty
-        self.heraticness_weight = 0.001
-        self.x_nodes_penalty_weight = 0.5
-        
-        # -----------------------
-        # Upright tracking parameters
-        # -----------------------
-        self.max_height = 0.33 * self.num_nodes # Threshold for considering pendulum upright
-        self.consecutive_upright_steps = 0  # Track consecutive steps with pendulum upright
-        self.exponential_base = 1.15  # Base for exponential reward
-        self.max_exponential = 3.0  # Maximum exponential multiplier
-        self.have_been_upright_once = False
-        self.came_back_down = False
-        self.steps_double_down = 0
-        self.force_terminated = False
-        self.first_step_above_threshold = None
+        self.num_nodes = config["num_nodes"]
+        self.length = 1.0 / 3.0
+        self.max_height = self.length * self.num_nodes
+        self.threshold_ratio = 0.90
+        self.phase_1_height_tolerance = 0.08
+        self.phase_2_end_height_tolerance = 0.12
+        self.cart_limit = 1.8
 
-        # -----------------------
-        # Real Reward Components
-        # -----------------------
-        self.threshold_ratio = 0.90  # 90% of pendulum length (as per the formula)
-        self.time_over_threshold_1 = 0
-        self.time_over_threshold_2 = 0
-        self.time_under_threshold_2 = 0
-        self.smoothed_variation_1 = 0.0
-        self.smoothed_variation_2 = 0.0
-        self.prev_output = None
-        self.output_deltas = []
+    def calculate_reward(self, state, terminated, current_step, action, phase=None):
+        reward, components, force_terminated = self.evaluate(state, action, phase, terminated)
+        return reward, components, force_terminated
 
-        # -----------------------
-        # State tracking
-        # -----------------------
-        self.old_points_positions = None
-        self.cached_velocity = 0
-        self.update_step = 0
-        self.hera_update_step = 0
-        self.old_heraticness_penalty = 0
-        self.old_points_positions = None
-        
-        # -----------------------
-        # Target state
-        # -----------------------
-        self.aim_position_state = [ 0.0,  np.pi/2,  np.pi/2,  np.pi/2,
-                                    0.0, 0.0, 0.0, 0.0,
-                                    0.0, 0.33, 0.0, 0.66,
-                                    0.0, 1.0, 0.0, 0.0,
-                                    0.0, 0.0, 0.0, 0.0,
-                                    0.5,  1.0,  0.0,  0.0,
-                                    0.0,  1.0,  1.0]
-        
-        # -----------------------
-        # DEBUG
-        # -----------------------
-        self.old_angles = [0.0, 0.0, 0.0]
-        self.old_alignement_penalty = None
+    def evaluate(self, physical_state, action, phase, terminated=False):
+        if phase not in (-1, 1):
+            raise ValueError(f"phase must be -1 or 1, got {phase}")
 
-    def calculate_reward(self, state, terminated, current_step, action, phase = None):
-        """
-        Calculate the reward based on the current state and termination status.
-        
-        Args:
-            state: [x, q1, q2, q3, u1, u2, u3, f, x1, y1, x2, y2, x3, y3]
-            terminated (bool): Whether the episode has terminated due to constraints violation
-        
-        Returns:
-            float: The calculated reward value
-        """
-        # ----------------------- SET UPS -----------------------
-        x = state[0]
-        q1 = state[1]
-        q2 = state[2]
-        q3 = state[3]
-        u1 = state[4]
-        u2 = state[5]
-        u3 = state[6]
-        f = state[7]
-        x1 = state[8]
-        y1 = state[9]
-        x2 = state[10]
-        y2 = state[11]
-        x3 = state[12]
-        y3 = state[13]
-        if phase is None:
-            phase_1 = state[-2] == 1
-            phase_2 = state[-1] == 1
-        else:
-            phase_1 = phase == 1
-            phase_2 = phase == -1
+        x, q1, q2, q3, u1, u2, u3, _force = physical_state[:8]
+        x1, y1, x2, y2, x3, y3 = physical_state[8:14]
+        end_x = x3 if self.num_nodes == 3 else x2 if self.num_nodes == 2 else x1
+        end_y = y3 if self.num_nodes == 3 else y2 if self.num_nodes == 2 else y1
 
-        end_node_x = x3 if self.num_nodes == 3 else x2 if self.num_nodes == 2 else x1
-        end_node_y = y3 if self.num_nodes == 3 else y2 if self.num_nodes == 2 else y1
+        velocity_penalty = 0.025 * (u1**2 + u2**2 + u3**2)
+        cart_penalty = 0.35 * x**2
+        action_penalty = 0.03 * float(action) ** 2
+        terminal_penalty = 2.0 if terminated else 0.0
 
-        # ----------------------- REWARD COMPONENTS -----------------------
-        if current_step == 0 and self.update_step == 0:
-            self.old_points_positions = [x, x1, y1, x2, y2, x3, y3]
-            self.update_step = current_step
-        
-        # ----------------------- CART AND NODES POSITION REWARD -----------------------
-        x_cart_penalty = self.cart_position_weight * (abs(x)) **2
-        x_nodes_penalty = self.nodes_position_weight * (abs(end_node_x)) **2
-
-        # ----------------------- ANGLES ALIGNEMENT REWARD -----------------------
-        non_alignement_penalty = self.alignement_weight * (((1 - np.cos(q1 - q2)) + (1 - np.cos(q2 - q3))) / 2)
-
-        # ----------------------- UPRIGHTNESS REWARD -----------------------
-        # Uprightness of each node - negate p*_y values because in the physics simulation,
-        # negative y means upward (which is what we want to reward)
-        # The physics uses a reference frame where positive y is downward
-        upright_reward_points = self.upright_weight * (y1 + y2 + y3)
-        upright_reward_angles = self.upright_weight * (np.sin(q1) + np.sin(q2) + np.sin(q3)) * 0.2 
-        upright_reward = upright_reward_points + upright_reward_angles
-
-        # Check if pendulum is upright
-        is_upright = (end_node_y > self.max_height * self.threshold_ratio)
-
-        # Update consecutive upright steps
-        if is_upright:
-            self.consecutive_upright_steps += 1
-        else:
-            self.consecutive_upright_steps = 0
-
-        # Calculate exponential reward multiplier
-        if self.consecutive_upright_steps > 40:
-            exponential_multiplier = min(
-                self.exponential_base ** (self.consecutive_upright_steps / 100),  # Divide by 100 to make it grow more slowly
-                self.max_exponential
+        if phase == 1:
+            height_error = self.max_height - end_y
+            end_x_error = end_x - x
+            alignment_error = (1.0 - np.cos(q1 - q2)) + (1.0 - np.cos(q2 - q3))
+            target_score = np.exp(-8.0 * height_error**2 - 2.0 * end_x_error**2)
+            shape_penalty = 0.20 * alignment_error
+            in_target = (
+                abs(height_error) < self.phase_1_height_tolerance
+                and abs(end_x_error) < 0.20
+                and abs(u1) + abs(u2) + abs(u3) < 3.0
             )
         else:
-            exponential_multiplier = 0.5
+            y1_error = self.length - y1
+            end_y_error = end_y
+            end_x_error = end_x - x
+            folded_error = 1.0 + np.cos(q1 - q2)
+            target_score = np.exp(
+                -8.0 * y1_error**2
+                -10.0 * end_y_error**2
+                -1.5 * end_x_error**2
+            )
+            shape_penalty = 0.20 * folded_error
+            in_target = (
+                abs(y1_error) < 0.10
+                and abs(end_y_error) < self.phase_2_end_height_tolerance
+                and abs(end_x_error) < 0.35
+                and abs(u1) + abs(u2) + abs(u3) < 3.0
+            )
 
-        # Apply exponential multiplier to upright reward
-        if upright_reward > 0:
-            upright_reward *= exponential_multiplier
+        reward = (
+            2.0 * target_score
+            + (0.5 if in_target else 0.0)
+            - shape_penalty
+            - velocity_penalty
+            - cart_penalty
+            - action_penalty
+            - terminal_penalty
+        )
 
-        # ----------------------- STABILITY REWARD -----------------------
-        angular_velocity_penalty = (u1**2 + u2**2 + u3**2) / 3.0
-
-        # ----------------------- POINTS VELOCITY -----------------------
-        points_velocity = ((abs(x3 - self.old_points_positions[5]) + abs(y3 - self.old_points_positions[6]))) ** 0.2
-        if points_velocity == 0:
-            points_velocity = self.cached_velocity
-        else:
-            self.cached_velocity = points_velocity
-
-        stability_penalty = self.stability_weight * (angular_velocity_penalty + points_velocity)
-
-        # ----------------------- MSE PENALTY -----------------------
-        mse_sum = 0
-        for idx, component in enumerate(self.aim_position_state):
-            if idx in [0, 9, 11, 13]:
-                importance_coef = 5.0
-            else:
-                importance_coef = 0.0
-            if idx < len(state):
-                mse_sum += (state[idx] - component) ** 2 * importance_coef
-        
-        mse_penalty = self.mse_weight * (mse_sum / len(state))
-
-        # ----------------------- BORDER PENALTY -----------------------
-        border_penalty = 0.0
-        if x < -1.6 or x > 1.6:
-            border_penalty = 1
-
-        # ----------------------- HERATICNESS PENALTY -----------------------
-        heraticness_penalty = 0.0
-        
-        # Récupérer la force appliquée depuis l'état
-        applied_force = state[7]  # f dans l'état adapté
-        
-        if action:
-            force_delta = float(abs(applied_force - action))
-            heraticness_penalty = force_delta
-        
-        # ----------------------- PHASE SPECIFIC REWARD -----------------------
-        if phase_1 : # Be Straight Up
-            # ----------------------- REAL REWARD -----------------------
-            threshold_y2 = self.max_height * self.threshold_ratio
-
-            # Track time over threshold
-            if end_node_y > threshold_y2:
-                self.time_over_threshold_1 += 1
-            else:
-                self.time_over_threshold_1 = 0
-
-            # Track smoothness with exponential moving average of variation
-            if self.prev_output is not None:
-                delta = abs(end_node_y - self.prev_output)
-                self.smoothed_variation_1 = 0.99 * self.smoothed_variation_1 + 0.1 * delta
-            else:
-                self.smoothed_variation_1 = 0.0
-
-            self.prev_output = end_node_y
-            
-            # Compute the score
-            positive_reward = self.time_over_threshold_1 / (1 + self.smoothed_variation_1)
-
-            if positive_reward > 0 :
-                self.have_been_upright_once = True
-
-            # Normalize reward
-            positive_reward = min(5, (1 + (positive_reward / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)) / 5) ** 2 - 1)
-
-            # Penalty 
-            penalty = border_penalty \
-                + x_nodes_penalty * self.x_nodes_penalty_weight \
-                + heraticness_penalty * self.heraticness_weight\
-                + stability_penalty * self.stability_weight \
-                + mse_penalty * self.mse_weight \
-                + non_alignement_penalty * self.alignement_weight
-            
-            # Cap reward
-            reward = (positive_reward - penalty) * 1.0  # Retour à l'échelle normale
-
-        """
-        elif phase_2 : # First Edge Up and Second Edge Down (I mean folded but the first node is up and the second node is at the same level as the cart)
-            # ----------------------- REAL REWARD -----------------------
-            threshold_y1 = self.max_height * self.threshold_ratio / 2 
-            threshold_y2 = 0.05
-
-            first_node_y = y1
-
-            # Track time over threshold
-            if first_node_y > threshold_y1:
-                self.time_over_threshold_2 += 1
-            else:
-                self.time_over_threshold_2 = 0
-
-            # Track time under threshold
-            if end_node_y < threshold_y2:
-                self.time_under_threshold_2 += 1
-            else:
-                self.time_under_threshold_2 = 0
-
-            # Track smoothness with exponential moving average of variation
-            if self.prev_output is not None:
-                delta = abs(first_node_y - self.prev_output)
-                self.smoothed_variation_2 = 0.99 * self.smoothed_variation_2 + 0.1 * delta
-            else:
-                self.smoothed_variation_2 = 0.0
-
-            self.prev_output = first_node_y
-            
-            # Compute the score
-            if first_node_y > end_node_y and end_node_y < 0.1:
-                reward_first_node = self.time_over_threshold_2 / (1 + self.smoothed_variation_2)
-                reward_end_node = self.time_under_threshold_2 / (1 + self.smoothed_variation_2)
-            else:
-                reward_first_node = 0
-                reward_end_node = 0
-
-            if reward_first_node > 0 and reward_end_node > 0:
-                self.have_been_upright_once = True
-
-            # Normalize reward
-            reward_first_node = (1 + (reward_first_node / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)) / 5) ** 2 - 1
-            reward_end_node = (1 + (reward_end_node / 25) * ((2 * np.pi) ** (-0.5) * np.exp(-(x) ** 2)) / 5) ** 2 - 1
-            
-            # Cap reward
-            reward = min(reward_first_node, 2.5) + min(reward_end_node, 2.5) - border_penalty - x_nodes_penalty * self.x_nodes_penalty_weight - 1
-        """
-
-        # Apply termination penalty
-        if terminated:
-            reward -= self.termination_penalty
-        
-        if end_node_y < self.max_height * self.threshold_ratio * 0.90:
-            self.force_terminated = True
-            reward = 0
-        
-        components_dict = {
-            'reward': reward,
-            'positive_reward': positive_reward,
-            'penalty': penalty,
-            'x_penalty': x_nodes_penalty * self.nodes_position_weight,
-            'non_alignement_penalty': non_alignement_penalty * self.alignement_weight,
-            'stability_penalty': stability_penalty * self.stability_weight,
-            'mse_penalty': mse_penalty * self.mse_weight,
-            'heraticness_penalty': heraticness_penalty * self.heraticness_weight,
+        components = {
+            "reward": float(reward),
+            "target_score": float(target_score),
+            "shape_penalty": float(shape_penalty),
+            "velocity_penalty": float(velocity_penalty),
+            "cart_penalty": float(cart_penalty),
+            "action_penalty": float(action_penalty),
+            "terminal_penalty": float(terminal_penalty),
+            "in_target": float(in_target),
+            "end_y": float(end_y),
+            "end_x": float(end_x),
+            "phase": float(phase),
         }
-
-        return reward, components_dict, self.force_terminated
+        force_terminated = bool(terminated)
+        return float(reward), components, force_terminated
 
     def reset(self):
-        """Reset the reward manager state"""
-        self.consecutive_upright_steps = 0
-        self.have_been_upright_once = False
-        self.came_back_down = False
-        self.steps_double_down = 0
-        self.force_terminated = False
-        self.cached_velocity = 0
-        self.update_step = 0
-        self.hera_update_step = 0
-        self.smoothed_smoothness = 0.0
-        self.prev_output = None
-        self.time_over_threshold_1 = 0
-        self.time_over_threshold_2 = 0
-        self.time_under_threshold_2 = 0
-        self.output_deltas = []
-        self.old_heraticness_penalty = 0
-        self.smoothed_variation_1 = 0.0
-        self.smoothed_variation_2 = 0.0
+        """Kept for compatibility; reward evaluation is stateless now."""
+        return None

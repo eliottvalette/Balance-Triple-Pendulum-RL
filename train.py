@@ -261,15 +261,7 @@ class TriplePendulumTrainer:
 
     def _episode_mode_probabilities(self, episode):
         base_probabilities = self._normalized_mode_probabilities(
-            self.config.get(
-                "episode_mode_probabilities",
-                {
-                    "down_to_up": self.config.get("down_to_up_episode_probability", 0.25),
-                    "capture_vertical": 0.35,
-                    "fold_to_up": 0.25,
-                    "up_to_fold": 0.15,
-                },
-            )
+            self.config["episode_mode_probabilities"]
         )
         if not self.config.get("adaptive_curriculum_enabled", False):
             return base_probabilities

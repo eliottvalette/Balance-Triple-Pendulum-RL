@@ -5,6 +5,7 @@ import numpy as np
 
 from config import config
 from reward import RewardManager
+from train import TriplePendulumTrainer
 from tp_env import TriplePendulumEnv
 
 
@@ -55,6 +56,49 @@ class TwoNodeContractTests(unittest.TestCase):
 
         self.assertEqual(1.0, components["in_target"])
         self.assertAlmostEqual(0.0, components["velocity_penalty"])
+
+    def test_capture_reward_penalizes_dropping_after_capture(self):
+        reward_manager = RewardManager()
+        fallen_center_state = np.array(
+            [
+                0.0,
+                -math.pi / 2,
+                -math.pi / 2,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                -1.0 / 3.0,
+                0.0,
+                -2.0 / 3.0,
+            ],
+            dtype=float,
+        )
+
+        reward, components, _terminated = reward_manager.evaluate(
+            fallen_center_state,
+            action=0.0,
+            phase=1,
+            best_target_score=1.0,
+        )
+
+        self.assertGreater(components["capture_height_penalty"], 0.0)
+        self.assertGreater(components["capture_lost_penalty"], 0.0)
+        self.assertGreater(components["capture_rest_penalty"], 0.0)
+        self.assertLess(reward, -2.0)
+
+    def test_default_training_config_is_capture_vertical_only(self):
+        cfg = dict(config)
+        cfg["load_models"] = False
+        trainer = TriplePendulumTrainer(cfg)
+
+        probabilities = trainer._episode_mode_probabilities(episode=10_000)
+
+        self.assertEqual(0.0, probabilities["down_to_up"])
+        self.assertEqual(1.0, probabilities["capture_vertical"])
+        self.assertEqual(0.0, probabilities["fold_to_up"])
+        self.assertEqual(0.0, probabilities["up_to_fold"])
 
 
 if __name__ == "__main__":

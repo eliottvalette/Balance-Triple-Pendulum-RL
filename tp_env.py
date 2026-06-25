@@ -159,11 +159,7 @@ class TriplePendulumEnv:
         position_initiale_chariot = 0.0
         if episode_mode not in (None, "down_to_up", "capture_vertical", "up_to_fold", "fold_to_up"):
             raise ValueError(f"unknown episode_mode: {episode_mode}")
-        use_down_to_up = episode_mode == "down_to_up" or (
-            episode_mode is None
-            and phase is None
-            and rd.random() < self.config.get('down_to_up_episode_probability', 0.0)
-        )
+        use_down_to_up = episode_mode == "down_to_up"
         use_capture_vertical = episode_mode == "capture_vertical"
         self.initial_pose_mode = "down" if use_down_to_up else "capture" if use_capture_vertical else "target"
         if use_down_to_up or use_capture_vertical or episode_mode == "up_to_fold":

@@ -121,11 +121,14 @@ class RewardManager:
         capture_velocity_bonus = 0.0
         capture_hold_bonus = 0.0
         capture_overspeed_penalty = 0.0
+        capture_height_penalty = 0.0
+        capture_lost_penalty = 0.0
+        capture_rest_penalty = 0.0
         effective_target_score = target_score
+        capture_threshold = config.get("swing_up_capture_score_threshold", 0.75)
         if swing_up_mode and phase == 1 and not in_target:
             free_motion_threshold = config.get("swing_up_free_motion_score_threshold", 0.45)
             drive_threshold = config.get("swing_up_drive_score_threshold", 0.55)
-            capture_threshold = config.get("swing_up_capture_score_threshold", 0.75)
             if target_score < free_motion_threshold:
                 velocity_penalty *= config.get("swing_up_free_motion_velocity_penalty_scale", 0.0)
                 action_penalty *= config.get("swing_up_free_motion_action_penalty_scale", 0.0)
@@ -147,7 +150,22 @@ class RewardManager:
                     config.get("swing_up_score_progress_weight", 2.0)
                     * max(0.0, target_score - best_target_score)
                 )
-        if phase == 1 and target_score > config.get("swing_up_capture_score_threshold", 0.75):
+        if phase == 1:
+            capture_floor = self.max_height * config.get("capture_height_floor_ratio", 0.75)
+            capture_height_penalty = (
+                config.get("capture_height_penalty_weight", 0.0)
+                * max(0.0, capture_floor - end_y)
+            )
+            if best_target_score >= capture_threshold and target_score < capture_threshold:
+                capture_lost_penalty = (
+                    config.get("capture_lost_penalty_weight", 0.0)
+                    * (capture_threshold - target_score)
+                    / max(capture_threshold, 1e-6)
+                )
+            if target_score < 0.10 and angular_speed < 1.0:
+                capture_rest_penalty = config.get("capture_rest_penalty_weight", 0.0)
+
+        if phase == 1 and target_score > capture_threshold:
             allowed_speed = config.get("capture_allowed_angular_speed", 1.5)
             overspeed = max(0.0, angular_speed - allowed_speed)
             effective_target_score = target_score / (
@@ -186,6 +204,9 @@ class RewardManager:
             - cart_penalty
             - action_penalty
             - capture_overspeed_penalty
+            - capture_height_penalty
+            - capture_lost_penalty
+            - capture_rest_penalty
             - terminal_penalty
             - low_score_penalty
         )
@@ -208,6 +229,9 @@ class RewardManager:
             "swing_up_score_progress_bonus": float(swing_up_score_progress_bonus),
             "capture_velocity_bonus": float(capture_velocity_bonus),
             "capture_overspeed_penalty": float(capture_overspeed_penalty),
+            "capture_height_penalty": float(capture_height_penalty),
+            "capture_lost_penalty": float(capture_lost_penalty),
+            "capture_rest_penalty": float(capture_rest_penalty),
             "capture_hold_bonus": float(capture_hold_bonus),
             "target_shaping_reward": float(target_shaping_reward),
             "target_entry_bonus": float(target_entry_bonus),

@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import random
 from collections import deque
@@ -31,6 +32,8 @@ class ReplayBuffer:
 
 
 class TriplePendulumTrainer:
+    EPISODE_MODES = ("down_to_up", "capture_vertical", "fold_to_up", "up_to_fold")
+
     def __init__(self, cfg):
         self.config = cfg
         self.max_action = cfg.get("max_action", 0.5)
@@ -43,7 +46,7 @@ class TriplePendulumTrainer:
             env_config=cfg,
         )
 
-        initial_state = self.env.reset()
+        initial_state = self.env.reset(episode_mode="capture_vertical")
         self.state_dim = len(initial_state)
         self.action_dim = 1
 
@@ -89,7 +92,8 @@ class TriplePendulumTrainer:
         return float(np.clip(action, -self.max_action, self.max_action))
 
     def collect_trajectory(self, episode):
-        state = self.env.reset()
+        selected_mode, mode_probabilities = self._select_episode_mode(episode)
+        state = self.env.reset(episode_mode=selected_mode)
         should_render = self._should_render_episode(episode)
         episode_reward = 0.0
         reward_components_accumulated = {}
@@ -101,17 +105,39 @@ class TriplePendulumTrainer:
         termination_reason = None
         initial_phase = self.env.initial_phase
         initial_pose_mode = getattr(self.env, "initial_pose_mode", "target")
-        if initial_pose_mode == "down":
+        if selected_mode == "capture_vertical":
+            transition_direction = "capture_vertical"
+        elif initial_pose_mode == "down":
             transition_direction = "down_to_up"
         else:
             transition_direction = "up_to_fold" if initial_phase == 1 else "fold_to_up"
         previous_post_switch_target_error = None
         transition_rewards = []
         in_target_history = []
+        target_score_history = []
+        end_y_history = []
+        swing_period = random.uniform(
+            self.config.get("swing_up_exploration_period_min", 60),
+            self.config.get("swing_up_exploration_period_max", 120),
+        )
+        swing_phase = random.uniform(0.0, 2.0 * math.pi)
+        capture_started = False
 
         for step_idx in range(self.config["max_steps"]):
-            noise_std = self.config.get("exploration_noise", 0.10)
+            if initial_pose_mode == "down":
+                noise_std = (
+                    self.config.get("swing_up_capture_noise", 0.03)
+                    if capture_started
+                    else self.config.get("swing_up_exploration_noise", 0.30)
+                )
+            else:
+                noise_std = self.config.get("exploration_noise", 0.10)
             action = self.select_action(state, noise_std=noise_std)
+            if initial_pose_mode == "down" and not capture_started:
+                swing_action = self.config.get("swing_up_exploration_amplitude", 0.45) * math.sin(
+                    2.0 * math.pi * step_idx / max(1.0, swing_period) + swing_phase
+                )
+                action = float(np.clip(action + swing_action, -self.max_action, self.max_action))
             next_state, reward, done, info = self.env.step(action)
             if should_render:
                 rendering_successful = self.env.render(
@@ -126,6 +152,16 @@ class TriplePendulumTrainer:
                     info["termination_reason"] = "render_closed"
 
             components = info.get("reward_components", {})
+            if (
+                initial_pose_mode == "down"
+                and not capture_started
+                and float(info.get("target_score", 0.0)) >= self.config.get("swing_up_capture_score_threshold", 0.75)
+            ):
+                capture_started = True
+            pre_switch_reward_weight = 1.0
+            if selected_mode in ("fold_to_up", "up_to_fold") and not self.env.has_switched:
+                pre_switch_reward_weight = self.config.get("transition_pre_switch_reward_weight", 0.20)
+                reward *= pre_switch_reward_weight
             transition_reward = 0.0
             if info.get("switched"):
                 previous_post_switch_target_error = None
@@ -137,6 +173,7 @@ class TriplePendulumTrainer:
                     reward += transition_reward
                 previous_post_switch_target_error = target_error
             components["transition_reward"] = float(transition_reward)
+            components["pre_switch_reward_weight"] = float(pre_switch_reward_weight)
             components["reward"] = float(reward)
             transition_rewards.append(transition_reward)
 
@@ -150,6 +187,8 @@ class TriplePendulumTrainer:
 
             in_target = float(info.get("in_target", 0.0))
             in_target_history.append(in_target)
+            target_score_history.append(float(info.get("target_score", 0.0)))
+            end_y_history.append(float(components.get("end_y", 0.0)))
             if step_idx < switch_step:
                 hold_before.append(in_target)
             else:
@@ -170,7 +209,9 @@ class TriplePendulumTrainer:
         hold_after_switch = float(np.mean(hold_after)) if hold_after else 0.0
         final_window = max(1, int(0.2 * len(in_target_history)))
         final_hold = float(np.mean(in_target_history[-final_window:])) if in_target_history else 0.0
-        if transition_direction == "down_to_up":
+        peak_target_score = float(np.max(target_score_history)) if target_score_history else 0.0
+        max_end_y = float(np.max(end_y_history)) if end_y_history else 0.0
+        if transition_direction in ("down_to_up", "capture_vertical"):
             hold_after_switch = final_hold
             balanced_hold = final_hold
             episode_success = float(final_hold > 0.8)
@@ -186,22 +227,119 @@ class TriplePendulumTrainer:
             "balanced_hold": balanced_hold,
             "episode_success": episode_success,
             "final_hold": final_hold,
+            "peak_target_score": peak_target_score,
+            "max_end_y": max_end_y,
             "success_rate_phase_1": float(np.mean(phase_hold[1])) if phase_hold[1] else 0.0,
             "success_rate_phase_2": float(np.mean(phase_hold[-1])) if phase_hold[-1] else 0.0,
             "initial_phase": initial_phase,
             "initial_pose_mode": initial_pose_mode,
+            "selected_mode": selected_mode,
             "transition_direction": transition_direction,
             f"{transition_direction}_hold_before": hold_before_switch,
             f"{transition_direction}_hold_after": hold_after_switch,
             f"{transition_direction}_balanced_hold": balanced_hold,
             f"{transition_direction}_success": episode_success,
             f"{transition_direction}_final_hold": final_hold,
+            f"{transition_direction}_peak_target_score": peak_target_score,
+            f"{transition_direction}_max_end_y": max_end_y,
             "transition_reward_mean": float(np.mean(transition_rewards)) if transition_rewards else 0.0,
             "action_mean": float(np.mean(action_values)) if action_values else 0.0,
             "action_std": float(np.std(action_values)) if action_values else 0.0,
             "action_abs_mean": float(np.mean(np.abs(action_values))) if action_values else 0.0,
             "termination_reason": termination_reason or "none",
+            "mode_probability_down_to_up": mode_probabilities["down_to_up"],
+            "mode_probability_capture_vertical": mode_probabilities["capture_vertical"],
+            "mode_probability_fold_to_up": mode_probabilities["fold_to_up"],
+            "mode_probability_up_to_fold": mode_probabilities["up_to_fold"],
         }
+
+    def _select_episode_mode(self, episode):
+        probabilities = self._episode_mode_probabilities(episode)
+        modes = list(self.EPISODE_MODES)
+        weights = [probabilities[mode] for mode in modes]
+        return random.choices(modes, weights=weights, k=1)[0], probabilities
+
+    def _episode_mode_probabilities(self, episode):
+        base_probabilities = self._normalized_mode_probabilities(
+            self.config.get(
+                "episode_mode_probabilities",
+                {
+                    "down_to_up": self.config.get("down_to_up_episode_probability", 0.25),
+                    "capture_vertical": 0.35,
+                    "fold_to_up": 0.25,
+                    "up_to_fold": 0.15,
+                },
+            )
+        )
+        if not self.config.get("adaptive_curriculum_enabled", False):
+            return base_probabilities
+        if episode < self.config.get("curriculum_start_episode", 300):
+            return base_probabilities
+
+        window = self.config.get("curriculum_window", 200)
+        mode_scores = {
+            "down_to_up": self._recent_metric_mean("down_to_up_final_hold", window, default=0.0),
+            "capture_vertical": self._recent_metric_mean("capture_vertical_final_hold", window, default=0.0),
+            "fold_to_up": self._recent_metric_mean("fold_to_up_balanced_hold", window, default=0.0),
+            "up_to_fold": self._recent_metric_mean("up_to_fold_balanced_hold", window, default=0.0),
+        }
+        raw_probabilities = {
+            mode: base_probabilities[mode] * max(0.05, 1.0 - mode_scores[mode])
+            for mode in self.EPISODE_MODES
+        }
+        normalized = self._normalized_mode_probabilities(raw_probabilities)
+        return self._bounded_mode_probabilities(normalized)
+
+    def _recent_metric_mean(self, metric_name, window, default=0.0):
+        values = self.metrics.metrics.get(metric_name, [])
+        if not values:
+            return default
+        return float(np.mean(values[-window:]))
+
+    def _normalized_mode_probabilities(self, probabilities):
+        sanitized = {
+            mode: max(0.0, float(probabilities.get(mode, 0.0)))
+            for mode in self.EPISODE_MODES
+        }
+        total = sum(sanitized.values())
+        if total <= 0.0:
+            return {mode: 1.0 / len(self.EPISODE_MODES) for mode in self.EPISODE_MODES}
+        return {mode: value / total for mode, value in sanitized.items()}
+
+    def _bounded_mode_probabilities(self, probabilities):
+        min_probabilities = self.config.get("curriculum_min_probabilities", {})
+        max_probabilities = self.config.get("curriculum_max_probabilities", {})
+        bounded = {
+            mode: min(
+                float(max_probabilities.get(mode, 1.0)),
+                max(float(min_probabilities.get(mode, 0.0)), probabilities[mode]),
+            )
+            for mode in self.EPISODE_MODES
+        }
+        for _ in range(8):
+            total = sum(bounded.values())
+            diff = 1.0 - total
+            if abs(diff) < 1e-9:
+                break
+            if diff > 0:
+                adjustable = [
+                    mode for mode in self.EPISODE_MODES
+                    if bounded[mode] < float(max_probabilities.get(mode, 1.0))
+                ]
+            else:
+                adjustable = [
+                    mode for mode in self.EPISODE_MODES
+                    if bounded[mode] > float(min_probabilities.get(mode, 0.0))
+                ]
+            if not adjustable:
+                break
+            share = diff / len(adjustable)
+            for mode in adjustable:
+                bounded[mode] = min(
+                    float(max_probabilities.get(mode, 1.0)),
+                    max(float(min_probabilities.get(mode, 0.0)), bounded[mode] + share),
+                )
+        return self._normalized_mode_probabilities(bounded)
 
     def _should_render_episode(self, episode):
         if not self.config.get("render_training", False):
@@ -285,9 +423,14 @@ class TriplePendulumTrainer:
                         f"reward={summary['episode_reward']:8.2f} | "
                         f"len={summary['episode_length']:4d} | "
                         f"dir={summary['transition_direction']:<10s} | "
+                        f"p=({summary['mode_probability_down_to_up']:.2f},"
+                        f"{summary['mode_probability_capture_vertical']:.2f},"
+                        f"{summary['mode_probability_fold_to_up']:.2f},"
+                        f"{summary['mode_probability_up_to_fold']:.2f}) | "
                         f"before={summary['hold_before_switch']:4.2f} | "
                         f"after={summary['hold_after_switch']:4.2f} | "
-                        f"balanced={summary['balanced_hold']:4.2f}"
+                        f"balanced={summary['balanced_hold']:4.2f} | "
+                        f"peak={summary['peak_target_score']:4.2f}"
                     )
 
                 if episode % self.plot_frequency == self.plot_frequency - 1:
@@ -309,12 +452,18 @@ class TriplePendulumTrainer:
             "balanced_hold",
             "episode_success",
             "final_hold",
+            "peak_target_score",
+            "max_end_y",
             "success_rate_phase_1",
             "success_rate_phase_2",
             "transition_reward_mean",
             "action_mean",
             "action_std",
             "action_abs_mean",
+            "mode_probability_down_to_up",
+            "mode_probability_capture_vertical",
+            "mode_probability_fold_to_up",
+            "mode_probability_up_to_fold",
         ]
         for key in scalar_keys:
             self.metrics.add_metric(key, summary[key])
@@ -323,8 +472,16 @@ class TriplePendulumTrainer:
             if values:
                 self.metrics.add_metric(component_name, float(np.mean(values)))
 
-        for direction in ("up_to_fold", "fold_to_up", "down_to_up"):
-            for suffix in ("hold_before", "hold_after", "balanced_hold", "success", "final_hold"):
+        for direction in ("up_to_fold", "fold_to_up", "down_to_up", "capture_vertical"):
+            for suffix in (
+                "hold_before",
+                "hold_after",
+                "balanced_hold",
+                "success",
+                "final_hold",
+                "peak_target_score",
+                "max_end_y",
+            ):
                 key = f"{direction}_{suffix}"
                 if key in summary:
                     self.metrics.add_metric(key, summary[key])
@@ -345,7 +502,7 @@ class TriplePendulumTrainer:
             "total_env_steps": self.total_env_steps,
             "interrupted": interrupted,
             "hidden_dim": self.config["hidden_dim"],
-            "model_version": 2,
+            "model_version": 3,
         }
         with open(path + "_metadata.json", "w", encoding="utf-8") as metadata_file:
             json.dump(metadata, metadata_file, indent=2)
@@ -362,7 +519,7 @@ class TriplePendulumTrainer:
             "state_dim": self.state_dim,
             "action_dim": self.action_dim,
             "hidden_dim": self.config["hidden_dim"],
-            "model_version": 2,
+            "model_version": 3,
         }
         for key, value in expected.items():
             if metadata.get(key) != value:

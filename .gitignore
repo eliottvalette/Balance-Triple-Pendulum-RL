@@ -29,6 +29,6 @@ logs/
 # Environment variables
 .env
 
-# <Forked repos
+# Forked repos
 physics_guide/
 Pendulum-NEAT-main/

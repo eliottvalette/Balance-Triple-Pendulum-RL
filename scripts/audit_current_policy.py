@@ -2,7 +2,6 @@ import argparse
 import csv
 import json
 import math
-import os
 import random
 import sys
 from pathlib import Path
@@ -13,10 +12,10 @@ import torch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from config import config
-from model import TriplePendulumActor
-from reward import RewardManager
-from tp_env import TriplePendulumEnv
+from config import config  # noqa: E402
+from model import TriplePendulumActor  # noqa: E402
+from reward import RewardManager  # noqa: E402
+from tp_env import TriplePendulumEnv  # noqa: E402
 
 
 MODES = ("down_to_up", "capture_vertical", "fold_to_up", "up_to_fold")
@@ -34,7 +33,7 @@ def load_actor(env, checkpoint_path):
         state_dim=len(initial_state),
         action_dim=1,
         hidden_dim=config["hidden_dim"],
-        max_action=config.get("max_action", 0.5),
+        max_action=config["max_action"],
     )
     try:
         actor.load_state_dict(torch.load(checkpoint_path, weights_only=True))
@@ -94,9 +93,9 @@ def summarize_rows(prefix, rows):
     effective_scores = np.array([row["effective_target_score"] for row in rows], dtype=float)
     in_target = np.array([row["in_target"] for row in rows], dtype=float)
     angular_speeds = np.array([row["angular_speed"] for row in rows], dtype=float)
-    capture_threshold = config.get("swing_up_capture_score_threshold", 0.75)
+    capture_threshold = config["swing_up_capture_score_threshold"]
     near_mask = target_scores >= capture_threshold
-    overspeed_limit = config.get("capture_allowed_angular_speed", 1.5)
+    overspeed_limit = config["capture_allowed_angular_speed"]
     near_fast_mask = near_mask & (angular_speeds > overspeed_limit)
     final_window = max(1, int(0.2 * len(in_target)))
     return {
@@ -120,12 +119,12 @@ def summarize_episode(mode, episode_index, step_rows, total_reward, termination_
     cart_x = np.array([row["cart_x"] for row in step_rows], dtype=float)
     rewards = np.array([row["reward"] for row in step_rows], dtype=float)
 
-    capture_threshold = config.get("swing_up_capture_score_threshold", 0.75)
+    capture_threshold = config["swing_up_capture_score_threshold"]
     near_mask = target_scores >= capture_threshold
     first_near_indices = np.flatnonzero(near_mask)
     first_near_step = int(first_near_indices[0]) if len(first_near_indices) else None
     final_window = max(1, int(0.2 * len(in_target)))
-    overspeed_limit = config.get("capture_allowed_angular_speed", 1.5)
+    overspeed_limit = config["capture_allowed_angular_speed"]
     near_fast_mask = near_mask & (angular_speeds > overspeed_limit)
 
     before_switch_rows = [row for row in step_rows if not row["has_switched"]]
@@ -152,7 +151,7 @@ def summarize_episode(mode, episode_index, step_rows, total_reward, termination_
         "max_angular_speed_near": float(np.max(angular_speeds[near_mask])) if np.any(near_mask) else 0.0,
         "max_abs_cart_x": float(np.max(np.abs(cart_x))) if len(cart_x) else 0.0,
         "mean_abs_action": float(np.mean(np.abs(actions))) if len(actions) else 0.0,
-        "saturated_action_fraction": float(np.mean(np.abs(actions) > 0.98 * config.get("max_action", 0.5))) if len(actions) else 0.0,
+        "saturated_action_fraction": float(np.mean(np.abs(actions) > 0.98 * config["max_action"])) if len(actions) else 0.0,
     }
     summary.update(summarize_rows("pre_switch", before_switch_rows))
     summary.update(summarize_rows("post_switch", after_switch_rows))
@@ -162,7 +161,7 @@ def summarize_episode(mode, episode_index, step_rows, total_reward, termination_
 
 def run_episode(actor, mode, episode_index, seed, noise_std, use_training_exploration):
     seed_everything(seed)
-    reward_manager = RewardManager()
+    reward_manager = RewardManager(config)
     env = TriplePendulumEnv(
         reward_manager=reward_manager,
         render_mode=None,
@@ -175,25 +174,25 @@ def run_episode(actor, mode, episode_index, seed, noise_std, use_training_explor
     total_reward = 0.0
     termination_reason = "none"
     swing_period = random.uniform(
-        config.get("swing_up_exploration_period_min", 60),
-        config.get("swing_up_exploration_period_max", 120),
+        config["swing_up_exploration_period_min"],
+        config["swing_up_exploration_period_max"],
     )
     swing_phase = random.uniform(0.0, 2.0 * math.pi)
     capture_started = False
 
     for step_idx in range(config["max_steps"]):
-        action = select_action(actor, state, config.get("max_action", 0.5), noise_std)
+        action = select_action(actor, state, config["max_action"], noise_std)
         if mode == "down_to_up" and use_training_exploration and not capture_started:
-            swing_action = config.get("swing_up_exploration_amplitude", 0.45) * math.sin(
-                2.0 * math.pi * step_idx / max(1.0, swing_period) + swing_phase
+            swing_action = config["swing_up_exploration_amplitude"] * math.sin(
+                2.0 * math.pi * step_idx / swing_period + swing_phase
             )
-            action = float(np.clip(action + swing_action, -config.get("max_action", 0.5), config.get("max_action", 0.5)))
-        next_state, reward, done, info = env.step(action)
-        components = info.get("reward_components", {})
+            action = float(np.clip(action + swing_action, -config["max_action"], config["max_action"]))
+        next_state, reward, terminated, truncated, info = env.step(action)
+        components = info["reward_components"]
         if (
             mode == "down_to_up"
             and not capture_started
-            and float(info.get("target_score", 0.0)) >= config.get("swing_up_capture_score_threshold", 0.75)
+            and float(info["target_score"]) >= config["swing_up_capture_score_threshold"]
         ):
             capture_started = True
         phys = physical_metrics(env)
@@ -207,38 +206,31 @@ def run_episode(actor, mode, episode_index, seed, noise_std, use_training_explor
             "has_switched": bool(env.has_switched),
             "action": float(action),
             "reward": float(reward),
-            "target_score": float(components.get("target_score", 0.0)),
-            "effective_target_score": float(components.get("effective_target_score", components.get("target_score", 0.0))),
-            "target_error": float(components.get("target_error", 0.0)),
-            "in_target": float(components.get("in_target", 0.0)),
-            "end_y": float(components.get("end_y", 0.0)),
-            "end_x": float(components.get("end_x", 0.0)),
-            "velocity_penalty": float(components.get("velocity_penalty", 0.0)),
-            "action_penalty": float(components.get("action_penalty", 0.0)),
-            "cart_penalty": float(components.get("cart_penalty", 0.0)),
-            "capture_overspeed_penalty": float(components.get("capture_overspeed_penalty", 0.0)),
-            "capture_height_penalty": float(components.get("capture_height_penalty", 0.0)),
-            "capture_lost_penalty": float(components.get("capture_lost_penalty", 0.0)),
-            "capture_rest_penalty": float(components.get("capture_rest_penalty", 0.0)),
-            "capture_velocity_bonus": float(components.get("capture_velocity_bonus", 0.0)),
-            "swing_up_velocity_bonus": float(components.get("swing_up_velocity_bonus", 0.0)),
-            "swing_up_height_progress_bonus": float(components.get("swing_up_height_progress_bonus", 0.0)),
-            "swing_up_score_progress_bonus": float(components.get("swing_up_score_progress_bonus", 0.0)),
-            "target_shaping_reward": float(components.get("target_shaping_reward", 0.0)),
-            "target_entry_bonus": float(components.get("target_entry_bonus", 0.0)),
-            "hold_progress_bonus": float(components.get("hold_progress_bonus", 0.0)),
-            "hold_progress": float(components.get("hold_progress", 0.0)),
-            "hold_streak": float(components.get("hold_streak", 0.0)),
+            "target_score": float(components["target_score"]),
+            "effective_target_score": float(components["effective_target_score"]),
+            "target_error": float(components["target_error"]),
+            "in_target": float(components["in_target"]),
+            "end_y": float(components["end_y"]),
+            "end_x": float(components["end_x"]),
+            "energy_score": float(components["energy_score"]),
+            "height_score": float(components["height_score"]),
+            "cart_safety_score": float(components["cart_safety_score"]),
+            "potential_progress": float(components["potential_progress"]),
+            "capture_quality": float(components["capture_quality"]),
+            "capture_entry_bonus": float(components["capture_entry_bonus"]),
+            "hold_bonus": float(components["hold_bonus"]),
+            "hold_progress": float(components["hold_progress"]),
+            "hold_streak": float(components["hold_streak"]),
             "cart_x": phys["cart_x"],
             "angular_speed": phys["angular_speed"],
-            "done": bool(done),
-            "termination_reason": info.get("termination_reason") or "none",
+            "done": bool(terminated or truncated),
+            "termination_reason": info["termination_reason"] or "none",
         }
         rows.append(row)
         total_reward += reward
         state = next_state
-        if done:
-            termination_reason = info.get("termination_reason") or "done"
+        if terminated or truncated:
+            termination_reason = info["termination_reason"] or "done"
             break
 
     return rows, summarize_episode(mode, episode_index, rows, total_reward, termination_reason)
@@ -308,7 +300,7 @@ def main():
 
     seed_everything(args.seed)
     bootstrap_env = TriplePendulumEnv(
-        reward_manager=RewardManager(),
+        reward_manager=RewardManager(config),
         render_mode=None,
         num_nodes=config["num_nodes"],
         max_steps=config["max_steps"],

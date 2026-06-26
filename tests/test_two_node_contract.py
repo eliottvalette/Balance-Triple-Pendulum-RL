@@ -1,18 +1,213 @@
 import math
 import unittest
+from unittest import mock
 
 import numpy as np
 
-from config import config
+from config import config, validate_config
+from metrics import MetricsTracker
 from reward import RewardManager
-from train import TriplePendulumTrainer
+from train import ReplayBuffer, TriplePendulumTrainer
 from tp_env import TriplePendulumEnv
 
 
-class TwoNodeContractTests(unittest.TestCase):
+def physical_state(
+    *,
+    x=0.0,
+    q1=-math.pi / 2,
+    q2=-math.pi / 2,
+    x_dot=0.0,
+    u1=0.0,
+    u2=0.0,
+):
+    length = 1.0 / 3.0
+    x1 = x + length * math.cos(q1)
+    y1 = length * math.sin(q1)
+    x2 = x1 + length * math.cos(q2)
+    y2 = y1 + length * math.sin(q2)
+    return np.array([x, q1, q2, x_dot, u1, u2, 0.0, x1, y1, x2, y2])
+
+
+class StrictContractTests(unittest.TestCase):
+    def test_config_rejects_invalid_episode_probabilities(self):
+        invalid = dict(config)
+        invalid["episode_mode_probabilities"] = {"down_to_up": 1.0}
+
+        with self.assertRaisesRegex(ValueError, "episode_mode_probabilities"):
+            validate_config(invalid)
+
+    def test_config_rejects_invalid_transition_range(self):
+        invalid = dict(config)
+        invalid["transition_switch_step_min"] = 200
+        invalid["transition_switch_step_max"] = 100
+
+        with self.assertRaisesRegex(ValueError, "transition_switch_step"):
+            validate_config(invalid)
+
+    def test_step_before_reset_raises(self):
+        env = TriplePendulumEnv(reward_manager=RewardManager(config), env_config=config)
+
+        with self.assertRaisesRegex(RuntimeError, "before reset"):
+            env.step(0.0)
+
+    def test_out_of_range_action_raises_instead_of_being_clipped(self):
+        env = TriplePendulumEnv(reward_manager=RewardManager(config), env_config=config)
+        env.reset(episode_mode="down_to_up")
+
+        with self.assertRaisesRegex(ValueError, "action"):
+            env.step(config["max_action"] + 0.01)
+
+    def test_action_near_rail_is_not_silently_replaced(self):
+        env = TriplePendulumEnv(reward_manager=RewardManager(config), env_config=config)
+        env.reset(episode_mode="down_to_up")
+        env.current_state[0] = 1.66
+        env.rhs = mock.Mock(return_value=np.zeros_like(env.current_state))
+
+        env.step(0.2)
+
+        self.assertEqual(0.2, env.previous_action)
+        env.rhs.assert_called_once()
+
+    def test_nonfinite_dynamics_raise_immediately(self):
+        env = TriplePendulumEnv(reward_manager=RewardManager(config), env_config=config)
+        env.reset(episode_mode="down_to_up")
+        env.rhs = mock.Mock(return_value=np.full_like(env.current_state, np.nan))
+
+        with self.assertRaisesRegex(FloatingPointError, "non-finite derivative"):
+            env.step(0.0)
+
+    def test_empty_environment_config_is_not_replaced_by_global_config(self):
+        with self.assertRaisesRegex(ValueError, "missing required config"):
+            TriplePendulumEnv(env_config={})
+
+    def test_environment_uses_injected_gravity(self):
+        custom = dict(config)
+        custom["gravity"] = 1.234
+        env = TriplePendulumEnv(
+            reward_manager=RewardManager(custom),
+            env_config=custom,
+        )
+
+        self.assertEqual(1.234, env.parameter_vals[0])
+
+    def test_invalid_phase_raises(self):
+        env = TriplePendulumEnv(reward_manager=RewardManager(config), env_config=config)
+
+        with self.assertRaisesRegex(ValueError, "phase"):
+            env.reset(phase=0)
+
+    def test_reset_requires_an_explicit_mode_or_phase(self):
+        env = TriplePendulumEnv(reward_manager=RewardManager(config), env_config=config)
+
+        with self.assertRaisesRegex(ValueError, "episode_mode or phase"):
+            env.reset()
+
+    def test_replay_buffer_rejects_short_batch(self):
+        buffer = ReplayBuffer(capacity=10)
+        buffer.push(np.zeros(2), 0.0, 0.0, np.zeros(2), False)
+
+        with self.assertRaisesRegex(ValueError, "batch"):
+            buffer.sample(2)
+
+    def test_replay_buffer_rejects_nonfinite_transition(self):
+        buffer = ReplayBuffer(capacity=10)
+
+        with self.assertRaises(FloatingPointError):
+            buffer.push(np.array([np.nan]), 0.0, 0.0, np.zeros(1), False)
+
+    def test_missing_checkpoint_is_not_ignored(self):
+        trainer = object.__new__(TriplePendulumTrainer)
+        with mock.patch("train.os.path.exists", return_value=False):
+            with self.assertRaises(FileNotFoundError):
+                trainer.load_models()
+
+    def test_metrics_reject_non_scalar_values(self):
+        tracker = MetricsTracker(config["plot_config"])
+
+        with self.assertRaises(TypeError):
+            tracker.add_metric("invalid", np.array([1.0, 2.0]))
+
+    def test_missing_moving_average_metric_raises(self):
+        tracker = MetricsTracker(config["plot_config"])
+
+        with self.assertRaisesRegex(KeyError, "missing"):
+            tracker.get_moving_average("missing")
+
+
+class RewardContractTests(unittest.TestCase):
+    def setUp(self):
+        self.manager = RewardManager(config)
+
+    def test_stationary_bottom_has_zero_swing_up_reward(self):
+        state = physical_state()
+
+        result = self.manager.evaluate_transition(
+            state,
+            state,
+            action=0.0,
+            phase=1,
+            capture_started=False,
+            hold_streak=0,
+        )
+
+        self.assertAlmostEqual(0.0, result.reward)
+
+    def test_reward_is_deterministic_for_the_same_transition(self):
+        previous = physical_state()
+        current = physical_state(q1=-1.2, q2=-1.3, u1=0.4, u2=0.2)
+        kwargs = dict(
+            action=0.1,
+            phase=1,
+            capture_started=False,
+            hold_streak=0,
+        )
+
+        first = self.manager.evaluate_transition(previous, current, **kwargs)
+        second = self.manager.evaluate_transition(previous, current, **kwargs)
+
+        self.assertEqual(first, second)
+
+    def test_capture_reward_is_nonnegative_and_enters_capture(self):
+        upright = physical_state(q1=math.pi / 2, q2=math.pi / 2)
+
+        result = self.manager.evaluate_transition(
+            upright,
+            upright,
+            action=0.0,
+            phase=1,
+            capture_started=False,
+            hold_streak=0,
+        )
+
+        self.assertTrue(result.capture_started)
+        self.assertGreaterEqual(result.reward, 0.0)
+        self.assertEqual(1, result.hold_streak)
+
+    def test_cart_penalty_is_worse_than_continuation_at_every_episode_step(self):
+        margins = self.manager.verify_cart_termination_is_suboptimal(
+            max_steps=config["max_steps"],
+            gamma=config["gamma"],
+        )
+
+        self.assertEqual(config["max_steps"], len(margins))
+        self.assertGreater(min(margins), 0.0)
+
+    def test_cart_penalty_validation_rejects_insufficient_penalty(self):
+        invalid = dict(config)
+        invalid["cart_failure_penalty"] = -5.0
+        manager = RewardManager(invalid)
+
+        with self.assertRaisesRegex(ValueError, "cart_failure_penalty"):
+            manager.verify_cart_termination_is_suboptimal(
+                max_steps=invalid["max_steps"],
+                gamma=invalid["gamma"],
+            )
+
+
+class TwoNodeEnvironmentTests(unittest.TestCase):
     def test_env_rejects_non_two_node_configuration(self):
         with self.assertRaises(ValueError):
-            TriplePendulumEnv(num_nodes=3)
+            TriplePendulumEnv(num_nodes=3, env_config=config)
 
         invalid_config = dict(config)
         invalid_config["num_nodes"] = 3
@@ -20,85 +215,61 @@ class TwoNodeContractTests(unittest.TestCase):
             TriplePendulumEnv(env_config=invalid_config)
 
     def test_observation_and_physical_state_are_two_node_only(self):
-        env = TriplePendulumEnv(reward_manager=RewardManager(), render_mode=None)
+        env = TriplePendulumEnv(
+            reward_manager=RewardManager(config),
+            render_mode=None,
+            env_config=config,
+        )
 
         observation = env.reset(episode_mode="capture_vertical")
-        physical_state = env.get_physical_state()
+        physical = env.get_physical_state()
 
         self.assertEqual(2, env.n)
         self.assertEqual(53, len(observation))
-        self.assertEqual((11,), physical_state.shape)
+        self.assertEqual((11,), physical.shape)
 
-    def test_reward_uses_cart_velocity_separately_from_angular_velocity(self):
-        reward_manager = RewardManager()
-        physical_state = np.array(
-            [
-                0.0,
-                math.pi / 2,
-                math.pi / 2,
-                10.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                1.0 / 3.0,
-                0.0,
-                2.0 / 3.0,
-            ],
-            dtype=float,
+    def test_max_steps_is_truncation_not_termination(self):
+        custom = dict(config)
+        custom["max_steps"] = 1
+        env = TriplePendulumEnv(
+            reward_manager=RewardManager(custom),
+            max_steps=1,
+            env_config=custom,
         )
+        env.reset(episode_mode="down_to_up")
 
-        _reward, components, _terminated = reward_manager.evaluate(
-            physical_state,
-            action=0.0,
-            phase=1,
+        _state, _reward, terminated, truncated, info = env.step(0.0)
+
+        self.assertFalse(terminated)
+        self.assertTrue(truncated)
+        self.assertEqual("max_steps", info["termination_reason"])
+
+    def test_cart_limit_is_terminal_with_the_proven_penalty(self):
+        env = TriplePendulumEnv(
+            reward_manager=RewardManager(config),
+            env_config=config,
         )
+        env.reset(episode_mode="down_to_up")
+        env.current_state[0] = 1.70
+        derivative = np.zeros_like(env.current_state)
+        derivative[0] = 20.0
+        env.rhs = mock.Mock(return_value=derivative)
 
-        self.assertEqual(1.0, components["in_target"])
-        self.assertAlmostEqual(0.0, components["velocity_penalty"])
+        _state, reward, terminated, truncated, info = env.step(0.0)
 
-    def test_capture_reward_penalizes_dropping_after_capture(self):
-        reward_manager = RewardManager()
-        fallen_center_state = np.array(
-            [
-                0.0,
-                -math.pi / 2,
-                -math.pi / 2,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                -1.0 / 3.0,
-                0.0,
-                -2.0 / 3.0,
-            ],
-            dtype=float,
-        )
+        self.assertTrue(terminated)
+        self.assertFalse(truncated)
+        self.assertEqual(config["cart_failure_penalty"], reward)
+        self.assertEqual("cart_limit", info["termination_reason"])
 
-        reward, components, _terminated = reward_manager.evaluate(
-            fallen_center_state,
-            action=0.0,
-            phase=1,
-            best_target_score=1.0,
-        )
-
-        self.assertGreater(components["capture_height_penalty"], 0.0)
-        self.assertGreater(components["capture_lost_penalty"], 0.0)
-        self.assertGreater(components["capture_rest_penalty"], 0.0)
-        self.assertLess(reward, -2.0)
-
-    def test_default_training_config_is_capture_vertical_only(self):
+    def test_default_training_probabilities_are_not_rewritten(self):
         cfg = dict(config)
         cfg["load_models"] = False
         trainer = TriplePendulumTrainer(cfg)
 
         probabilities = trainer._episode_mode_probabilities(episode=10_000)
 
-        self.assertEqual(0.0, probabilities["down_to_up"])
-        self.assertEqual(1.0, probabilities["capture_vertical"])
-        self.assertEqual(0.0, probabilities["fold_to_up"])
-        self.assertEqual(0.0, probabilities["up_to_fold"])
+        self.assertEqual(config["episode_mode_probabilities"], probabilities)
 
 
 if __name__ == "__main__":

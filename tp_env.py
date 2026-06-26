@@ -3,33 +3,54 @@ import numpy as np
 import random as rd
 import pygame
 from numpy.linalg import solve
-from numpy import pi, cos, sin, hstack, zeros, ones
+from numpy import pi, cos, sin, hstack, zeros
 from sympy import symbols, Dummy, lambdify
 from sympy.physics.mechanics import ReferenceFrame, Point, Particle, KanesMethod, dynamicsymbols
-from config import config
-import sys
+from config import config, validate_config
+from reward import RewardManager
 
-GRAVITY = config['gravity']
 DT = 0.01
 FIXED_NUM_NODES = 2
 
 class TriplePendulumEnv:
-    def __init__(self, reward_manager=None, render_mode=None, num_nodes=FIXED_NUM_NODES, arm_length=1./3, bob_mass=0.01/3, friction_coefficient=config['friction_coefficient'], max_steps=500, env_config=None):
-        self.config = env_config or config
+    def __init__(
+        self,
+        reward_manager=None,
+        render_mode=None,
+        num_nodes=FIXED_NUM_NODES,
+        arm_length=1.0 / 3.0,
+        bob_mass=0.01 / 3.0,
+        friction_coefficient=None,
+        max_steps=None,
+        env_config=None,
+    ):
+        self.config = config if env_config is None else env_config
+        validate_config(self.config)
         if num_nodes != FIXED_NUM_NODES:
             raise ValueError(f"TriplePendulumEnv is fixed to {FIXED_NUM_NODES} nodes, got {num_nodes}")
-        if self.config.get("num_nodes", FIXED_NUM_NODES) != FIXED_NUM_NODES:
+        if self.config["num_nodes"] != FIXED_NUM_NODES:
             raise ValueError(
-                f"config['num_nodes'] must be {FIXED_NUM_NODES}, got {self.config.get('num_nodes')}"
+                f"config['num_nodes'] must be {FIXED_NUM_NODES}, got {self.config['num_nodes']}"
             )
         self.reward_manager = reward_manager
         self.render_mode = render_mode
         self.n = FIXED_NUM_NODES
         self.arm_length = arm_length
         self.bob_mass = bob_mass
-        self.friction_coefficient = friction_coefficient
+        self.friction_coefficient = (
+            float(self.config["friction_coefficient"])
+            if friction_coefficient is None
+            else float(friction_coefficient)
+        )
         self.cart_friction = 0.1
-        self.max_steps = max_steps
+        resolved_max_steps = self.config["max_steps"] if max_steps is None else max_steps
+        if (
+            not isinstance(resolved_max_steps, int)
+            or isinstance(resolved_max_steps, bool)
+            or resolved_max_steps <= 0
+        ):
+            raise ValueError(f"max_steps must be a positive integer, got {resolved_max_steps!r}")
+        self.max_steps = resolved_max_steps
         # Paramètre de simulation pas-à-pas
         self.dt = DT  # Durée d'un pas de simulation
         self.current_state = None
@@ -38,8 +59,15 @@ class TriplePendulumEnv:
         self.previous_action = 0.0
         self.current_phase = 1
         self.initial_phase = 1
-        self.switch_step = int(max_steps * 0.5)
+        self.switch_step = int(self.max_steps * 0.5)
         self.has_switched = False
+        self.capture_started = False
+        self.hold_streak = 0
+        if self.reward_manager is not None:
+            self.reward_manager.verify_cart_termination_is_suboptimal(
+                max_steps=self.max_steps,
+                gamma=float(self.config["gamma"]),
+            )
 
         # -----------------------------
         # Modèle symbolique
@@ -123,7 +151,7 @@ class TriplePendulumEnv:
 
     def _setup_numeric_evaluation(self):
         parameters = [self.gravity, self.masses[0]]
-        self.parameter_vals = [GRAVITY, self.bob_mass]
+        self.parameter_vals = [float(self.config["gravity"]), self.bob_mass]
 
         for i in range(self.n):
             parameters += [self.lengths[i], self.masses[i + 1]]
@@ -149,16 +177,22 @@ class TriplePendulumEnv:
         self.num_args = len(dummy_symbols) + len(parameters)
 
     def rhs(self, state, time, args, controller=None):
-        control_input = controller(state) if controller else 0.0
+        if controller is None:
+            raise ValueError("controller is required")
+        control_input = controller(state)
         arguments = hstack((state, control_input, args))
         state_derivative = np.array(solve(self.M_func(*arguments), self.F_func(*arguments))).T[0]
         return state_derivative
 
-    def reset(self, phase = None, episode_mode = None):
+    def reset(self, phase=None, episode_mode=None):
         # Initialisation de l'état
         position_initiale_chariot = 0.0
         if episode_mode not in (None, "down_to_up", "capture_vertical", "up_to_fold", "fold_to_up"):
             raise ValueError(f"unknown episode_mode: {episode_mode}")
+        if phase is not None and phase not in (-1, 1):
+            raise ValueError(f"phase must be -1 or 1, got {phase}")
+        if episode_mode is None and phase is None:
+            raise ValueError("reset() requires an explicit episode_mode or phase")
         use_down_to_up = episode_mode == "down_to_up"
         use_capture_vertical = episode_mode == "capture_vertical"
         self.initial_pose_mode = "down" if use_down_to_up else "capture" if use_capture_vertical else "target"
@@ -169,27 +203,27 @@ class TriplePendulumEnv:
         elif phase in (-1, 1):
             self.initial_phase = phase
         else:
-            self.initial_phase = rd.choice([-1, 1])
+            self.initial_phase = phase
         self.current_phase = self.initial_phase
         if use_down_to_up or use_capture_vertical:
             self.switch_step = self.max_steps + 1
         elif episode_mode in ("up_to_fold", "fold_to_up"):
-            low = self.config.get('transition_switch_step_min', 50)
-            high = self.config.get('transition_switch_step_max', 150)
-            self.switch_step = rd.randint(low, max(low, high))
+            low = self.config['transition_switch_step_min']
+            high = self.config['transition_switch_step_max']
+            self.switch_step = rd.randint(low, high)
         else:
             low = int(self.max_steps * 0.40)
             high = int(self.max_steps * 0.60)
-            self.switch_step = rd.randint(low, max(low, high))
+            self.switch_step = rd.randint(low, high)
         self.has_switched = False
 
-        angle_noise = self.config.get(
-            'down_angle_noise',
-            pi / 28,
-        ) if use_down_to_up else self.config.get(
-            'capture_angle_noise',
-            0.18,
-        ) if use_capture_vertical else self.config.get('initial_angle_noise', pi / 28)
+        angle_noise = (
+            self.config['down_angle_noise']
+            if use_down_to_up
+            else self.config['capture_angle_noise']
+            if use_capture_vertical
+            else self.config['initial_angle_noise']
+        )
         if use_down_to_up:
             base_angles = [-pi / 2] * (len(self.positions) - 1)
         elif self.current_phase == 1:
@@ -203,17 +237,17 @@ class TriplePendulumEnv:
         ]
         if use_capture_vertical:
             vitesses_initiales = np.array([
-                rd.uniform(-self.config.get('capture_cart_velocity_noise', 0.05), self.config.get('capture_cart_velocity_noise', 0.05)),
+                rd.uniform(-self.config['capture_cart_velocity_noise'], self.config['capture_cart_velocity_noise']),
                 *[
                     rd.uniform(
-                        -self.config.get('capture_angular_velocity_noise', 4.0),
-                        self.config.get('capture_angular_velocity_noise', 4.0),
+                        -self.config['capture_angular_velocity_noise'],
+                        self.config['capture_angular_velocity_noise'],
                     )
                     for _ in range(len(self.velocities) - 1)
                 ],
             ])
         else:
-            velocity_noise = self.config.get('initial_velocity_noise', 0.04)
+            velocity_noise = self.config['initial_velocity_noise']
             vitesses_initiales = np.array([
                 rd.uniform(-velocity_noise, velocity_noise)
                 for _ in range(len(self.velocities))
@@ -229,8 +263,8 @@ class TriplePendulumEnv:
         self.num_steps = 0
         self.applied_force = 0.0
         self.previous_action = 0.0
-        if self.reward_manager is not None:
-            self.reward_manager.reset()
+        self.capture_started = not use_down_to_up
+        self.hold_streak = 0
         return self.get_state(action=0.0, phase=self.current_phase)
 
     def _init_pygame(self):
@@ -255,7 +289,7 @@ class TriplePendulumEnv:
         Calcule juste les positions des pendules sans les composants de récompense.
         """
         if self.current_state is None:
-            return None
+            raise RuntimeError("state requested before reset()")
 
         adapted_state = np.array(self.current_state, dtype=float)
         
@@ -293,15 +327,19 @@ class TriplePendulumEnv:
         cinématique cartésienne et erreurs vers la cible active.
         """
         if self.current_state is None:
-            return None
+            raise RuntimeError("state requested before reset()")
 
         base_result = self._calculate_base_state()
-        if base_result is None:
-            return None
 
         adapted_state, position_x1, position_y1, position_x2, position_y2 = base_result
         phase = self.current_phase if phase is None else phase
-        action = 0.0 if action is None else float(action)
+        if phase not in (-1, 1):
+            raise ValueError(f"phase must be -1 or 1, got {phase}")
+        if action is None:
+            raise ValueError("action cannot be None")
+        action = float(action)
+        if not np.isfinite(action):
+            raise ValueError(f"action must be finite, got {action!r}")
 
         x = adapted_state[0]
         q1, q2 = adapted_state[1:3]
@@ -322,8 +360,9 @@ class TriplePendulumEnv:
         time_to_switch = (self.switch_step - self.num_steps) / max(1, self.max_steps)
         has_switched = float(self.has_switched)
         phase_1 = float(phase == 1)
-        phase_2 = float(phase == -1)
-        initial_pose_down = float(getattr(self, "initial_pose_mode", "target") == "down")
+        initial_pose_down = float(self.initial_pose_mode == "down")
+        capture_started = float(self.capture_started)
+        hold_progress = min(1.0, self.hold_streak / int(self.config['hold_required_steps']))
 
         max_height = self.arm_length * self.n
         phase1_end_y_error = max_height - end_node_y
@@ -362,7 +401,7 @@ class TriplePendulumEnv:
             position_x1, position_y1, position_x2, position_y2,
             vx1, vy1, vx2, vy2,
             self.applied_force, self.previous_action, action,
-            phase_1, phase_2, initial_pose_down, normalized_steps, time_to_switch, has_switched,
+            phase_1, capture_started, initial_pose_down, normalized_steps, time_to_switch, has_switched,
             active_height_error, active_x_error, active_shape_error,
             phase1_end_y_error, phase1_end_x_error, phase1_alignment_error,
             phase2_y1_error, phase2_end_y_error, phase2_end_x_error, phase2_fold_error,
@@ -370,13 +409,11 @@ class TriplePendulumEnv:
             active_target_delta,
             next_target_points,
             next_target_delta,
-            target_velocity_norm, x
+            target_velocity_norm, hold_progress
         ))
 
     def get_physical_state(self):
         base_result = self._calculate_base_state()
-        if base_result is None:
-            return None
         adapted_state, position_x1, position_y1, position_x2, position_y2 = base_result
         return np.hstack((
             adapted_state,
@@ -388,7 +425,7 @@ class TriplePendulumEnv:
         ))
 
 
-    def step(self, action=0.0, phase = None):
+    def step(self, action=0.0, phase=None):
         """
         Effectue un pas de simulation avec l'action donnée (force appliquée).
         
@@ -401,9 +438,11 @@ class TriplePendulumEnv:
             np.array: Le nouvel état après le pas de simulation
         """
         if self.current_state is None:
-            self.reset(phase=phase)
+            raise RuntimeError("step() called before reset()")
 
         if phase is not None:
+            if phase not in (-1, 1):
+                raise ValueError(f"phase must be -1 or 1, got {phase}")
             self.current_phase = phase
 
         switched = False
@@ -412,11 +451,16 @@ class TriplePendulumEnv:
             self.has_switched = True
             switched = True
 
-        action = float(np.clip(action, -self.config.get('max_action', 0.5), self.config.get('max_action', 0.5)))
-        if (self.current_state[0] > 1.65 and action > 0) :
-            action = -0.1
-        elif (self.current_state[0] < -1.65 and action < 0):
-            action = 0.1
+        action = float(action)
+        max_action = float(self.config['max_action'])
+        if not np.isfinite(action):
+            raise ValueError(f"action must be finite, got {action!r}")
+        if not -max_action <= action <= max_action:
+            raise ValueError(f"action must be in [{-max_action}, {max_action}], got {action}")
+        if self.reward_manager is None:
+            raise RuntimeError("step() requires a reward_manager")
+
+        previous_physical_state = self.get_physical_state()
             
         # Appliquer le lissage à la force
         force_smoothing = 0.1
@@ -424,15 +468,28 @@ class TriplePendulumEnv:
         
         # Calcul du nouvel état
         state_derivative = self.rhs(self.current_state, self.current_time, self.parameter_vals, lambda state: self.applied_force)
+        if not np.all(np.isfinite(state_derivative)):
+            raise FloatingPointError(
+                f"non-finite derivative at step={self.num_steps}, "
+                f"state={self.current_state}, action={action}, derivative={state_derivative}"
+            )
         next_state = self.current_state + state_derivative * self.dt
+        if not np.all(np.isfinite(next_state)):
+            raise FloatingPointError(
+                f"non-finite next_state at step={self.num_steps}, "
+                f"state={self.current_state}, action={action}, derivative={state_derivative}"
+            )
         
         # Vérifier les limites du chariot
         num_joints = len(self.positions)
         cart_position = next_state[0]
+        hit_cart_limit = False
         if cart_position - self.cart_width/(2*self.scale) < self.xmin:
+            hit_cart_limit = True
             next_state[0] = self.xmin + self.cart_width/(2*self.scale)
             next_state[num_joints] = 0  # Vitesse du chariot à zéro
         elif cart_position + self.cart_width/(2*self.scale) > self.xmax:
+            hit_cart_limit = True
             next_state[0] = self.xmax - self.cart_width/(2*self.scale)
             next_state[num_joints] = 0  # Vitesse du chariot à zéro
         
@@ -450,38 +507,57 @@ class TriplePendulumEnv:
 
         self.num_steps += 1
         physical_state = self.get_physical_state()
-        terminated = bool(
-            np.isnan(np.sum(self.current_state))
-            or abs(self.current_state[0]) >= self.xmax - self.cart_width / (2 * self.scale)
-            or self.num_steps >= self.max_steps
+        result = self.reward_manager.evaluate_transition(
+            previous_physical_state,
+            physical_state,
+            action=action,
+            phase=self.current_phase,
+            capture_started=self.capture_started,
+            hold_streak=self.hold_streak,
         )
-        reward = 0.0
-        reward_components = {}
-        if self.reward_manager is not None:
-            reward, reward_components, _ = self.reward_manager.calculate_reward(
-                physical_state,
-                terminated,
-                self.num_steps,
-                action,
-                self.current_phase,
-                self.has_switched,
-                getattr(self, "initial_pose_mode", "target") == "down",
-                update_hold_state=True,
-            )
+        self.capture_started = result.capture_started
+        self.hold_streak = result.hold_streak
+        reward = result.reward
+        reward_components = dict(result.components)
+
+        success = result.success and not hit_cart_limit
+        terminated = bool(hit_cart_limit or success)
+        truncated = bool(self.num_steps >= self.max_steps and not terminated)
+        if hit_cart_limit:
+            reward = float(self.config['cart_failure_penalty'])
+            reward_components['reward'] = reward
+            reward_components['cart_failure_penalty'] = reward
+        else:
+            reward_components['cart_failure_penalty'] = 0.0
 
         self.previous_action = action
         info = {
             "phase": self.current_phase,
             "initial_phase": self.initial_phase,
-            "initial_pose_mode": getattr(self, "initial_pose_mode", "target"),
+            "initial_pose_mode": self.initial_pose_mode,
             "switch_step": self.switch_step,
             "switched": switched,
+            "capture_started": self.capture_started,
             "reward_components": reward_components,
-            "target_score": reward_components.get("target_score", 0.0),
-            "in_target": reward_components.get("in_target", 0.0),
-            "termination_reason": "max_steps" if self.num_steps >= self.max_steps else "cart_or_nan" if terminated else None,
+            "target_score": reward_components["target_score"],
+            "in_target": reward_components["in_target"],
+            "termination_reason": (
+                "cart_limit"
+                if hit_cart_limit
+                else "success"
+                if success
+                else "max_steps"
+                if truncated
+                else None
+            ),
         }
-        return self.get_state(action=action, phase=self.current_phase), reward, terminated, info
+        return (
+            self.get_state(action=action, phase=self.current_phase),
+            reward,
+            terminated,
+            truncated,
+            info,
+        )
         
     def render(self, action, episode = 0, epsilon = 0, current_step = 0, phase = None):
         """
@@ -588,16 +664,15 @@ class TriplePendulumEnv:
                 ))
                 
                 # Récupérer les composants de récompense
-                _, reward_components, _ = self.reward_manager.calculate_reward(
+                preview = self.reward_manager.evaluate_transition(
                     temp_state,
-                    False,
-                    current_step,
-                    action,
-                    phase,
-                    self.has_switched,
-                    getattr(self, "initial_pose_mode", "target") == "down",
-                    update_hold_state=False,
+                    temp_state,
+                    action=float(action),
+                    phase=phase,
+                    capture_started=self.capture_started,
+                    hold_streak=self.hold_streak,
                 )
+                reward_components = preview.components
                 
                 # Dessiner un conteneur pour les récompenses
                 reward_panel_width = 300
@@ -642,14 +717,14 @@ class TriplePendulumEnv:
                 
                 # Définir les composants de récompense avec leurs couleurs spécifiques
                 reward_components_display = [
-                    {"name": "Reward", "value": reward_components.get('reward', 0), "color": (100, 100, 200)},
-                    {"name": "Target", "value": reward_components.get('target_score', 0), "color": (100, 200, 100)},
-                    {"name": "Shape", "value": reward_components.get('shape_penalty', 0), "color": (200, 80, 80)},
-                    {"name": "Velocity", "value": reward_components.get('velocity_penalty', 0), "color": (180, 130, 80)},
-                    {"name": "Cart", "value": reward_components.get('cart_penalty', 0), "color": (200, 80, 80)},
-                    {"name": "Action", "value": reward_components.get('action_penalty', 0), "color": (180, 130, 80)},
-                    {"name": "Terminal", "value": reward_components.get('terminal_penalty', 0), "color": (200, 80, 80)},
-                    {"name": "In Target", "value": reward_components.get('in_target', 0), "color": (100, 200, 100)}
+                    {"name": "Reward", "value": reward_components['reward'], "color": (100, 100, 200)},
+                    {"name": "Target", "value": reward_components['target_score'], "color": (100, 200, 100)},
+                    {"name": "Energy", "value": reward_components['energy_score'], "color": (80, 150, 210)},
+                    {"name": "Height", "value": reward_components['height_score'], "color": (80, 180, 120)},
+                    {"name": "Progress", "value": reward_components['potential_progress'], "color": (180, 130, 80)},
+                    {"name": "Capture", "value": reward_components['capture_quality'], "color": (100, 180, 100)},
+                    {"name": "Hold", "value": reward_components['hold_progress'], "color": (130, 100, 200)},
+                    {"name": "In Target", "value": reward_components['in_target'], "color": (100, 200, 100)}
                 ]
              
                 # Dessiner les barres de récompense
@@ -738,20 +813,14 @@ class TriplePendulumEnv:
         self._init_pygame()
         pygame.display.set_caption(title)
         
-        # Créer un RewardManager si aucun n'est disponible
         if self.reward_manager is None:
-            try:
-                from reward import RewardManager
-                self.reward_manager = RewardManager()
-            except ImportError:
-                print("ATTENTION: Impossible d'importer RewardManager. Les récompenses ne seront pas affichées.")
+            raise RuntimeError("animate() requires a reward_manager")
         
         if self.current_state is None:
             self.reset(phase=1)  # Phase initiale par défaut
         
         force_increment = 0.5
         target_force = 0.0
-        force_smoothing = 0.1
         running = True
         episode = 0
         epsilon = 1.0
@@ -796,14 +865,15 @@ class TriplePendulumEnv:
                         
                         # Afficher également les composants de récompense si disponibles
                         if self.reward_manager is not None:
-                            _, reward_components, _ = self.reward_manager.calculate_reward(
+                            preview = self.reward_manager.evaluate_transition(
                                 physical_state,
-                                False,
-                                self.num_steps,
-                                target_force,
-                                current_phase,
-                                update_hold_state=False,
+                                physical_state,
+                                action=target_force,
+                                phase=current_phase,
+                                capture_started=self.capture_started,
+                                hold_streak=self.hold_streak,
                             )
+                            reward_components = preview.components
                             print('------- Composants de récompense -------')
                             for component, value in reward_components.items():
                                 print(f'{component}: {value:.4f}')
@@ -814,13 +884,16 @@ class TriplePendulumEnv:
                         target_force = 0.0
             
             # Mise à jour de la force et de l'état
-            _next_state, _reward, terminated, _info = self.step(target_force, phase=current_phase)
+            _next_state, _reward, terminated, truncated, _info = self.step(
+                target_force,
+                phase=current_phase,
+            )
             
             # Rendu avec informations sur l'épisode et epsilon
             if not self.render(action=target_force, episode=episode, epsilon=epsilon, current_step=self.num_steps, phase=current_phase):
                 break
 
-            if terminated:
+            if terminated or truncated:
                 self.reset(phase=current_phase)
 
         if self.pygame_initialized:
@@ -829,7 +902,7 @@ class TriplePendulumEnv:
 
 # Exemple d'utilisation
 if __name__ == "__main__":
-    env = TriplePendulumEnv()
+    env = TriplePendulumEnv(reward_manager=RewardManager(config), env_config=config)
     
     # Utilisation avec les nouvelles méthodes
     env.reset(phase = 1)

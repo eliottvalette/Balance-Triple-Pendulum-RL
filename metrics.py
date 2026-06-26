@@ -5,41 +5,37 @@ from collections import defaultdict
 import os
 import seaborn as sns
 import torch
-from config import config
 
 class MetricsTracker:
-    def __init__(self, plot_config=None):
+    def __init__(self, plot_config):
         self.metrics = defaultdict(list)
         self.episode_window = 100  # For moving average
-        
-        # Utiliser la configuration des plots si fournie, sinon utiliser config.py
-        if plot_config is None and 'plot_config' in config:
-            plot_config = config['plot_config']
-        else:
-            plot_config = plot_config or {}
-            
-        # Initialiser les paramètres de plotting avec des valeurs par défaut si non définies
-        self.max_points_per_plot = plot_config.get('max_points_per_plot', 1000)
-        self.plot_dpi = plot_config.get('plot_dpi', 100)
-        self.enable_plots = plot_config.get('enable_plots', True)
+        required = {'max_points_per_plot', 'plot_dpi', 'enable_plots', 'plot_frequency'}
+        if not isinstance(plot_config, dict) or set(plot_config) != required:
+            raise ValueError(f"plot_config keys must be exactly {sorted(required)}")
+        self.max_points_per_plot = plot_config['max_points_per_plot']
+        self.plot_dpi = plot_config['plot_dpi']
+        self.enable_plots = plot_config['enable_plots']
         
     def add_metric(self, name, value):
-        # S'assurer que value est un nombre scalaire
         if isinstance(value, np.ndarray):
-            if value.size == 1:
-                value = float(value)
-            else:
-                value = float(value.mean())
-        elif isinstance(value, (list, tuple)):
-            # Si c'est une liste ou un tuple, prendre la moyenne
-            if len(value) > 0:
-                value = float(np.mean(value))
-            else:
-                value = 0.0
-                
+            if value.size != 1:
+                raise TypeError(f"metric {name!r} must be scalar, got array shape {value.shape}")
+            value = float(value.item())
+        elif isinstance(value, torch.Tensor):
+            if value.numel() != 1:
+                raise TypeError(f"metric {name!r} must be scalar, got tensor shape {tuple(value.shape)}")
+            value = float(value.item())
+        elif isinstance(value, (list, tuple)) or not np.isscalar(value):
+            raise TypeError(f"metric {name!r} must be scalar, got {type(value).__name__}")
+        value = float(value)
+        if not np.isfinite(value):
+            raise FloatingPointError(f"metric {name!r} is non-finite: {value}")
         self.metrics[name].append(value)
     
     def get_moving_average(self, name):
+        if name not in self.metrics or not self.metrics[name]:
+            raise KeyError(f"metric {name!r} is missing or empty")
         values = self.metrics[name]
         if len(values) < self.episode_window:
             return np.mean(values)
@@ -106,25 +102,16 @@ class MetricsTracker:
             'target_score',
             'effective_target_score',
             'target_error',
-            'shape_penalty',
-            'velocity_penalty',
-            'cart_penalty',
-            'action_penalty',
-            'swing_up_velocity_bonus',
-            'swing_up_momentum_bonus',
-            'swing_up_height_progress_bonus',
-            'swing_up_score_progress_bonus',
-            'capture_velocity_bonus',
-            'capture_overspeed_penalty',
-            'capture_height_penalty',
-            'capture_lost_penalty',
-            'capture_rest_penalty',
-            'capture_hold_bonus',
-            'target_shaping_reward',
-            'target_entry_bonus',
-            'hold_progress_bonus',
+            'energy_score',
+            'height_score',
+            'cart_safety_score',
+            'potential_progress',
+            'capture_quality',
+            'capture_entry_bonus',
+            'hold_bonus',
             'hold_progress',
-            'low_score_penalty',
+            'success_bonus',
+            'cart_failure_penalty',
             'transition_reward',
         ]
         for component in reward_components:
@@ -222,22 +209,15 @@ class MetricsTracker:
         reward_components = [
             'target_score',
             'target_error',
-            'shape_penalty',
-            'velocity_penalty',
-            'cart_penalty',
-            'action_penalty',
-            'swing_up_velocity_bonus',
-            'swing_up_momentum_bonus',
-            'swing_up_height_progress_bonus',
-            'swing_up_score_progress_bonus',
-            'capture_velocity_bonus',
-            'capture_height_penalty',
-            'capture_lost_penalty',
-            'capture_rest_penalty',
-            'capture_hold_bonus',
-            'target_shaping_reward',
-            'target_entry_bonus',
-            'hold_progress_bonus',
+            'energy_score',
+            'height_score',
+            'cart_safety_score',
+            'potential_progress',
+            'capture_quality',
+            'capture_entry_bonus',
+            'hold_bonus',
+            'success_bonus',
+            'cart_failure_penalty',
             'transition_reward',
             'hold_before_switch',
             'hold_after_switch',

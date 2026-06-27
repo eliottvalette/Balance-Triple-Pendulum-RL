@@ -308,7 +308,7 @@ def main():
     parser.add_argument("--use-training-exploration", action="store_true")
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--out-dir", default="results/audits/current_policy")
-    parser.add_argument("--checkpoint", default="models/checkpoint_actor.pth")
+    parser.add_argument("--checkpoint", default="models/interrupted_actor.pth")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)

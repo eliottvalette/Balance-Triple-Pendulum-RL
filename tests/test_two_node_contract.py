@@ -115,7 +115,7 @@ class StrictContractTests(unittest.TestCase):
         with self.assertRaises(FloatingPointError):
             buffer.push(np.array([np.nan]), 0.0, 0.0, np.zeros(1), False)
 
-    def test_missing_checkpoint_is_not_ignored(self):
+    def test_missing_saved_model_is_not_ignored(self):
         trainer = object.__new__(TriplePendulumTrainer)
         with mock.patch("train.os.path.exists", return_value=False):
             with self.assertRaises(FileNotFoundError):

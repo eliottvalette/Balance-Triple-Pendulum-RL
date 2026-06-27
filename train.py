@@ -15,6 +15,8 @@ from model import TriplePendulumActor, TriplePendulumCritic
 from reward import RewardManager
 from tp_env import TriplePendulumEnv
 
+MODEL_SAVE_PREFIX = "models/interrupted"
+
 
 class ReplayBuffer:
     def __init__(self, capacity=10000):
@@ -483,13 +485,15 @@ class TriplePendulumTrainer:
 
                 if episode % self.plot_frequency == self.plot_frequency - 1:
                     self.metrics.generate_all_plots()
-                    self.save_models("models/checkpoint", episode=episode)
         except KeyboardInterrupt:
             episode = len(self.metrics.metrics["episode_reward"])
-            self.save_models("models/checkpoint", episode=episode, interrupted=True)
-            self.save_models("models/interrupted", episode=episode, interrupted=True)
-            print(f"\nKeyboardInterrupt: saved checkpoint at episode {episode}")
+            self.save_models(MODEL_SAVE_PREFIX, episode=episode, interrupted=True)
+            print(f"\nKeyboardInterrupt: saved interrupted model at episode {episode}")
             raise
+
+        episode = len(self.metrics.metrics["episode_reward"])
+        self.save_models(MODEL_SAVE_PREFIX, episode=episode, interrupted=False)
+        print(f"Training finished: saved interrupted model at episode {episode}")
 
     def _record_episode_metrics(self, summary):
         scalar_keys = [
@@ -558,10 +562,10 @@ class TriplePendulumTrainer:
             json.dump(metadata, metadata_file, indent=2)
 
     def load_models(self):
-        metadata_path = "models/checkpoint_metadata.json"
+        metadata_path = f"{MODEL_SAVE_PREFIX}_metadata.json"
         if not os.path.exists(metadata_path):
             raise FileNotFoundError(
-                f"load_models=True but checkpoint metadata is missing: {metadata_path}"
+                f"load_models=True but saved model metadata is missing: {metadata_path}"
             )
         with open(metadata_path, encoding="utf-8") as metadata_file:
             metadata = json.load(metadata_file)
@@ -574,19 +578,19 @@ class TriplePendulumTrainer:
         }
         missing_keys = sorted(set(expected) - set(metadata))
         if missing_keys:
-            raise ValueError(f"checkpoint metadata is missing required keys: {missing_keys}")
+            raise ValueError(f"saved model metadata is missing required keys: {missing_keys}")
         for key, value in expected.items():
             if metadata[key] != value:
                 raise ValueError(
-                    f"incompatible checkpoint: {key} is {metadata[key]!r}, expected {value!r}"
+                    f"incompatible saved model: {key} is {metadata[key]!r}, expected {value!r}"
                 )
 
-        self.actor_model.load_state_dict(torch.load("models/checkpoint_actor.pth", weights_only=True))
-        self.critic_model.load_state_dict(torch.load("models/checkpoint_critic.pth", weights_only=True))
+        self.actor_model.load_state_dict(torch.load(f"{MODEL_SAVE_PREFIX}_actor.pth", weights_only=True))
+        self.critic_model.load_state_dict(torch.load(f"{MODEL_SAVE_PREFIX}_critic.pth", weights_only=True))
         self.actor_target.load_state_dict(self.actor_model.state_dict())
         self.critic_target.load_state_dict(self.critic_model.state_dict())
-        self.actor_optimizer.load_state_dict(torch.load("models/checkpoint_actor_optimizer.pth", weights_only=True))
-        self.critic_optimizer.load_state_dict(torch.load("models/checkpoint_critic_optimizer.pth", weights_only=True))
+        self.actor_optimizer.load_state_dict(torch.load(f"{MODEL_SAVE_PREFIX}_actor_optimizer.pth", weights_only=True))
+        self.critic_optimizer.load_state_dict(torch.load(f"{MODEL_SAVE_PREFIX}_critic_optimizer.pth", weights_only=True))
 
 
 if __name__ == "__main__":

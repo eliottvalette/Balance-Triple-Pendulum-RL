@@ -17,7 +17,11 @@ config = {
     'load_models': True,
     'num_nodes': 2,
     'gravity': 0.1,
-    'friction_coefficient': 0.1,
+    'cart_mass': 0.01 / 3.0,
+    'bob_mass': 0.01 / 3.0,
+    'angular_friction': 0.0005,
+    'cart_friction': 0.1,
+    'angular_velocity_damping': 0.0,
     'max_action': 0.5,
     'exploration_noise': 0.10,
     'swing_up_exploration_noise': 0.05,
@@ -33,6 +37,7 @@ config = {
     'learning_starts': 1_000,
     'train_every_steps': 4,
     'updates_per_train': 1,
+    'min_non_crash_transitions_for_actor_update': 0,
     'initial_angle_noise': 0.1122,
     'initial_velocity_noise': 0.04,
     'episode_mode_probabilities': {
@@ -96,13 +101,15 @@ def validate_config(cfg):
     required_keys = {
         'num_episodes', 'max_steps', 'actor_lr', 'critic_lr', 'gamma',
         'batch_size', 'hidden_dim', 'buffer_capacity', 'load_models',
-        'num_nodes', 'gravity', 'friction_coefficient', 'max_action',
+        'num_nodes', 'gravity', 'cart_mass', 'bob_mass', 'angular_friction',
+        'cart_friction', 'angular_velocity_damping', 'max_action',
         'exploration_noise', 'swing_up_exploration_noise',
         'swing_up_exploration_amplitude', 'swing_up_exploration_period_min',
         'swing_up_exploration_period_max', 'swing_up_capture_score_threshold',
         'swing_up_capture_noise', 'policy_noise', 'noise_clip',
         'policy_delay', 'polyak_tau', 'learning_starts', 'train_every_steps',
         'updates_per_train', 'initial_angle_noise', 'initial_velocity_noise',
+        'min_non_crash_transitions_for_actor_update',
         'episode_mode_probabilities', 'adaptive_curriculum_enabled',
         'curriculum_start_episode', 'curriculum_window',
         'curriculum_min_probabilities', 'curriculum_max_probabilities',
@@ -142,7 +149,7 @@ def validate_config(cfg):
             raise ValueError(f"config[{key!r}] must be a positive integer, got {value!r}")
 
     positive_keys = (
-        'actor_lr', 'critic_lr', 'gravity', 'max_action',
+        'actor_lr', 'critic_lr', 'gravity', 'cart_mass', 'bob_mass', 'max_action',
         'swing_up_exploration_period_min', 'swing_up_exploration_period_max',
         'capture_allowed_angular_speed',
     )
@@ -168,6 +175,7 @@ def validate_config(cfg):
     nonnegative_integer_keys = (
         'learning_starts', 'curriculum_start_episode', 'transition_switch_step_min',
         'transition_switch_step_max', 'render_every_episodes',
+        'min_non_crash_transitions_for_actor_update',
     )
     for key in nonnegative_integer_keys:
         value = cfg[key]
@@ -175,7 +183,8 @@ def validate_config(cfg):
             raise ValueError(f"config[{key!r}] must be a nonnegative integer, got {value!r}")
 
     nonnegative_keys = (
-        'friction_coefficient', 'exploration_noise', 'swing_up_exploration_noise',
+        'angular_friction', 'cart_friction', 'angular_velocity_damping',
+        'exploration_noise', 'swing_up_exploration_noise',
         'swing_up_exploration_amplitude', 'swing_up_capture_noise', 'policy_noise',
         'noise_clip', 'initial_angle_noise', 'initial_velocity_noise',
         'capture_angle_noise', 'capture_cart_velocity_noise',

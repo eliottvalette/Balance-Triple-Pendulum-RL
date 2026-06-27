@@ -11,23 +11,23 @@ from reward import RewardManager
 
 DT = 0.01
 FIXED_NUM_NODES = 2
+PHYSICAL_STATE_LAYOUT = ("x", "q1", "q2", "x_dot", "q1_dot", "q2_dot", "force", "x1", "y1", "x2", "y2")
 
-class TriplePendulumEnv:
+class PendulumEnv:
     def __init__(
         self,
         reward_manager=None,
         render_mode=None,
         num_nodes=FIXED_NUM_NODES,
         arm_length=1.0 / 3.0,
-        bob_mass=0.01 / 3.0,
-        friction_coefficient=None,
+        bob_mass=None,
         max_steps=None,
         env_config=None,
     ):
         self.config = config if env_config is None else env_config
         validate_config(self.config)
         if num_nodes != FIXED_NUM_NODES:
-            raise ValueError(f"TriplePendulumEnv is fixed to {FIXED_NUM_NODES} nodes, got {num_nodes}")
+            raise ValueError(f"PendulumEnv is fixed to {FIXED_NUM_NODES} nodes, got {num_nodes}")
         if self.config["num_nodes"] != FIXED_NUM_NODES:
             raise ValueError(
                 f"config['num_nodes'] must be {FIXED_NUM_NODES}, got {self.config['num_nodes']}"
@@ -36,13 +36,15 @@ class TriplePendulumEnv:
         self.render_mode = render_mode
         self.n = FIXED_NUM_NODES
         self.arm_length = arm_length
-        self.bob_mass = bob_mass
-        self.friction_coefficient = (
-            float(self.config["friction_coefficient"])
-            if friction_coefficient is None
-            else float(friction_coefficient)
-        )
-        self.cart_friction = 0.1
+        self.cart_mass = float(self.config["cart_mass"])
+        self.bob_mass = float(self.config["bob_mass"] if bob_mass is None else bob_mass)
+        if not np.isfinite(self.cart_mass) or self.cart_mass <= 0.0:
+            raise ValueError(f"cart_mass must be finite and positive, got {self.cart_mass!r}")
+        if not np.isfinite(self.bob_mass) or self.bob_mass <= 0.0:
+            raise ValueError(f"bob_mass must be finite and positive, got {self.bob_mass!r}")
+        self.angular_friction = float(self.config["angular_friction"])
+        self.cart_friction = float(self.config["cart_friction"])
+        self.angular_velocity_damping = float(self.config["angular_velocity_damping"])
         resolved_max_steps = self.config["max_steps"] if max_steps is None else max_steps
         if (
             not isinstance(resolved_max_steps, int)
@@ -82,7 +84,8 @@ class TriplePendulumEnv:
         self.masses = symbols(f'm:{FIXED_NUM_NODES + 1}')             # Masses
         self.lengths = symbols(f'l:{FIXED_NUM_NODES}')                # Longueurs
         self.gravity, self.time = symbols('g t')                # Gravité et temps
-        self.friction_symbol = symbols('b')
+        self.angular_friction_symbol = symbols('b_theta')
+        self.cart_friction_symbol = symbols('b_cart')
 
         self._setup_symbolic_model()
         self._setup_numeric_evaluation()
@@ -127,7 +130,7 @@ class TriplePendulumEnv:
 
         force_cart = self.force * inertial_frame.x
         weight_cart = -self.masses[0] * self.gravity * inertial_frame.y
-        friction_cart = -self.cart_friction * self.velocities[0] * inertial_frame.x
+        friction_cart = -self.cart_friction_symbol * self.velocities[0] * inertial_frame.x
         forces = [(cart_point, force_cart + weight_cart + friction_cart)]
         kindiffs = [self.positions[0].diff(self.time) - self.velocities[0]]
 
@@ -144,8 +147,9 @@ class TriplePendulumEnv:
             particles.append(pendulum_particle)
 
             weight = -self.masses[i + 1] * self.gravity * inertial_frame.y
-            friction = -self.friction_symbol * self.velocities[i + 1] * inertial_frame.z
-            forces.append((pendulum_point, weight + friction))
+            damping_torque = -self.angular_friction_symbol * self.velocities[i + 1] * inertial_frame.z
+            forces.append((pendulum_point, weight))
+            forces.append((pendulum_frame, damping_torque))
             kindiffs.append(self.positions[i + 1].diff(self.time) - self.velocities[i + 1])
 
         self.kane = KanesMethod(inertial_frame, q_ind=self.positions, u_ind=self.velocities, kd_eqs=kindiffs)
@@ -154,14 +158,14 @@ class TriplePendulumEnv:
 
     def _setup_numeric_evaluation(self):
         parameters = [self.gravity, self.masses[0]]
-        self.parameter_vals = [float(self.config["gravity"]), self.bob_mass]
+        self.parameter_vals = [float(self.config["gravity"]), self.cart_mass]
 
         for i in range(self.n):
             parameters += [self.lengths[i], self.masses[i + 1]]
             self.parameter_vals += [self.arm_length, self.bob_mass]
 
-        parameters.append(self.friction_symbol)
-        self.parameter_vals.append(self.friction_coefficient)
+        parameters.extend([self.angular_friction_symbol, self.cart_friction_symbol])
+        self.parameter_vals.extend([self.angular_friction, self.cart_friction])
 
         dynamic = self.positions + self.velocities
         dynamic.append(self.force)
@@ -187,8 +191,13 @@ class TriplePendulumEnv:
         state_derivative = np.array(solve(self.M_func(*arguments), self.F_func(*arguments))).T[0]
         return state_derivative
 
-    def reset(self, phase=None, episode_mode=None):
+    def reset(self, phase=None, episode_mode=None, seed=None):
         # Initialisation de l'état
+        if seed is not None:
+            if not isinstance(seed, int) or isinstance(seed, bool):
+                raise ValueError(f"seed must be an integer, got {seed!r}")
+            rd.seed(seed)
+            np.random.seed(seed)
         position_initiale_chariot = 0.0
         if episode_mode not in (None, "down_to_up", "capture_vertical", "up_to_fold", "fold_to_up"):
             raise ValueError(f"unknown episode_mode: {episode_mode}")
@@ -278,7 +287,7 @@ class TriplePendulumEnv:
             pygame.init()
             self.width, self.height = 800, 600
             self.screen = pygame.display.set_mode((self.width, self.height))
-            pygame.display.set_caption("Triple Pendule Simulation")
+            pygame.display.set_caption("Pendulum Simulation")
             self.clock = pygame.time.Clock()
             self.font = pygame.font.SysFont('Arial', 16)
             self.pygame_initialized = True
@@ -499,13 +508,9 @@ class TriplePendulumEnv:
             next_state[0] = self.xmax - self.cart_width/(2*self.scale)
             next_state[num_joints] = 0  # Vitesse du chariot à zéro
         
-        # Appliquer un amortissement supplémentaire direct aux vitesses
-        # Coefficient d'amortissement: plus élevé pour une dissipation d'énergie plus rapide
-        damping_factor = 0.99
-        
-        # Appliquer l'amortissement aux vitesses angulaires (u1, u2)
-        for i in range(num_joints, 2*num_joints):
-            next_state[i] *= damping_factor
+        if self.angular_velocity_damping > 0.0:
+            damping_factor = np.exp(-self.angular_velocity_damping * self.dt)
+            next_state[num_joints + 1:2 * num_joints] *= damping_factor
         
         # Mise à jour de l'état et du temps
         self.current_state = next_state
@@ -557,15 +562,25 @@ class TriplePendulumEnv:
         reward += cart_limit_penalty
         reward_components['cart_proximity_penalty'] = cart_proximity_penalty
         reward_components['cart_limit_step_penalty'] = cart_step_penalty
+        reward_components['safety_penalty'] = (
+            reward_components.get('safety_penalty', 0.0) + cart_limit_penalty
+        )
         if hit_cart_limit:
             if terminated:
                 reward += float(self.config['cart_failure_penalty'])
                 reward_components['cart_failure_penalty'] = float(self.config['cart_failure_penalty'])
+                reward_components['terminal_failure_penalty'] = (
+                    reward_components.get('terminal_failure_penalty', 0.0)
+                    + float(self.config['cart_failure_penalty'])
+                )
             else:
                 reward_components['cart_failure_penalty'] = 0.0
             reward_components['reward'] = reward
         else:
             reward_components['cart_failure_penalty'] = 0.0
+            reward_components['terminal_failure_penalty'] = reward_components.get(
+                'terminal_failure_penalty', 0.0
+            )
             reward_components['reward'] = reward
 
         self.previous_action = action
@@ -943,8 +958,8 @@ class TriplePendulumEnv:
 
 # Exemple d'utilisation
 if __name__ == "__main__":
-    env = TriplePendulumEnv(reward_manager=RewardManager(config), env_config=config)
+    env = PendulumEnv(reward_manager=RewardManager(config), env_config=config)
     
     # Utilisation avec les nouvelles méthodes
     env.reset(phase = 1)
-    env.animate_pendulum_pygame(max_steps=10_000, manual_mode = True, title='Simulation Triple Pendule')
+    env.animate_pendulum_pygame(max_steps=10_000, manual_mode = True, title='Simulation Pendulum')

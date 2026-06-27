@@ -26,7 +26,7 @@ class RewardManager:
         self.config = cfg
         self.num_nodes = 2
         self.length = float(arm_length)
-        self.mass = float(mass)
+        self.mass = float(cfg.get("bob_mass", mass))
         self.max_height = self.length * self.num_nodes
         self.phase_1_height_tolerance = 0.08
         self.phase_2_end_height_tolerance = 0.12
@@ -63,6 +63,7 @@ class RewardManager:
         entered_capture = bool(
             not capture_started
             and metrics["target_score"] >= self.config["swing_up_capture_score_threshold"]
+            and metrics["angular_speed"] <= self.config["capture_allowed_angular_speed"]
         )
         next_capture_started = bool(capture_started or entered_capture)
         next_hold_streak = hold_streak + 1 if metrics["in_target"] else 0
@@ -72,7 +73,9 @@ class RewardManager:
 
         previous_potential = self.swing_potential(previous_state)
         next_potential = self.swing_potential(next_state)
-        potential_progress = next_potential - previous_potential
+        potential_progress = (
+            float(self.config["gamma"]) * next_potential - previous_potential
+        )
         capture_quality = 0.0
         capture_quality_bonus = 0.0
         capture_entry_bonus = 0.0
@@ -101,6 +104,12 @@ class RewardManager:
 
         components = {
             "reward": float(reward),
+            "swing_up_progress": float(potential_progress if not (next_capture_started or phase == -1) else 0.0),
+            "capture_entry": float(capture_entry_bonus),
+            "capture_quality_reward": float(capture_quality_bonus),
+            "hold_stabilization": float(hold_bonus),
+            "safety_penalty": 0.0,
+            "terminal_failure_penalty": 0.0,
             "reward_mode_capture": float(next_capture_started or phase == -1),
             "target_score": metrics["target_score"],
             "effective_target_score": metrics["target_score"] * speed_score,

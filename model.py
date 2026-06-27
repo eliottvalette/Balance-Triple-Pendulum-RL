@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 
-class TriplePendulumActor(nn.Module):
+class PendulumActor(nn.Module):
     def __init__(self, state_dim, action_dim=1, hidden_dim=512, max_action=0.5):
         super().__init__()
         self.max_action = max_action
@@ -21,15 +21,15 @@ class TriplePendulumActor(nn.Module):
         return self.max_action * self.net(state)
 
 
-class TriplePendulumCritic(nn.Module):
+class PendulumCritic(nn.Module):
     def __init__(self, state_dim, action_dim=1, hidden_dim=256):
         super().__init__()
         input_dim = state_dim + action_dim
-        self.q1 = self._build_q_network(input_dim, hidden_dim)
-        self.q2 = self._build_q_network(input_dim, hidden_dim)
+        self.critic_head_a = self._build_value_network(input_dim, hidden_dim)
+        self.critic_head_b = self._build_value_network(input_dim, hidden_dim)
 
     @staticmethod
-    def _build_q_network(input_dim, hidden_dim):
+    def _build_value_network(input_dim, hidden_dim):
         return nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
@@ -42,8 +42,8 @@ class TriplePendulumCritic(nn.Module):
 
     def forward(self, state, action):
         state_action = torch.cat([state, action], dim=-1)
-        return self.q1(state_action), self.q2(state_action)
+        return self.critic_head_a(state_action), self.critic_head_b(state_action)
 
-    def q1_value(self, state, action):
+    def primary_value(self, state, action):
         state_action = torch.cat([state, action], dim=-1)
-        return self.q1(state_action)
+        return self.critic_head_a(state_action)

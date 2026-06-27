@@ -11,9 +11,9 @@ import torch.nn.functional as F
 from config import EPISODE_MODES as CONFIG_EPISODE_MODES
 from config import config, validate_config
 from metrics import MetricsTracker
-from model import TriplePendulumActor, TriplePendulumCritic
+from model import PendulumActor, PendulumCritic
 from reward import RewardManager
-from tp_env import TriplePendulumEnv
+from tp_env import PendulumEnv
 
 MODEL_SAVE_PREFIX = "models/interrupted"
 MODEL_LOAD_PREFIX = "models/checkpoint"
@@ -22,7 +22,7 @@ class ReplayBuffer:
     def __init__(self, capacity=10000):
         self.buffer = deque(maxlen=capacity)
 
-    def push(self, state, action, reward, next_state, done):
+    def push(self, state, action, reward, next_state, terminated, truncated, *, metadata=None):
         if not np.all(np.isfinite(state)):
             raise FloatingPointError(f"replay state contains non-finite values: {state}")
         if not np.isfinite(action):
@@ -31,9 +31,22 @@ class ReplayBuffer:
             raise FloatingPointError(f"replay reward is non-finite: {reward}")
         if not np.all(np.isfinite(next_state)):
             raise FloatingPointError(f"replay next_state contains non-finite values: {next_state}")
-        if not isinstance(done, (bool, np.bool_)):
-            raise TypeError(f"replay done must be bool, got {type(done).__name__}")
-        self.buffer.append((state, np.array([action], dtype=np.float32), reward, next_state, done))
+        if not isinstance(terminated, (bool, np.bool_)):
+            raise TypeError(f"replay terminated must be bool, got {type(terminated).__name__}")
+        if not isinstance(truncated, (bool, np.bool_)):
+            raise TypeError(f"replay truncated must be bool, got {type(truncated).__name__}")
+        bootstrap_mask = 0.0 if bool(terminated) or bool(truncated) else 1.0
+        transition_metadata = {} if metadata is None else dict(metadata)
+        self.buffer.append((
+            state,
+            np.array([action], dtype=np.float32),
+            reward,
+            next_state,
+            bool(terminated),
+            bool(truncated),
+            bootstrap_mask,
+            transition_metadata,
+        ))
 
     def sample(self, batch_size):
         if batch_size <= 0:
@@ -43,14 +56,80 @@ class ReplayBuffer:
                 f"cannot sample batch of {batch_size} from buffer of {len(self.buffer)}"
             )
         batch = random.sample(self.buffer, batch_size)
-        states, actions, rewards, next_states, dones = map(np.stack, zip(*batch))
-        return states, actions, rewards, next_states, dones
+        states, actions, rewards, next_states, terminated, truncated, bootstrap_masks, _metadata = zip(*batch)
+        states = np.stack(states)
+        actions = np.stack(actions)
+        rewards = np.stack(rewards)
+        next_states = np.stack(next_states)
+        terminated = np.stack(terminated)
+        truncated = np.stack(truncated)
+        bootstrap_masks = np.stack(bootstrap_masks)
+        return states, actions, rewards, next_states, terminated, truncated, bootstrap_masks
+
+    def diagnostics(self, *, max_action):
+        if max_action <= 0.0 or not np.isfinite(max_action):
+            raise ValueError(f"max_action must be finite and positive, got {max_action!r}")
+        if not self.buffer:
+            return {
+                "size": 0,
+                "action_histogram": [],
+                "saturation_fraction": 0.0,
+                "episode_mode_distribution": {},
+                "reward_mean": 0.0,
+                "reward_min": 0.0,
+                "reward_max": 0.0,
+                "termination_reasons": {},
+                "capture_fraction": 0.0,
+                "near_capture_fraction": 0.0,
+                "target_state_coverage": 0.0,
+                "non_crash_transitions": 0,
+            }
+        actions = np.array([entry[1][0] for entry in self.buffer], dtype=float)
+        rewards = np.array([entry[2] for entry in self.buffer], dtype=float)
+        metadata = [entry[7] for entry in self.buffer]
+        mode_counts = self._count_metadata(metadata, "episode_mode")
+        reason_counts = self._count_metadata(metadata, "termination_reason")
+        capture_flags = np.array([bool(item.get("capture_started", False)) for item in metadata], dtype=float)
+        near_capture_flags = np.array([
+            float(item.get("target_score", 0.0)) >= 0.75 for item in metadata
+        ], dtype=bool)
+        non_crash = sum(item.get("termination_reason") != "cart_limit_streak" for item in metadata)
+        histogram, _edges = np.histogram(actions, bins=10, range=(-max_action, max_action))
+        return {
+            "size": len(self.buffer),
+            "action_histogram": histogram.tolist(),
+            "saturation_fraction": float(np.mean(np.abs(actions) >= 0.95 * max_action)),
+            "episode_mode_distribution": mode_counts,
+            "reward_mean": float(np.mean(rewards)),
+            "reward_min": float(np.min(rewards)),
+            "reward_max": float(np.max(rewards)),
+            "termination_reasons": reason_counts,
+            "capture_fraction": float(np.mean(capture_flags)),
+            "near_capture_fraction": float(np.mean(near_capture_flags.astype(float))),
+            "target_state_coverage": float(np.mean(near_capture_flags | capture_flags.astype(bool))),
+            "non_crash_transitions": int(non_crash),
+        }
+
+    @staticmethod
+    def _count_metadata(metadata, key):
+        counts = {}
+        for item in metadata:
+            value = item.get(key)
+            if value is not None:
+                counts[value] = counts.get(value, 0) + 1
+        return counts
+
+    def count_non_crash_transitions(self):
+        return sum(
+            entry[7].get("termination_reason") != "cart_limit_streak"
+            for entry in self.buffer
+        )
 
     def __len__(self):
         return len(self.buffer)
 
 
-class TriplePendulumTrainer:
+class PendulumTrainer:
     EPISODE_MODES = CONFIG_EPISODE_MODES
 
     def __init__(self, cfg):
@@ -58,7 +137,7 @@ class TriplePendulumTrainer:
         self.config = cfg
         self.max_action = cfg["max_action"]
         self.reward_manager = RewardManager(cfg)
-        self.env = TriplePendulumEnv(
+        self.env = PendulumEnv(
             reward_manager=self.reward_manager,
             render_mode=None,
             num_nodes=cfg["num_nodes"],
@@ -70,20 +149,20 @@ class TriplePendulumTrainer:
         self.state_dim = len(initial_state)
         self.action_dim = 1
 
-        self.actor_model = TriplePendulumActor(
+        self.actor_model = PendulumActor(
             self.state_dim,
             self.action_dim,
             cfg["hidden_dim"],
             self.max_action,
         )
-        self.actor_target = TriplePendulumActor(
+        self.actor_target = PendulumActor(
             self.state_dim,
             self.action_dim,
             cfg["hidden_dim"],
             self.max_action,
         )
-        self.critic_model = TriplePendulumCritic(self.state_dim, self.action_dim, cfg["hidden_dim"])
-        self.critic_target = TriplePendulumCritic(self.state_dim, self.action_dim, cfg["hidden_dim"])
+        self.critic_model = PendulumCritic(self.state_dim, self.action_dim, cfg["hidden_dim"])
+        self.critic_target = PendulumCritic(self.state_dim, self.action_dim, cfg["hidden_dim"])
         self.actor_target.load_state_dict(self.actor_model.state_dict())
         self.critic_target.load_state_dict(self.critic_model.state_dict())
 
@@ -224,7 +303,21 @@ class TriplePendulumTrainer:
             components["transition_reward"] = 0.0
             components["pre_switch_reward_weight"] = 1.0
 
-            self.memory.push(state, action, reward, next_state, terminated)
+            self.memory.push(
+                state,
+                action,
+                reward,
+                next_state,
+                terminated,
+                truncated,
+                metadata={
+                    "episode_mode": selected_mode,
+                    "termination_reason": info["termination_reason"],
+                    "capture_started": bool(info["capture_started"]),
+                    "target_score": float(info["target_score"]),
+                    "hit_cart_limit": bool(info["hit_cart_limit"]),
+                },
+            )
             self.total_env_steps += 1
             action_values.append(action)
             episode_reward += reward
@@ -402,30 +495,24 @@ class TriplePendulumTrainer:
         return train_every <= 1 or self.total_env_steps % train_every == 0
 
     def update_networks(self):
-        states, actions, rewards, next_states, dones = self.memory.sample(self.config["batch_size"])
+        states, actions, rewards, next_states, terminated, truncated, bootstrap_masks = self.memory.sample(self.config["batch_size"])
         states_tensor = torch.FloatTensor(states)
         actions_tensor = torch.FloatTensor(actions)
         rewards_tensor = torch.FloatTensor(rewards).unsqueeze(-1)
         next_states_tensor = torch.FloatTensor(next_states)
-        dones_tensor = torch.FloatTensor(dones).unsqueeze(-1)
+        bootstrap_masks_tensor = torch.FloatTensor(bootstrap_masks).unsqueeze(-1)
 
         self.total_it += 1
         with torch.no_grad():
-            noise = torch.randn_like(actions_tensor) * self.config["policy_noise"]
-            noise = noise.clamp(
-                -self.config["noise_clip"],
-                self.config["noise_clip"],
+            td_targets = self._compute_td_targets(
+                rewards_tensor,
+                next_states_tensor,
+                actions_tensor,
+                bootstrap_masks_tensor,
             )
-            next_actions = (self.actor_target(next_states_tensor) + noise).clamp(
-                -self.max_action,
-                self.max_action,
-            )
-            target_q1, target_q2 = self.critic_target(next_states_tensor, next_actions)
-            target_q = torch.min(target_q1, target_q2)
-            td_targets = rewards_tensor + self.config["gamma"] * (1 - dones_tensor) * target_q
 
-        current_q1, current_q2 = self.critic_model(states_tensor, actions_tensor)
-        critic_loss = F.mse_loss(current_q1, td_targets) + F.mse_loss(current_q2, td_targets)
+        current_primary, current_secondary = self.critic_model(states_tensor, actions_tensor)
+        critic_loss = F.mse_loss(current_primary, td_targets) + F.mse_loss(current_secondary, td_targets)
         if not torch.isfinite(critic_loss):
             raise FloatingPointError(f"critic loss is non-finite at update {self.total_it}")
         self.critic_optimizer.zero_grad()
@@ -434,9 +521,13 @@ class TriplePendulumTrainer:
         self.critic_optimizer.step()
 
         actor_loss_value = 0.0
-        if self.total_it % self.config["policy_delay"] == 0:
+        can_update_actor = (
+            self.memory.count_non_crash_transitions()
+            >= self.config["min_non_crash_transitions_for_actor_update"]
+        )
+        if self.total_it % self.config["policy_delay"] == 0 and can_update_actor:
             actor_actions = self.actor_model(states_tensor)
-            actor_loss = -self.critic_model.q1_value(states_tensor, actor_actions).mean()
+            actor_loss = -self.critic_model.primary_value(states_tensor, actor_actions).mean()
             if not torch.isfinite(actor_loss):
                 raise FloatingPointError(f"actor loss is non-finite at update {self.total_it}")
             self.actor_optimizer.zero_grad()
@@ -451,6 +542,62 @@ class TriplePendulumTrainer:
         self.metrics.add_metric("critic_loss", critic_loss.item())
         self.metrics.add_metric("actor_loss", actor_loss_value)
         return {"critic_loss": critic_loss.item(), "actor_loss": actor_loss_value}
+
+    def replay_diagnostics(self):
+        return self.memory.diagnostics(max_action=self.max_action)
+
+    def prefill_replay_buffer(self, *, strategy, num_steps, episode_mode="down_to_up", seed=0):
+        if strategy not in ("random_safe", "sinus"):
+            raise ValueError(f"unknown replay prefill strategy: {strategy}")
+        if not isinstance(num_steps, int) or isinstance(num_steps, bool) or num_steps <= 0:
+            raise ValueError(f"num_steps must be a positive integer, got {num_steps!r}")
+        rng = np.random.default_rng(seed)
+        state = self.env.reset(episode_mode=episode_mode, seed=seed)
+        for step in range(num_steps):
+            if strategy == "random_safe":
+                action = float(rng.uniform(-0.5 * self.max_action, 0.5 * self.max_action))
+            else:
+                action = self._swing_exploration_action(
+                    step,
+                    float(self.config["swing_up_exploration_period_min"]),
+                    0.0,
+                )
+                action = float(np.clip(action, -self.max_action, self.max_action))
+            next_state, reward, terminated, truncated, info = self.env.step(action)
+            self.memory.push(
+                state,
+                action,
+                reward,
+                next_state,
+                terminated,
+                truncated,
+                metadata={
+                    "episode_mode": episode_mode,
+                    "termination_reason": info["termination_reason"],
+                    "capture_started": bool(info["capture_started"]),
+                    "target_score": float(info["target_score"]),
+                    "hit_cart_limit": bool(info["hit_cart_limit"]),
+                    "prefill_strategy": strategy,
+                },
+            )
+            self.total_env_steps += 1
+            state = next_state
+            if terminated or truncated:
+                state = self.env.reset(episode_mode=episode_mode, seed=seed + step + 1)
+
+    def _compute_td_targets(self, rewards_tensor, next_states_tensor, actions_tensor, bootstrap_masks_tensor):
+        noise = torch.randn_like(actions_tensor) * self.config["policy_noise"]
+        noise = noise.clamp(
+            -self.config["noise_clip"],
+            self.config["noise_clip"],
+        )
+        next_actions = (self.actor_target(next_states_tensor) + noise).clamp(
+            -self.max_action,
+            self.max_action,
+        )
+        target_primary, target_secondary = self.critic_target(next_states_tensor, next_actions)
+        target_value = torch.min(target_primary, target_secondary)
+        return rewards_tensor + self.config["gamma"] * bootstrap_masks_tensor * target_value
 
     def _polyak_update(self, online_model, target_model):
         tau = self.config["polyak_tau"]
@@ -556,7 +703,7 @@ class TriplePendulumTrainer:
             "total_env_steps": self.total_env_steps,
             "interrupted": interrupted,
             "hidden_dim": self.config["hidden_dim"],
-            "model_version": 3,
+            "model_version": 4,
         }
         with open(path + "_metadata.json", "w", encoding="utf-8") as metadata_file:
             json.dump(metadata, metadata_file, indent=2)
@@ -564,13 +711,6 @@ class TriplePendulumTrainer:
     def load_models(self):
         metadata_path = f"{MODEL_LOAD_PREFIX}_metadata.json"
         if not os.path.exists(metadata_path):
-            legacy_metadata_path = "models/checkpoint_metadata.json"
-            if os.path.exists(legacy_metadata_path):
-                raise FileNotFoundError(
-                    f"load_models=True but {metadata_path} is missing. "
-                    f"Legacy weights exist at models/checkpoint_*.pth; "
-                    f"copy them to {MODEL_LOAD_PREFIX}_*.pth or set load_models=False"
-                )
             raise FileNotFoundError(
                 f"load_models=True but saved model metadata is missing: {metadata_path}"
             )
@@ -581,7 +721,7 @@ class TriplePendulumTrainer:
             "state_dim": self.state_dim,
             "action_dim": self.action_dim,
             "hidden_dim": self.config["hidden_dim"],
-            "model_version": 3,
+            "model_version": 4,
         }
         missing_keys = sorted(set(expected) - set(metadata))
         if missing_keys:
@@ -601,5 +741,5 @@ class TriplePendulumTrainer:
 
 
 if __name__ == "__main__":
-    trainer = TriplePendulumTrainer(config)
+    trainer = PendulumTrainer(config)
     trainer.train()

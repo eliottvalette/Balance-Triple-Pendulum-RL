@@ -16,7 +16,7 @@ config = {
     'buffer_capacity': 10_000,
     'load_models': True,
     'num_nodes': 2,
-    'gravity': 9.81,
+    'gravity': 0.31,
     'friction_coefficient': 0.1,
     'max_action': 0.5,
     'exploration_noise': 0.10,
@@ -36,8 +36,8 @@ config = {
     'initial_angle_noise': 0.1122,
     'initial_velocity_noise': 0.04,
     'episode_mode_probabilities': {
-        'down_to_up': 0.9,
-        'capture_vertical': 0.1,
+        'down_to_up': 0.5,
+        'capture_vertical': 0.5,
         'fold_to_up': 0.0,
         'up_to_fold': 0.0,
     },
@@ -63,14 +63,15 @@ config = {
     'capture_angular_velocity_noise': 2.0,
     'down_angle_noise': 0.1122,
     'cart_failure_penalty': -50.0,
-    'success_bonus': 100.0,
     'capture_entry_bonus': 5.0,
     'swing_up_energy_progress_weight': 6.0,
     'swing_up_height_progress_weight': 2.0,
     'swing_up_cart_safety_weight': 1.0,
     'capture_allowed_angular_speed': 1.5,
     'hold_progress_bonus': 4.0,
-    'hold_required_steps': 120,
+    'swing_up_sinus_episode_probability_start': 0.8,
+    'swing_up_sinus_episode_probability_end': 0.1,
+    'swing_up_sinus_episode_decay_episodes': 3000,
     'render_training': True,
     'render_every_episodes': 50,
     'render_first_episode': True,
@@ -101,10 +102,13 @@ def validate_config(cfg):
         'transition_switch_step_min', 'transition_switch_step_max',
         'capture_angle_noise',
         'capture_cart_velocity_noise', 'capture_angular_velocity_noise',
-        'down_angle_noise', 'cart_failure_penalty', 'success_bonus',
+        'down_angle_noise', 'cart_failure_penalty',
         'capture_entry_bonus', 'swing_up_energy_progress_weight',
         'swing_up_height_progress_weight', 'swing_up_cart_safety_weight',
-        'capture_allowed_angular_speed', 'hold_progress_bonus', 'hold_required_steps',
+        'capture_allowed_angular_speed', 'hold_progress_bonus',
+        'swing_up_sinus_episode_probability_start',
+        'swing_up_sinus_episode_probability_end',
+        'swing_up_sinus_episode_decay_episodes',
         'render_training', 'render_every_episodes', 'render_first_episode',
         'plot_config',
     }
@@ -118,7 +122,8 @@ def validate_config(cfg):
     positive_integer_keys = (
         'num_episodes', 'max_steps', 'batch_size', 'hidden_dim',
         'buffer_capacity', 'num_nodes', 'policy_delay', 'train_every_steps',
-        'updates_per_train', 'curriculum_window', 'hold_required_steps',
+        'updates_per_train', 'curriculum_window',
+        'swing_up_sinus_episode_decay_episodes',
     )
     for key in positive_integer_keys:
         value = cfg[key]
@@ -163,7 +168,7 @@ def validate_config(cfg):
         'swing_up_exploration_amplitude', 'swing_up_capture_noise', 'policy_noise',
         'noise_clip', 'initial_angle_noise', 'initial_velocity_noise',
         'capture_angle_noise', 'capture_cart_velocity_noise',
-        'capture_angular_velocity_noise', 'down_angle_noise', 'success_bonus',
+        'capture_angular_velocity_noise', 'down_angle_noise',
         'capture_entry_bonus', 'swing_up_energy_progress_weight',
         'swing_up_height_progress_weight', 'swing_up_cart_safety_weight',
         'hold_progress_bonus',
@@ -181,6 +186,19 @@ def validate_config(cfg):
         raise ValueError("swing_up_capture_score_threshold must be in (0, 1]")
     if not math.isfinite(cfg['cart_failure_penalty']) or cfg['cart_failure_penalty'] >= 0.0:
         raise ValueError("cart_failure_penalty must be finite and negative")
+
+    start_probability = cfg['swing_up_sinus_episode_probability_start']
+    end_probability = cfg['swing_up_sinus_episode_probability_end']
+    if not isinstance(start_probability, (int, float)) or not math.isfinite(start_probability):
+        raise ValueError("swing_up_sinus_episode_probability_start must be finite")
+    if not isinstance(end_probability, (int, float)) or not math.isfinite(end_probability):
+        raise ValueError("swing_up_sinus_episode_probability_end must be finite")
+    if not 0.0 <= end_probability <= start_probability <= 1.0:
+        raise ValueError(
+            "swing_up_sinus probabilities must satisfy "
+            "0 <= swing_up_sinus_episode_probability_end <= "
+            "swing_up_sinus_episode_probability_start <= 1"
+        )
 
     _validate_probability_map('episode_mode_probabilities', cfg['episode_mode_probabilities'], require_sum=True)
     minimums = _validate_probability_map(

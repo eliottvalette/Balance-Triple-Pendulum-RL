@@ -63,6 +63,7 @@ class TriplePendulumEnv:
         self.has_switched = False
         self.capture_started = False
         self.hold_streak = 0
+        self.success_achieved = False
         if self.reward_manager is not None:
             self.reward_manager.verify_cart_termination_is_suboptimal(
                 max_steps=self.max_steps,
@@ -265,6 +266,7 @@ class TriplePendulumEnv:
         self.previous_action = 0.0
         self.capture_started = not use_down_to_up
         self.hold_streak = 0
+        self.success_achieved = False
         return self.get_state(action=0.0, phase=self.current_phase)
 
     def _init_pygame(self):
@@ -362,7 +364,7 @@ class TriplePendulumEnv:
         phase_1 = float(phase == 1)
         initial_pose_down = float(self.initial_pose_mode == "down")
         capture_started = float(self.capture_started)
-        hold_progress = min(1.0, self.hold_streak / int(self.config['hold_required_steps']))
+        hold_progress = self.hold_streak / max(1, self.max_steps)
 
         max_height = self.arm_length * self.n
         phase1_end_y_error = max_height - end_node_y
@@ -520,8 +522,7 @@ class TriplePendulumEnv:
         reward = result.reward
         reward_components = dict(result.components)
 
-        success = result.success and not hit_cart_limit
-        terminated = bool(hit_cart_limit or success)
+        terminated = bool(hit_cart_limit)
         truncated = bool(self.num_steps >= self.max_steps and not terminated)
         if hit_cart_limit:
             reward = float(self.config['cart_failure_penalty'])
@@ -538,14 +539,14 @@ class TriplePendulumEnv:
             "switch_step": self.switch_step,
             "switched": switched,
             "capture_started": self.capture_started,
+            "success_achieved": self.success_achieved,
+            "entered_success": result.success,
             "reward_components": reward_components,
             "target_score": reward_components["target_score"],
             "in_target": reward_components["in_target"],
             "termination_reason": (
                 "cart_limit"
                 if hit_cart_limit
-                else "success"
-                if success
                 else "max_steps"
                 if truncated
                 else None
@@ -591,7 +592,7 @@ class TriplePendulumEnv:
         pygame.draw.rect(self.screen, self.TRACK_COLOR, (track_x, track_y, track_width, track_height))
 
         # dessiner un barre horizontale rouge qui indique le upright threshold
-        upright_threshold = self.reward_manager.max_height * self.reward_manager.threshold_ratio
+        upright_threshold = self.reward_manager.max_height - self.reward_manager.phase_1_height_tolerance
         upright_threshold_x, upright_threshold_y = self._convert_to_screen_coords(self.xmin, upright_threshold)
         pygame.draw.rect(self.screen, (255, 0, 0), (upright_threshold_x, upright_threshold_y, self.width, 1))
         

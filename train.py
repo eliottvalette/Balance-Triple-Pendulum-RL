@@ -114,6 +114,43 @@ class TriplePendulumTrainer:
             action += np.random.normal(0.0, noise_std)
         return float(np.clip(action, -self.max_action, self.max_action))
 
+    def _swing_exploration_action(self, step_index, swing_period, swing_phase):
+        return float(
+            self.config["swing_up_exploration_amplitude"]
+            * math.sin(2.0 * math.pi * step_index / swing_period + swing_phase)
+        )
+
+    def _swing_up_sinus_episode_probability(self, episode):
+        start = float(self.config["swing_up_sinus_episode_probability_start"])
+        end = float(self.config["swing_up_sinus_episode_probability_end"])
+        decay_episodes = int(self.config["swing_up_sinus_episode_decay_episodes"])
+        progress = min(1.0, episode / decay_episodes)
+        return start + (end - start) * progress
+
+    def _select_collection_action(
+        self,
+        state,
+        step_index,
+        capture_started,
+        initial_pose_mode,
+        swing_period,
+        swing_phase,
+        use_sinus_swing_exploration,
+    ):
+        if initial_pose_mode == "down" and not capture_started and use_sinus_swing_exploration:
+            action = self._swing_exploration_action(step_index, swing_period, swing_phase)
+            exploration_noise = self.config["swing_up_exploration_noise"]
+            if exploration_noise > 0.0:
+                action += np.random.normal(0.0, exploration_noise)
+            return float(np.clip(action, -self.max_action, self.max_action))
+        if initial_pose_mode == "down" and not capture_started:
+            return self.select_action(state, noise_std=self.config["swing_up_exploration_noise"])
+        if initial_pose_mode == "down":
+            noise_std = self.config["swing_up_capture_noise"]
+        else:
+            noise_std = self.config["exploration_noise"]
+        return self.select_action(state, noise_std=noise_std)
+
     def collect_trajectory(self, episode):
         selected_mode, mode_probabilities = self._select_episode_mode(episode)
         state = self.env.reset(episode_mode=selected_mode)
@@ -143,22 +180,30 @@ class TriplePendulumTrainer:
         )
         swing_phase = random.uniform(0.0, 2.0 * math.pi)
         capture_started = self.env.capture_started
+        swing_up_sinus_episode_probability = self._swing_up_sinus_episode_probability(episode)
+        if initial_pose_mode == "down":
+            swing_up_sinus_episode = (
+                random.random() < swing_up_sinus_episode_probability
+            )
+        else:
+            swing_up_sinus_episode = False
 
         for step_idx in range(self.config["max_steps"]):
-            if initial_pose_mode == "down":
-                noise_std = (
-                    self.config["swing_up_capture_noise"]
-                    if capture_started
-                    else self.config["swing_up_exploration_noise"]
-                )
+            if initial_pose_mode == "down" and not capture_started:
+                noise_std = self.config["swing_up_exploration_noise"]
+            elif initial_pose_mode == "down":
+                noise_std = self.config["swing_up_capture_noise"]
             else:
                 noise_std = self.config["exploration_noise"]
-            action = self.select_action(state, noise_std=noise_std)
-            if initial_pose_mode == "down" and not capture_started:
-                swing_action = self.config["swing_up_exploration_amplitude"] * math.sin(
-                    2.0 * math.pi * step_idx / swing_period + swing_phase
-                )
-                action = float(np.clip(action + swing_action, -self.max_action, self.max_action))
+            action = self._select_collection_action(
+                state,
+                step_idx,
+                capture_started,
+                initial_pose_mode,
+                swing_period,
+                swing_phase,
+                swing_up_sinus_episode,
+            )
             next_state, reward, terminated, truncated, info = self.env.step(action)
             stop_requested = False
             if should_render:
@@ -247,6 +292,8 @@ class TriplePendulumTrainer:
             "action_std": float(np.std(action_values)) if action_values else 0.0,
             "action_abs_mean": float(np.mean(np.abs(action_values))) if action_values else 0.0,
             "termination_reason": termination_reason or "none",
+            "swing_up_sinus_episode": float(swing_up_sinus_episode),
+            "swing_up_sinus_episode_probability": swing_up_sinus_episode_probability,
             "mode_probability_down_to_up": mode_probabilities["down_to_up"],
             "mode_probability_capture_vertical": mode_probabilities["capture_vertical"],
             "mode_probability_fold_to_up": mode_probabilities["fold_to_up"],
@@ -429,7 +476,9 @@ class TriplePendulumTrainer:
                         f"before={summary['hold_before_switch']:4.2f} | "
                         f"after={summary['hold_after_switch']:4.2f} | "
                         f"balanced={summary['balanced_hold']:4.2f} | "
-                        f"peak={summary['peak_target_score']:4.2f}"
+                        f"peak={summary['peak_target_score']:4.2f} | "
+                        f"sinus={int(summary['swing_up_sinus_episode'])} | "
+                        f"eps={summary['swing_up_sinus_episode_probability']:.2f}"
                     )
 
                 if episode % self.plot_frequency == self.plot_frequency - 1:
@@ -459,6 +508,8 @@ class TriplePendulumTrainer:
             "action_mean",
             "action_std",
             "action_abs_mean",
+            "swing_up_sinus_episode",
+            "swing_up_sinus_episode_probability",
             "mode_probability_down_to_up",
             "mode_probability_capture_vertical",
             "mode_probability_fold_to_up",

@@ -110,7 +110,6 @@ class MetricsTracker:
             'capture_entry_bonus',
             'hold_bonus',
             'hold_progress',
-            'success_bonus',
             'cart_failure_penalty',
             'transition_reward',
         ]
@@ -216,7 +215,6 @@ class MetricsTracker:
             'capture_quality',
             'capture_entry_bonus',
             'hold_bonus',
-            'success_bonus',
             'cart_failure_penalty',
             'transition_reward',
             'hold_before_switch',

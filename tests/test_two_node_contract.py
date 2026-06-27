@@ -6,7 +6,7 @@ import numpy as np
 
 from config import config, validate_config
 from metrics import MetricsTracker
-from reward import RewardManager
+from reward import RewardManager, RewardResult
 from train import ReplayBuffer, TriplePendulumTrainer
 from tp_env import TriplePendulumEnv
 
@@ -203,6 +203,40 @@ class RewardContractTests(unittest.TestCase):
                 gamma=invalid["gamma"],
             )
 
+    def test_hold_reward_is_paid_on_every_stable_target_step(self):
+        upright = physical_state(q1=math.pi / 2, q2=math.pi / 2)
+
+        first = self.manager.evaluate_transition(
+            upright,
+            upright,
+            action=0.0,
+            phase=1,
+            capture_started=True,
+            hold_streak=0,
+        )
+        second = self.manager.evaluate_transition(
+            upright,
+            upright,
+            action=0.0,
+            phase=1,
+            capture_started=True,
+            hold_streak=1,
+        )
+
+        self.assertFalse(first.success)
+        self.assertFalse(second.success)
+        self.assertGreater(first.components["hold_bonus"], 0.0)
+        self.assertEqual(first.components["hold_bonus"], second.components["hold_bonus"])
+        self.assertEqual(first.reward, second.reward)
+        self.assertNotIn("success_bonus", first.components)
+
+    def test_hold_threshold_config_is_not_required(self):
+        cfg = dict(config)
+        cfg.pop("hold_required_steps", None)
+        cfg.pop("success_bonus", None)
+
+        self.assertIs(validate_config(cfg), cfg)
+
 
 class TwoNodeEnvironmentTests(unittest.TestCase):
     def test_env_rejects_non_two_node_configuration(self):
@@ -262,6 +296,14 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         self.assertEqual(config["cart_failure_penalty"], reward)
         self.assertEqual("cart_limit", info["termination_reason"])
 
+    def test_config_rejects_invalid_sinus_probability_order(self):
+        invalid = dict(config)
+        invalid["swing_up_sinus_episode_probability_start"] = 0.2
+        invalid["swing_up_sinus_episode_probability_end"] = 0.8
+
+        with self.assertRaisesRegex(ValueError, "swing_up_sinus"):
+            validate_config(invalid)
+
     def test_default_training_probabilities_are_not_rewritten(self):
         cfg = dict(config)
         cfg["load_models"] = False
@@ -270,6 +312,130 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         probabilities = trainer._episode_mode_probabilities(episode=10_000)
 
         self.assertEqual(config["episode_mode_probabilities"], probabilities)
+
+    def test_swing_up_sinus_mode_uses_sinusoid_before_capture(self):
+        cfg = dict(config)
+        cfg["load_models"] = False
+        trainer = TriplePendulumTrainer(cfg)
+        with mock.patch.object(trainer, "select_action", return_value=-0.5) as actor_call:
+            actions = []
+            for step_index in range(120):
+                action = trainer._select_collection_action(
+                    np.zeros(trainer.state_dim),
+                    step_index,
+                    capture_started=False,
+                    initial_pose_mode="down",
+                    swing_period=60.0,
+                    swing_phase=0.0,
+                    use_sinus_swing_exploration=True,
+                )
+                actions.append(action)
+        actor_call.assert_not_called()
+        self.assertLess(min(actions), -0.1)
+        self.assertGreater(max(actions), 0.1)
+
+    def test_swing_up_actor_mode_uses_actor_before_capture(self):
+        cfg = dict(config)
+        cfg["load_models"] = False
+        trainer = TriplePendulumTrainer(cfg)
+        state = np.zeros(trainer.state_dim)
+        with mock.patch.object(trainer, "select_action", return_value=0.2) as actor_call:
+            action = trainer._select_collection_action(
+                state,
+                0,
+                capture_started=False,
+                initial_pose_mode="down",
+                swing_period=60.0,
+                swing_phase=0.0,
+                use_sinus_swing_exploration=False,
+            )
+        actor_call.assert_called_once_with(state, noise_std=config["swing_up_exploration_noise"])
+        self.assertEqual(0.2, action)
+
+    def test_swing_up_sinus_probability_decays_over_window(self):
+        cfg = dict(config)
+        cfg["load_models"] = False
+        trainer = TriplePendulumTrainer(cfg)
+        start = cfg["swing_up_sinus_episode_probability_start"]
+        end = cfg["swing_up_sinus_episode_probability_end"]
+        decay = cfg["swing_up_sinus_episode_decay_episodes"]
+
+        self.assertAlmostEqual(start, trainer._swing_up_sinus_episode_probability(0))
+        self.assertAlmostEqual(end, trainer._swing_up_sinus_episode_probability(decay))
+        self.assertAlmostEqual(end, trainer._swing_up_sinus_episode_probability(decay * 2))
+
+    def test_capture_phase_uses_actor_after_swing_up(self):
+        cfg = dict(config)
+        cfg["load_models"] = False
+        trainer = TriplePendulumTrainer(cfg)
+        state = np.zeros(trainer.state_dim)
+        with mock.patch.object(trainer, "select_action", return_value=0.2) as actor_call:
+            action = trainer._select_collection_action(
+                state,
+                0,
+                capture_started=True,
+                initial_pose_mode="down",
+                swing_period=60.0,
+                swing_phase=0.0,
+                use_sinus_swing_exploration=True,
+            )
+        actor_call.assert_called_once_with(state, noise_std=config["swing_up_capture_noise"])
+        self.assertEqual(0.2, action)
+
+    def test_stable_hold_does_not_terminate_episode(self):
+        env = TriplePendulumEnv(
+            reward_manager=RewardManager(config),
+            env_config=config,
+        )
+        env.reset(episode_mode="capture_vertical")
+        components = {
+            "reward": 0.0,
+            "target_score": 1.0,
+            "effective_target_score": 1.0,
+            "in_target": 1.0,
+            "end_y": 0.6,
+        }
+        env.reward_manager.evaluate_transition = mock.Mock(
+            side_effect=[
+                RewardResult(
+                    reward=1.0,
+                    components=dict(components),
+                    capture_started=True,
+                    hold_streak=1,
+                    success=False,
+                ),
+                RewardResult(
+                    reward=1.0,
+                    components=dict(components),
+                    capture_started=True,
+                    hold_streak=2,
+                    success=False,
+                ),
+                RewardResult(
+                    reward=1.0,
+                    components=dict(components),
+                    capture_started=True,
+                    hold_streak=3,
+                    success=False,
+                ),
+            ]
+        )
+        env.rhs = mock.Mock(return_value=np.zeros_like(env.current_state))
+
+        _state, _reward, terminated, truncated, info = env.step(0.0)
+        self.assertFalse(terminated)
+        self.assertFalse(info["entered_success"])
+
+        _state, reward, terminated, truncated, info = env.step(0.0)
+        self.assertFalse(terminated)
+        self.assertFalse(info["entered_success"])
+        self.assertFalse(env.success_achieved)
+        self.assertEqual(1.0, reward)
+
+        _state, _reward, terminated, truncated, info = env.step(0.0)
+        self.assertFalse(terminated)
+        self.assertFalse(info["entered_success"])
+        self.assertFalse(truncated)
 
 
 if __name__ == "__main__":

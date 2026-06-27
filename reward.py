@@ -66,8 +66,7 @@ class RewardManager:
         )
         next_capture_started = bool(capture_started or entered_capture)
         next_hold_streak = hold_streak + 1 if metrics["in_target"] else 0
-        hold_required = int(self.config["hold_required_steps"])
-        hold_progress = min(1.0, next_hold_streak / hold_required)
+        hold_progress = float(metrics["in_target"])
 
         previous_potential = self.swing_potential(previous_state)
         next_potential = self.swing_potential(next_state)
@@ -87,7 +86,7 @@ class RewardManager:
                 float(self.config["capture_entry_bonus"]) if entered_capture else 0.0
             )
             hold_bonus = (
-                float(self.config["hold_progress_bonus"]) * hold_progress
+                float(self.config["hold_progress_bonus"]) * capture_quality
                 if metrics["in_target"]
                 else 0.0
             )
@@ -97,10 +96,6 @@ class RewardManager:
             cart_score = self._cart_safety_score(float(next_state[0]))
             action_score = 0.0
             reward = potential_progress
-
-        success = bool(next_hold_streak >= hold_required)
-        if success:
-            reward += float(self.config["success_bonus"])
 
         components = {
             "reward": float(reward),
@@ -127,7 +122,6 @@ class RewardManager:
             "hold_bonus": hold_bonus,
             "hold_streak": float(next_hold_streak),
             "hold_progress": float(hold_progress),
-            "success_bonus": float(self.config["success_bonus"]) if success else 0.0,
             "phase": float(phase),
         }
         return RewardResult(
@@ -135,7 +129,7 @@ class RewardManager:
             components=components,
             capture_started=next_capture_started,
             hold_streak=next_hold_streak,
-            success=success,
+            success=False,
         )
 
     def swing_potential(self, physical_state: np.ndarray) -> float:

@@ -159,6 +159,19 @@ def summarize_episode(mode, episode_index, step_rows, total_reward, termination_
     return summary
 
 
+def swing_up_sinus_episode_probability(episode_index):
+    start = float(config["swing_up_sinus_episode_probability_start"])
+    end = float(config["swing_up_sinus_episode_probability_end"])
+    decay_episodes = int(config["swing_up_sinus_episode_decay_episodes"])
+    progress = min(1.0, episode_index / decay_episodes)
+    return start + (end - start) * progress
+
+
+def use_sinus_swing_episode(episode_index, seed):
+    episode_random = random.Random(seed)
+    return episode_random.random() < swing_up_sinus_episode_probability(episode_index)
+
+
 def run_episode(actor, mode, episode_index, seed, noise_std, use_training_exploration):
     seed_everything(seed)
     reward_manager = RewardManager(config)
@@ -178,23 +191,26 @@ def run_episode(actor, mode, episode_index, seed, noise_std, use_training_explor
         config["swing_up_exploration_period_max"],
     )
     swing_phase = random.uniform(0.0, 2.0 * math.pi)
-    capture_started = False
+    capture_started = env.capture_started
+    sinus_swing_episode = (
+        mode == "down_to_up"
+        and use_training_exploration
+        and use_sinus_swing_episode(episode_index, seed)
+    )
 
     for step_idx in range(config["max_steps"]):
-        action = select_action(actor, state, config["max_action"], noise_std)
-        if mode == "down_to_up" and use_training_exploration and not capture_started:
-            swing_action = config["swing_up_exploration_amplitude"] * math.sin(
+        if sinus_swing_episode and not capture_started:
+            action = config["swing_up_exploration_amplitude"] * math.sin(
                 2.0 * math.pi * step_idx / swing_period + swing_phase
             )
-            action = float(np.clip(action + swing_action, -config["max_action"], config["max_action"]))
+            if config["swing_up_exploration_noise"] > 0.0:
+                action += float(np.random.normal(0.0, config["swing_up_exploration_noise"]))
+            action = float(np.clip(action, -config["max_action"], config["max_action"]))
+        else:
+            action = select_action(actor, state, config["max_action"], noise_std)
         next_state, reward, terminated, truncated, info = env.step(action)
         components = info["reward_components"]
-        if (
-            mode == "down_to_up"
-            and not capture_started
-            and float(info["target_score"]) >= config["swing_up_capture_score_threshold"]
-        ):
-            capture_started = True
+        capture_started = bool(info["capture_started"])
         phys = physical_metrics(env)
         row = {
             "mode": mode,

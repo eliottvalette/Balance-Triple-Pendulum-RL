@@ -16,7 +16,7 @@ config = {
     'buffer_capacity': 10_000,
     'load_models': True,
     'num_nodes': 2,
-    'gravity': 1.80,
+    'gravity': 0.1,
     'friction_coefficient': 0.1,
     'max_action': 0.5,
     'exploration_noise': 0.10,
@@ -36,8 +36,8 @@ config = {
     'initial_angle_noise': 0.1122,
     'initial_velocity_noise': 0.04,
     'episode_mode_probabilities': {
-        'down_to_up': 0.95,
-        'capture_vertical': 0.05,
+        'down_to_up': 0.4,
+        'capture_vertical': 0.6,
         'fold_to_up': 0.0,
         'up_to_fold': 0.0,
     },
@@ -58,21 +58,28 @@ config = {
     },
     'transition_switch_step_min': 50,
     'transition_switch_step_max': 150,
-    'capture_angle_noise': 0.18,
-    'capture_cart_velocity_noise': 0.05,
-    'capture_angular_velocity_noise': 2.0,
-    'down_angle_noise': 0.1122,
+    'capture_angle_noise': 0.06,
+    'capture_cart_velocity_noise': 0.02,
+    'capture_angular_velocity_noise': 0.3,
+    'down_angle_noise': 0.25,
     'cart_failure_penalty': -100.0,
+    'cart_limit_step_penalty': -5.0,
+    'cart_limit_proximity_penalty': 2.0,
+    'cart_limit_termination_steps': 50,
     'capture_entry_bonus': 5.0,
     'swing_up_energy_progress_weight': 6.0,
     'swing_up_height_progress_weight': 2.0,
     'swing_up_cart_safety_weight': 1.0,
     'capture_allowed_angular_speed': 1.5,
-    'hold_progress_bonus': 4.0,
-    'swing_up_sinus_episode_probability_start': 0.3,
-    'swing_up_sinus_episode_probability_end': 0.01,
+    'capture_quality_bonus': 0.2,
+    'capture_drop_penalty': -100.0,
+    'capture_drop_target_score_threshold': 0.5,
+    'capture_drop_grace_steps': 20,
+    'hold_progress_bonus': 100.0,
+    'swing_up_sinus_episode_probability_start': 0.6,
+    'swing_up_sinus_episode_probability_end': 0.1,
     'swing_up_sinus_episode_decay_episodes': 2000,
-    'render_training': True,
+    'render_training': False,
     'render_every_episodes': 50,
     'render_first_episode': True,
     # Options de visualisation et de plots
@@ -102,10 +109,13 @@ def validate_config(cfg):
         'transition_switch_step_min', 'transition_switch_step_max',
         'capture_angle_noise',
         'capture_cart_velocity_noise', 'capture_angular_velocity_noise',
-        'down_angle_noise', 'cart_failure_penalty',
+        'down_angle_noise', 'cart_failure_penalty', 'cart_limit_step_penalty',
+        'cart_limit_proximity_penalty', 'cart_limit_termination_steps',
         'capture_entry_bonus', 'swing_up_energy_progress_weight',
         'swing_up_height_progress_weight', 'swing_up_cart_safety_weight',
-        'capture_allowed_angular_speed', 'hold_progress_bonus',
+        'capture_allowed_angular_speed', 'capture_quality_bonus', 'capture_drop_penalty',
+        'capture_drop_target_score_threshold', 'capture_drop_grace_steps',
+        'hold_progress_bonus',
         'swing_up_sinus_episode_probability_start',
         'swing_up_sinus_episode_probability_end',
         'swing_up_sinus_episode_decay_episodes',
@@ -122,7 +132,8 @@ def validate_config(cfg):
     positive_integer_keys = (
         'num_episodes', 'max_steps', 'batch_size', 'hidden_dim',
         'buffer_capacity', 'num_nodes', 'policy_delay', 'train_every_steps',
-        'updates_per_train', 'curriculum_window',
+        'updates_per_train', 'curriculum_window', 'cart_limit_termination_steps',
+        'capture_drop_grace_steps',
         'swing_up_sinus_episode_decay_episodes',
     )
     for key in positive_integer_keys:
@@ -171,7 +182,8 @@ def validate_config(cfg):
         'capture_angular_velocity_noise', 'down_angle_noise',
         'capture_entry_bonus', 'swing_up_energy_progress_weight',
         'swing_up_height_progress_weight', 'swing_up_cart_safety_weight',
-        'hold_progress_bonus',
+        'capture_quality_bonus',
+        'hold_progress_bonus', 'cart_limit_proximity_penalty',
     )
     for key in nonnegative_keys:
         value = cfg[key]
@@ -186,6 +198,13 @@ def validate_config(cfg):
         raise ValueError("swing_up_capture_score_threshold must be in (0, 1]")
     if not math.isfinite(cfg['cart_failure_penalty']) or cfg['cart_failure_penalty'] >= 0.0:
         raise ValueError("cart_failure_penalty must be finite and negative")
+    if not math.isfinite(cfg['cart_limit_step_penalty']) or cfg['cart_limit_step_penalty'] >= 0.0:
+        raise ValueError("cart_limit_step_penalty must be finite and negative")
+    if not math.isfinite(cfg['capture_drop_penalty']) or cfg['capture_drop_penalty'] >= 0.0:
+        raise ValueError("capture_drop_penalty must be finite and negative")
+    threshold = cfg['capture_drop_target_score_threshold']
+    if not isinstance(threshold, (int, float)) or not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+        raise ValueError("capture_drop_target_score_threshold must be in [0, 1]")
 
     start_probability = cfg['swing_up_sinus_episode_probability_start']
     end_probability = cfg['swing_up_sinus_episode_probability_end']

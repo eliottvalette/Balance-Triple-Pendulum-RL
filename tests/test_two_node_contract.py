@@ -203,7 +203,7 @@ class RewardContractTests(unittest.TestCase):
                 gamma=invalid["gamma"],
             )
 
-    def test_hold_reward_is_paid_on_every_stable_target_step(self):
+    def test_hold_reward_tracks_progress_without_discrete_success_bonus(self):
         upright = physical_state(q1=math.pi / 2, q2=math.pi / 2)
 
         first = self.manager.evaluate_transition(
@@ -226,9 +226,44 @@ class RewardContractTests(unittest.TestCase):
         self.assertFalse(first.success)
         self.assertFalse(second.success)
         self.assertGreater(first.components["hold_bonus"], 0.0)
-        self.assertEqual(first.components["hold_bonus"], second.components["hold_bonus"])
-        self.assertEqual(first.reward, second.reward)
+        self.assertGreater(second.components["hold_progress"], first.components["hold_progress"])
+        self.assertGreater(second.components["hold_progress_delta"], 0.0)
         self.assertNotIn("success_bonus", first.components)
+
+    def test_losing_target_removes_accumulated_hold_progress_reward(self):
+        upright = physical_state(q1=math.pi / 2, q2=math.pi / 2)
+        bottom = physical_state()
+
+        result = self.manager.evaluate_transition(
+            upright,
+            bottom,
+            action=0.0,
+            phase=1,
+            capture_started=True,
+            hold_streak=100,
+        )
+
+        self.assertEqual(0, result.hold_streak)
+        self.assertLess(result.components["hold_progress_delta"], 0.0)
+        self.assertLess(result.components["hold_bonus"], 0.0)
+        self.assertLess(result.reward, 0.0)
+
+    def test_capture_quality_gives_small_dense_reward_without_hold(self):
+        near_target = physical_state(q1=math.pi / 2, q2=math.pi / 2, u1=4.0, u2=4.0)
+
+        result = self.manager.evaluate_transition(
+            near_target,
+            near_target,
+            action=0.0,
+            phase=1,
+            capture_started=True,
+            hold_streak=0,
+        )
+
+        self.assertFalse(result.components["in_target"])
+        self.assertGreater(result.components["capture_quality_bonus"], 0.0)
+        self.assertLess(result.components["capture_quality_bonus"], 1.0)
+        self.assertEqual(0.0, result.components["hold_bonus"])
 
     def test_hold_threshold_config_is_not_required(self):
         cfg = dict(config)
@@ -278,7 +313,7 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         self.assertTrue(truncated)
         self.assertEqual("max_steps", info["termination_reason"])
 
-    def test_cart_limit_is_terminal_with_the_proven_penalty(self):
+    def test_cart_limit_is_penalized_without_immediate_termination(self):
         env = TriplePendulumEnv(
             reward_manager=RewardManager(config),
             env_config=config,
@@ -291,10 +326,83 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
 
         _state, reward, terminated, truncated, info = env.step(0.0)
 
+        self.assertFalse(terminated)
+        self.assertFalse(truncated)
+        self.assertTrue(info["hit_cart_limit"])
+        self.assertEqual(1, info["cart_limit_streak"])
+        self.assertLess(reward, 0.0)
+        self.assertLess(info["reward_components"]["cart_limit_step_penalty"], 0.0)
+        self.assertIsNone(info["termination_reason"])
+
+    def test_cart_limit_streak_eventually_terminates(self):
+        custom = dict(config)
+        custom["cart_limit_termination_steps"] = 2
+        env = TriplePendulumEnv(
+            reward_manager=RewardManager(custom),
+            env_config=custom,
+        )
+        env.reset(episode_mode="down_to_up")
+        env.current_state[0] = 1.70
+        derivative = np.zeros_like(env.current_state)
+        derivative[0] = 20.0
+        env.rhs = mock.Mock(return_value=derivative)
+
+        _state, _reward, terminated, truncated, info = env.step(0.0)
+        self.assertFalse(terminated)
+        self.assertFalse(truncated)
+
+        _state, reward, terminated, truncated, info = env.step(0.0)
         self.assertTrue(terminated)
         self.assertFalse(truncated)
-        self.assertEqual(config["cart_failure_penalty"], reward)
-        self.assertEqual("cart_limit", info["termination_reason"])
+        self.assertEqual("cart_limit_streak", info["termination_reason"])
+        self.assertLessEqual(
+            info["reward_components"]["cart_failure_penalty"],
+            custom["cart_failure_penalty"],
+        )
+        self.assertLess(reward, custom["cart_limit_step_penalty"])
+
+    def test_capture_vertical_drop_penalty_is_paid_once(self):
+        custom = dict(config)
+        custom["capture_drop_grace_steps"] = 1
+        env = TriplePendulumEnv(
+            reward_manager=RewardManager(custom),
+            env_config=custom,
+        )
+        env.reset(episode_mode="capture_vertical")
+        env.current_state[1] = -math.pi / 2
+        env.current_state[2] = -math.pi / 2
+        env.rhs = mock.Mock(return_value=np.zeros_like(env.current_state))
+
+        _state, _warmup_reward, _warmup_terminated, _truncated, warmup_info = env.step(0.0)
+        _state, first_reward, first_terminated, _truncated, first_info = env.step(0.0)
+        _state, second_reward, second_terminated, _truncated, second_info = env.step(0.0)
+
+        self.assertFalse(warmup_info["capture_drop"])
+        self.assertFalse(first_terminated)
+        self.assertFalse(second_terminated)
+        self.assertTrue(first_info["capture_drop"])
+        self.assertFalse(second_info["capture_drop"])
+        self.assertEqual(
+            custom["capture_drop_penalty"],
+            first_info["reward_components"]["capture_drop_penalty"],
+        )
+        self.assertEqual(0.0, second_info["reward_components"]["capture_drop_penalty"])
+        self.assertLess(first_reward, second_reward)
+
+    def test_down_to_up_does_not_get_capture_drop_penalty(self):
+        custom = dict(config)
+        custom["capture_drop_grace_steps"] = 1
+        env = TriplePendulumEnv(
+            reward_manager=RewardManager(custom),
+            env_config=custom,
+        )
+        env.reset(episode_mode="down_to_up")
+        env.rhs = mock.Mock(return_value=np.zeros_like(env.current_state))
+
+        _state, _reward, _terminated, _truncated, info = env.step(0.0)
+
+        self.assertFalse(info["capture_drop"])
+        self.assertEqual(0.0, info["reward_components"]["capture_drop_penalty"])
 
     def test_config_rejects_invalid_sinus_probability_order(self):
         invalid = dict(config)

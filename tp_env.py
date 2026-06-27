@@ -63,6 +63,8 @@ class TriplePendulumEnv:
         self.has_switched = False
         self.capture_started = False
         self.hold_streak = 0
+        self.cart_limit_streak = 0
+        self.capture_drop_triggered = False
         self.success_achieved = False
         if self.reward_manager is not None:
             self.reward_manager.verify_cart_termination_is_suboptimal(
@@ -266,6 +268,8 @@ class TriplePendulumEnv:
         self.previous_action = 0.0
         self.capture_started = not use_down_to_up
         self.hold_streak = 0
+        self.cart_limit_streak = 0
+        self.capture_drop_triggered = False
         self.success_achieved = False
         return self.get_state(action=0.0, phase=self.current_phase)
 
@@ -522,14 +526,47 @@ class TriplePendulumEnv:
         reward = result.reward
         reward_components = dict(result.components)
 
-        terminated = bool(hit_cart_limit)
+        capture_drop_penalty = 0.0
+        capture_drop = bool(
+            self.initial_pose_mode == "capture"
+            and not self.capture_drop_triggered
+            and self.num_steps > int(self.config['capture_drop_grace_steps'])
+            and reward_components["target_score"]
+            < float(self.config['capture_drop_target_score_threshold'])
+        )
+        if capture_drop:
+            self.capture_drop_triggered = True
+            capture_drop_penalty = float(self.config['capture_drop_penalty'])
+            reward += capture_drop_penalty
+        reward_components['capture_drop_penalty'] = capture_drop_penalty
+
+        self.cart_limit_streak = self.cart_limit_streak + 1 if hit_cart_limit else 0
+        terminated = bool(
+            self.cart_limit_streak >= int(self.config['cart_limit_termination_steps'])
+        )
         truncated = bool(self.num_steps >= self.max_steps and not terminated)
+        cart_center_limit = self.xmax - self.cart_width / (2 * self.scale)
+        cart_limit_ratio = min(1.0, abs(float(next_state[0])) / cart_center_limit)
+        cart_proximity_penalty = (
+            -float(self.config['cart_limit_proximity_penalty']) * cart_limit_ratio**4
+        )
+        cart_step_penalty = (
+            float(self.config['cart_limit_step_penalty']) if hit_cart_limit else 0.0
+        )
+        cart_limit_penalty = cart_proximity_penalty + cart_step_penalty
+        reward += cart_limit_penalty
+        reward_components['cart_proximity_penalty'] = cart_proximity_penalty
+        reward_components['cart_limit_step_penalty'] = cart_step_penalty
         if hit_cart_limit:
-            reward = float(self.config['cart_failure_penalty'])
+            if terminated:
+                reward += float(self.config['cart_failure_penalty'])
+                reward_components['cart_failure_penalty'] = float(self.config['cart_failure_penalty'])
+            else:
+                reward_components['cart_failure_penalty'] = 0.0
             reward_components['reward'] = reward
-            reward_components['cart_failure_penalty'] = reward
         else:
             reward_components['cart_failure_penalty'] = 0.0
+            reward_components['reward'] = reward
 
         self.previous_action = action
         info = {
@@ -541,12 +578,15 @@ class TriplePendulumEnv:
             "capture_started": self.capture_started,
             "success_achieved": self.success_achieved,
             "entered_success": result.success,
+            "capture_drop": capture_drop,
+            "hit_cart_limit": hit_cart_limit,
+            "cart_limit_streak": self.cart_limit_streak,
             "reward_components": reward_components,
             "target_score": reward_components["target_score"],
             "in_target": reward_components["in_target"],
             "termination_reason": (
-                "cart_limit"
-                if hit_cart_limit
+                "cart_limit_streak"
+                if terminated
                 else "max_steps"
                 if truncated
                 else None

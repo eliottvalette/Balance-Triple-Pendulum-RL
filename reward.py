@@ -66,12 +66,15 @@ class RewardManager:
         )
         next_capture_started = bool(capture_started or entered_capture)
         next_hold_streak = hold_streak + 1 if metrics["in_target"] else 0
-        hold_progress = float(metrics["in_target"])
+        previous_hold_progress = self._hold_progress(hold_streak)
+        hold_progress = self._hold_progress(next_hold_streak)
+        hold_progress_delta = hold_progress - previous_hold_progress
 
         previous_potential = self.swing_potential(previous_state)
         next_potential = self.swing_potential(next_state)
         potential_progress = next_potential - previous_potential
         capture_quality = 0.0
+        capture_quality_bonus = 0.0
         capture_entry_bonus = 0.0
         hold_bonus = 0.0
 
@@ -82,15 +85,14 @@ class RewardManager:
             action_ratio = float(action) / float(self.config["max_action"])
             action_score = 1.0 / (1.0 + action_ratio**2)
             capture_quality = metrics["target_score"] * speed_score * cart_score * action_score
+            capture_quality_bonus = (
+                float(self.config["capture_quality_bonus"]) * capture_quality
+            )
             capture_entry_bonus = (
                 float(self.config["capture_entry_bonus"]) if entered_capture else 0.0
             )
-            hold_bonus = (
-                float(self.config["hold_progress_bonus"]) * capture_quality
-                if metrics["in_target"]
-                else 0.0
-            )
-            reward = capture_quality + capture_entry_bonus + hold_bonus
+            hold_bonus = float(self.config["hold_progress_bonus"]) * hold_progress_delta
+            reward = capture_quality_bonus + capture_entry_bonus + hold_bonus
         else:
             speed_score = 0.0
             cart_score = self._cart_safety_score(float(next_state[0]))
@@ -116,12 +118,14 @@ class RewardManager:
             "potential_score": next_potential,
             "potential_progress": potential_progress,
             "capture_quality": capture_quality,
+            "capture_quality_bonus": capture_quality_bonus,
             "capture_entry_bonus": capture_entry_bonus,
             "capture_speed_score": speed_score,
             "capture_action_score": action_score,
             "hold_bonus": hold_bonus,
             "hold_streak": float(next_hold_streak),
             "hold_progress": float(hold_progress),
+            "hold_progress_delta": float(hold_progress_delta),
             "phase": float(phase),
         }
         return RewardResult(
@@ -130,6 +134,14 @@ class RewardManager:
             capture_started=next_capture_started,
             hold_streak=next_hold_streak,
             success=False,
+        )
+
+    def _hold_progress(self, hold_streak: int) -> float:
+        if hold_streak <= 0:
+            return 0.0
+        episode_horizon = int(self.config["max_steps"])
+        return float(
+            np.log1p(hold_streak) / np.log1p(max(1, episode_horizon))
         )
 
     def swing_potential(self, physical_state: np.ndarray) -> float:

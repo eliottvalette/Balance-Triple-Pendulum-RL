@@ -1028,6 +1028,7 @@ class TrainerContractTests(unittest.TestCase):
             noise_clip=0.0,
             policy_delay=2,
             min_non_crash_transitions_for_actor_update=0,
+            min_near_capture_transitions_for_actor_update=0,
         )
         cfg.update(overrides)
         return cfg
@@ -1162,6 +1163,7 @@ class TrainerContractTests(unittest.TestCase):
         self.assertEqual({"down_to_up": 1, "capture_vertical": 1}, diagnostics["episode_mode_distribution"])
         self.assertEqual({"cart_limit_streak": 1}, diagnostics["termination_reasons"])
         self.assertEqual(1, diagnostics["non_crash_transitions"])
+        self.assertEqual(1, diagnostics["near_capture_non_crash_transitions"])
         self.assertGreater(diagnostics["saturation_fraction"], 0.0)
 
     def test_replay_buffer_can_be_seeded_with_sinus_exploration(self):
@@ -1194,6 +1196,38 @@ class TrainerContractTests(unittest.TestCase):
         self.assertEqual(0.0, result["actor_loss"])
         self.assertFalse(self._parameters_changed(actor_before, trainer.actor_model))
         self.assertTrue(self._parameters_changed(critic_before, trainer.critic_model))
+
+    def test_actor_update_can_require_near_capture_transitions(self):
+        trainer = PendulumTrainer(
+            self._trainer_config(
+                policy_delay=1,
+                min_near_capture_transitions_for_actor_update=10,
+            )
+        )
+        self._fill_replay(trainer, trainer.config["batch_size"])
+        actor_before = self._clone_parameters(trainer.actor_model)
+        critic_before = self._clone_parameters(trainer.critic_model)
+
+        result = trainer.update_networks()
+
+        self.assertEqual(0.0, result["actor_loss"])
+        self.assertFalse(self._parameters_changed(actor_before, trainer.actor_model))
+        self.assertTrue(self._parameters_changed(critic_before, trainer.critic_model))
+
+    def test_actor_update_runs_after_near_capture_gate_is_satisfied(self):
+        trainer = PendulumTrainer(
+            self._trainer_config(
+                policy_delay=1,
+                min_near_capture_transitions_for_actor_update=2,
+            )
+        )
+        self._fill_replay(trainer, trainer.config["batch_size"])
+        actor_before = self._clone_parameters(trainer.actor_model)
+
+        result = trainer.update_networks()
+
+        self.assertNotEqual(0.0, result["actor_loss"])
+        self.assertTrue(self._parameters_changed(actor_before, trainer.actor_model))
 
 
 if __name__ == "__main__":

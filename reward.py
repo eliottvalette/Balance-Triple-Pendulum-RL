@@ -59,6 +59,7 @@ class RewardManager:
         if hold_streak < 0:
             raise ValueError(f"hold_streak must be nonnegative, got {hold_streak}")
 
+        # Métriques de cible et détection de capture
         metrics = self._target_metrics(next_state, phase)
         entered_capture = bool(
             not capture_started
@@ -67,20 +68,25 @@ class RewardManager:
         )
         next_capture_started = bool(capture_started or entered_capture)
         next_hold_streak = hold_streak + 1 if metrics["in_target"] else 0
+
+        # Progression du maintien en cible
         previous_hold_progress = self._hold_progress(hold_streak)
         hold_progress = self._hold_progress(next_hold_streak)
         hold_progress_delta = hold_progress - previous_hold_progress
 
+        # Potentiel de swing-up (phase de lancement)
         previous_potential = self.swing_potential(previous_state)
         next_potential = self.swing_potential(next_state)
         potential_progress = (
             float(self.config["gamma"]) * next_potential - previous_potential
         )
+
         capture_quality = 0.0
         capture_quality_bonus = 0.0
         capture_entry_bonus = 0.0
         hold_bonus = 0.0
 
+        # Récompense de capture / stabilisation (après capture ou phase 2)
         if next_capture_started or phase == -1:
             speed_scale = float(self.config["capture_allowed_angular_speed"])
             speed_score = 1.0 / (1.0 + (metrics["angular_speed"] / speed_scale) ** 2)
@@ -97,11 +103,13 @@ class RewardManager:
             hold_bonus = float(self.config["hold_progress_bonus"]) * hold_progress_delta
             reward = capture_quality_bonus + capture_entry_bonus + hold_bonus
         else:
+            # Récompense potentielle pendant le swing-up
             speed_score = 0.0
             cart_score = self._cart_safety_score(float(next_state[0]))
             action_score = 0.0
             reward = potential_progress
 
+        # Journalisation des composantes pour le suivi et le rendu
         components = {
             "reward": float(reward),
             "swing_up_progress": float(potential_progress if not (next_capture_started or phase == -1) else 0.0),
@@ -154,12 +162,17 @@ class RewardManager:
         )
 
     def swing_potential(self, physical_state: np.ndarray) -> float:
+        """Potentiel de shaping pour le swing-up (énergie + hauteur, modulé par sécurité chariot)."""
         self._validate_physical_state(physical_state, "physical_state")
-        return float(
+        cart_safety = self._cart_safety_score(float(physical_state[0]))
+        swing_score = (
             self.config["swing_up_energy_progress_weight"] * self._energy_score(physical_state)
             + self.config["swing_up_height_progress_weight"] * self._height_score(physical_state)
-            + self.config["swing_up_cart_safety_weight"]
-            * self._cart_safety_score(float(physical_state[0]))
+        )
+        return float(
+            cart_safety * (
+                swing_score + self.config["swing_up_cart_safety_weight"]
+            )
         )
 
     def verify_cart_termination_is_suboptimal(
@@ -194,12 +207,14 @@ class RewardManager:
         return margins
 
     def _target_metrics(self, physical_state: np.ndarray, phase: int) -> dict[str, float | bool]:
+        # Extraction de l'état physique
         x, q1, q2, _x_dot, u1, u2, _force = physical_state[:7]
         _x1, y1, end_x, end_y = physical_state[7:11]
         end_vy = self.length * np.cos(q1) * u1 + self.length * np.cos(q2) * u2
         angular_speed = abs(u1) + abs(u2)
         end_x_error = end_x - x
 
+        # Phase 1 : pendule vertical au-dessus du chariot
         if phase == 1:
             height_error = self.max_height - end_y
             alignment_error = 1.0 - np.cos(q1 - q2)
@@ -213,6 +228,7 @@ class RewardManager:
                 and angular_speed < 3.0
             )
         else:
+            # Phase 2 : pendule replié sous le chariot
             y1_error = self.length - y1
             folded_error = 1.0 + np.cos(q1 - q2)
             target_score = np.exp(
@@ -239,6 +255,7 @@ class RewardManager:
         }
 
     def _mechanical_energy(self, physical_state: np.ndarray) -> float:
+        # Énergie cinétique et potentielle du système
         x, q1, q2, x_dot, u1, u2 = physical_state[:6]
         _x1, y1, _x2, y2 = physical_state[7:11]
         del x
@@ -253,6 +270,7 @@ class RewardManager:
         return float(kinetic + potential)
 
     def _energy_score(self, physical_state: np.ndarray) -> float:
+        # Score normalisé par rapport à l'énergie mécanique cible (vertical)
         gravity = float(self.config["gravity"])
         upright_energy = 3.0 * self.mass * gravity * self.length
         energy_span = 6.0 * self.mass * gravity * self.length
@@ -260,11 +278,13 @@ class RewardManager:
         return float(1.0 - np.clip(error_ratio, 0.0, 1.0))
 
     def _height_score(self, physical_state: np.ndarray) -> float:
+        # Hauteur normalisée de la masse terminale
         end_y = float(physical_state[10])
         normalized = (end_y + self.max_height) / (2.0 * self.max_height)
         return float(np.clip(normalized, 0.0, 1.0))
 
     def _cart_safety_score(self, cart_x: float) -> float:
+        # Pénalité douce quand le chariot s'approche des rails
         normalized = abs(cart_x) / self.cart_limit
         return float(np.clip(1.0 - normalized**2, 0.0, 1.0))
 

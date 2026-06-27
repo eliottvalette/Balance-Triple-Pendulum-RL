@@ -1,0 +1,23 @@
+{
+  "episodes": 20,
+  "max_steps": 200,
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+  ],
+  "policies": [
+    "zero_action",
+    "small_random",
+    "pd_upright",
+    "pd_cart_center",
+    "pd_upright_plus_cart_center"
+  ]
+}

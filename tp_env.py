@@ -115,6 +115,7 @@ class PendulumEnv:
         self._init_pygame()
 
     def _setup_symbolic_model(self):
+        # Référentiel inertiel et chariot
         inertial_frame = ReferenceFrame('I')
         origin = Point('O')
         origin.set_vel(inertial_frame, 0)
@@ -134,6 +135,7 @@ class PendulumEnv:
         forces = [(cart_point, force_cart + weight_cart + friction_cart)]
         kindiffs = [self.positions[0].diff(self.time) - self.velocities[0]]
 
+        # Chaîne de pendules articulés
         for i in range(self.n):
             pendulum_frame = inertial_frame.orientnew(f'B{i}', 'Axis', [self.positions[i + 1], inertial_frame.z])
             pendulum_frame.set_ang_vel(inertial_frame, self.velocities[i + 1] * inertial_frame.z)
@@ -157,6 +159,7 @@ class PendulumEnv:
         self.frstar = self.kane._form_frstar(particles)
 
     def _setup_numeric_evaluation(self):
+        # Valeurs numériques des paramètres physiques
         parameters = [self.gravity, self.masses[0]]
         self.parameter_vals = [float(self.config["gravity"]), self.cart_mass]
 
@@ -173,6 +176,7 @@ class PendulumEnv:
         dummy_dict = dict(zip(dynamic, dummy_symbols))
         kindiff_dict = self.kane.kindiffdict()
 
+        # Lambdas pour la résolution numérique M q̈ = F
         mass_matrix = self.kane.mass_matrix_full.subs(kindiff_dict).subs(dummy_dict)
         forcing_vector = self.kane.forcing_full.subs(kindiff_dict).subs(dummy_dict)
 
@@ -184,6 +188,7 @@ class PendulumEnv:
         self.num_args = len(dummy_symbols) + len(parameters)
 
     def rhs(self, state, time, args, controller=None):
+        """Résout M(q) q̈ = F(q, q̇, f) pour obtenir la dérivée d'état."""
         if controller is None:
             raise ValueError("controller is required")
         control_input = controller(state)
@@ -192,12 +197,14 @@ class PendulumEnv:
         return state_derivative
 
     def reset(self, phase=None, episode_mode=None, seed=None):
-        # Initialisation de l'état
+        # Graine aléatoire optionnelle
         if seed is not None:
             if not isinstance(seed, int) or isinstance(seed, bool):
                 raise ValueError(f"seed must be an integer, got {seed!r}")
             rd.seed(seed)
             np.random.seed(seed)
+
+        # Mode d'épisode et phase initiale
         position_initiale_chariot = 0.0
         if episode_mode not in (None, "down_to_up", "capture_vertical", "up_to_fold", "fold_to_up"):
             raise ValueError(f"unknown episode_mode: {episode_mode}")
@@ -217,6 +224,8 @@ class PendulumEnv:
         else:
             self.initial_phase = phase
         self.current_phase = self.initial_phase
+
+        # Instant de bascule entre phases
         if use_down_to_up or use_capture_vertical:
             self.switch_step = self.max_steps + 1
         elif episode_mode in ("up_to_fold", "fold_to_up"):
@@ -229,6 +238,7 @@ class PendulumEnv:
             self.switch_step = rd.randint(low, high)
         self.has_switched = False
 
+        # Angles et vitesses initiales selon le mode
         angle_noise = (
             self.config['down_angle_noise']
             if use_down_to_up
@@ -264,6 +274,8 @@ class PendulumEnv:
                 rd.uniform(-velocity_noise, velocity_noise)
                 for _ in range(len(self.velocities))
             ])
+
+        # Assemblage de l'état physique initial
         state = hstack((
             position_initiale_chariot,
             angles_initiaux,
@@ -347,6 +359,8 @@ class PendulumEnv:
         base_result = self._calculate_base_state()
 
         adapted_state, position_x1, position_y1, position_x2, position_y2 = base_result
+
+        # Validation des entrées
         phase = self.current_phase if phase is None else phase
         if phase not in (-1, 1):
             raise ValueError(f"phase must be -1 or 1, got {phase}")
@@ -356,6 +370,7 @@ class PendulumEnv:
         if not np.isfinite(action):
             raise ValueError(f"action must be finite, got {action!r}")
 
+        # Coordonnées généralisées et cinématique cartésienne
         x = adapted_state[0]
         q1, q2 = adapted_state[1:3]
         x_dot, q1_dot, q2_dot = adapted_state[3:6]
@@ -371,6 +386,7 @@ class PendulumEnv:
         end_node_vx = vx2
         end_node_vy = vy2
 
+        # Contexte temporel et de phase
         normalized_steps = self.num_steps / max(1, self.max_steps)
         time_to_switch = (self.switch_step - self.num_steps) / max(1, self.max_steps)
         has_switched = float(self.has_switched)
@@ -379,6 +395,7 @@ class PendulumEnv:
         capture_started = float(self.capture_started)
         hold_progress = self.hold_streak / max(1, self.max_steps)
 
+        # Erreurs vers la cible (phase 1 = vertical, phase 2 = replié)
         max_height = self.arm_length * self.n
         phase1_end_y_error = max_height - end_node_y
         phase1_end_x_error = end_node_x - x
@@ -398,6 +415,7 @@ class PendulumEnv:
             active_x_error = phase2_end_x_error
             active_shape_error = phase2_fold_error
 
+        # Points cibles et écarts pour la phase active et la suivante
         target_velocity_norm = np.sqrt(end_node_vx**2 + end_node_vy**2)
         points = np.array([
             position_x1, position_y1,
@@ -409,6 +427,7 @@ class PendulumEnv:
         active_target_delta = active_target_points - points
         next_target_delta = next_target_points - points
 
+        # Vecteur d'observation normalisé pour le réseau
         return np.hstack((
             x, x_dot,
             np.sin(q1), np.cos(q1), q1_dot,
@@ -455,6 +474,7 @@ class PendulumEnv:
         if self.current_state is None:
             raise RuntimeError("step() called before reset()")
 
+        # Bascule automatique de phase au switch_step
         if phase is not None:
             if phase not in (-1, 1):
                 raise ValueError(f"phase must be -1 or 1, got {phase}")
@@ -466,6 +486,7 @@ class PendulumEnv:
             self.has_switched = True
             switched = True
 
+        # Validation de l'action
         action = float(action)
         max_action = float(self.config['max_action'])
         if not np.isfinite(action):
@@ -508,15 +529,17 @@ class PendulumEnv:
             next_state[0] = self.xmax - self.cart_width/(2*self.scale)
             next_state[num_joints] = 0  # Vitesse du chariot à zéro
         
+        # Amortissement numérique des vitesses angulaires
         if self.angular_velocity_damping > 0.0:
             damping_factor = np.exp(-self.angular_velocity_damping * self.dt)
             next_state[num_joints + 1:2 * num_joints] *= damping_factor
-        
+
         # Mise à jour de l'état et du temps
         self.current_state = next_state
         self.current_time += self.dt
-
         self.num_steps += 1
+
+        # Évaluation de la récompense principale
         physical_state = self.get_physical_state()
         result = self.reward_manager.evaluate_transition(
             previous_physical_state,
@@ -531,6 +554,7 @@ class PendulumEnv:
         reward = result.reward
         reward_components = dict(result.components)
 
+        # Pénalité si le pendule retombe après une capture verticale
         capture_drop_penalty = 0.0
         capture_drop = bool(
             self.initial_pose_mode == "capture"
@@ -545,11 +569,14 @@ class PendulumEnv:
             reward += capture_drop_penalty
         reward_components['capture_drop_penalty'] = capture_drop_penalty
 
+        # Conditions de fin d'épisode (rail ou horizon)
         self.cart_limit_streak = self.cart_limit_streak + 1 if hit_cart_limit else 0
         terminated = bool(
             self.cart_limit_streak >= int(self.config['cart_limit_termination_steps'])
         )
         truncated = bool(self.num_steps >= self.max_steps and not terminated)
+
+        # Pénalités de proximité et de contact avec les rails
         cart_center_limit = self.xmax - self.cart_width / (2 * self.scale)
         cart_limit_ratio = min(1.0, abs(float(next_state[0])) / cart_center_limit)
         cart_proximity_penalty = (
@@ -565,6 +592,30 @@ class PendulumEnv:
         reward_components['safety_penalty'] = (
             reward_components.get('safety_penalty', 0.0) + cart_limit_penalty
         )
+
+        # Régularisation de l'action (L2, variation, saturation)
+        action_ratio = action / max_action
+        previous_action_ratio = self.previous_action / max_action
+        action_l2_penalty = -float(self.config['action_l2_penalty']) * action_ratio**2
+        action_delta_penalty = (
+            -float(self.config['action_delta_penalty'])
+            * (action_ratio - previous_action_ratio) ** 2
+        )
+        saturation_penalty = (
+            -float(self.config['saturation_penalty'])
+            if abs(action) >= 0.95 * max_action
+            else 0.0
+        )
+        action_regularization_penalty = (
+            action_l2_penalty + action_delta_penalty + saturation_penalty
+        )
+        reward += action_regularization_penalty
+        reward_components['action_l2_penalty'] = action_l2_penalty
+        reward_components['action_delta_penalty'] = action_delta_penalty
+        reward_components['saturation_penalty'] = saturation_penalty
+        reward_components['action_regularization_penalty'] = action_regularization_penalty
+
+        # Pénalité terminale si le chariot reste bloqué sur le rail
         if hit_cart_limit:
             if terminated:
                 reward += float(self.config['cart_failure_penalty'])
@@ -584,6 +635,8 @@ class PendulumEnv:
             reward_components['reward'] = reward
 
         self.previous_action = action
+
+        # Métadonnées renvoyées à l'entraînement
         info = {
             "phase": self.current_phase,
             "initial_phase": self.initial_phase,
@@ -690,6 +743,7 @@ class PendulumEnv:
         
         # Afficher les infos de base
         time_text = self.font.render(f'time = {self.current_time:.2f}', True, self.TEXT_COLOR)
+        
         # Convertir la force en nombre à virgule flottante si c'est un tableau numpy
         force_value = float(self.applied_force) if isinstance(self.applied_force, np.ndarray) else self.applied_force
         force_text = self.font.render(f'force = {force_value:.2f}', True, self.TEXT_COLOR)
@@ -703,6 +757,7 @@ class PendulumEnv:
         
         # Afficher les composants de récompense si le reward_manager est disponible
         if self.reward_manager is not None:
+            
             # Calculer l'état une seule fois et l'utiliser pour tout le rendu
             base_state_result = self._calculate_base_state()
             
@@ -739,14 +794,17 @@ class PendulumEnv:
                 # Fond du conteneur avec bordure arrondie
                 # Créer une surface avec canal alpha
                 panel_surface = pygame.Surface((reward_panel_width, reward_panel_height), pygame.SRCALPHA)
+                
                 # Dessiner le fond semi-transparent
                 pygame.draw.rect(panel_surface, (230, 230, 235, 180), 
                                 pygame.Rect(0, 0, reward_panel_width, reward_panel_height),
                                 border_radius=10)
+                
                 # Dessiner la bordure semi-transparente
                 pygame.draw.rect(panel_surface, (200, 200, 205, 200), 
                                 pygame.Rect(0, 0, reward_panel_width, reward_panel_height),
                                 border_radius=10, width=2)
+                
                 # Appliquer la surface sur l'écran
                 self.screen.blit(panel_surface, (reward_panel_x, reward_panel_y))
                 

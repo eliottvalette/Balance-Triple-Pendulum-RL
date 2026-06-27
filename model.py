@@ -3,7 +3,7 @@ import torch.nn as nn
 
 
 class PendulumActor(nn.Module):
-    def __init__(self, state_dim, action_dim=1, hidden_dim=512, max_action=0.5):
+    def __init__(self, state_dim, action_dim=1, hidden_dim=512, max_action=1.0):
         super().__init__()
         self.max_action = max_action
         self.net = nn.Sequential(

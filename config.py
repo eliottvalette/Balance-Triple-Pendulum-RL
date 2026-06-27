@@ -14,9 +14,9 @@ config = {
     'batch_size': 64,
     'hidden_dim': 256,
     'buffer_capacity': 10_000,
-    'load_models': True,
+    'load_models': False,
     'num_nodes': 2,
-    'gravity': 0.1,
+    'gravity': 1.0,
     'cart_mass': 0.01 / 3.0,
     'bob_mass': 0.01 / 3.0,
     'angular_friction': 0.0005,
@@ -38,11 +38,12 @@ config = {
     'train_every_steps': 4,
     'updates_per_train': 1,
     'min_non_crash_transitions_for_actor_update': 0,
+    'min_near_capture_transitions_for_actor_update': 0,
     'initial_angle_noise': 0.1122,
     'initial_velocity_noise': 0.04,
     'episode_mode_probabilities': {
-        'down_to_up': 0.4,
-        'capture_vertical': 0.6,
+        'down_to_up': 0.0,
+        'capture_vertical': 1.0,
         'fold_to_up': 0.0,
         'up_to_fold': 0.0,
     },
@@ -81,10 +82,13 @@ config = {
     'capture_drop_target_score_threshold': 0.5,
     'capture_drop_grace_steps': 20,
     'hold_progress_bonus': 100.0,
+    'action_l2_penalty': 0.0,
+    'action_delta_penalty': 0.0,
+    'saturation_penalty': 0.0,
     'swing_up_sinus_episode_probability_start': 0.6,
     'swing_up_sinus_episode_probability_end': 0.1,
     'swing_up_sinus_episode_decay_episodes': 2000,
-    'render_training': False,
+    'render_training': True,
     'render_every_episodes': 50,
     'render_first_episode': True,
     # Options de visualisation et de plots
@@ -110,6 +114,7 @@ def validate_config(cfg):
         'policy_delay', 'polyak_tau', 'learning_starts', 'train_every_steps',
         'updates_per_train', 'initial_angle_noise', 'initial_velocity_noise',
         'min_non_crash_transitions_for_actor_update',
+        'min_near_capture_transitions_for_actor_update',
         'episode_mode_probabilities', 'adaptive_curriculum_enabled',
         'curriculum_start_episode', 'curriculum_window',
         'curriculum_min_probabilities', 'curriculum_max_probabilities',
@@ -122,7 +127,8 @@ def validate_config(cfg):
         'swing_up_height_progress_weight', 'swing_up_cart_safety_weight',
         'capture_allowed_angular_speed', 'capture_quality_bonus', 'capture_drop_penalty',
         'capture_drop_target_score_threshold', 'capture_drop_grace_steps',
-        'hold_progress_bonus',
+        'hold_progress_bonus', 'action_l2_penalty', 'action_delta_penalty',
+        'saturation_penalty',
         'swing_up_sinus_episode_probability_start',
         'swing_up_sinus_episode_probability_end',
         'swing_up_sinus_episode_decay_episodes',
@@ -176,6 +182,7 @@ def validate_config(cfg):
         'learning_starts', 'curriculum_start_episode', 'transition_switch_step_min',
         'transition_switch_step_max', 'render_every_episodes',
         'min_non_crash_transitions_for_actor_update',
+        'min_near_capture_transitions_for_actor_update',
     )
     for key in nonnegative_integer_keys:
         value = cfg[key]
@@ -193,6 +200,7 @@ def validate_config(cfg):
         'swing_up_height_progress_weight', 'swing_up_cart_safety_weight',
         'capture_quality_bonus',
         'hold_progress_bonus', 'cart_limit_proximity_penalty',
+        'action_l2_penalty', 'action_delta_penalty', 'saturation_penalty',
     )
     for key in nonnegative_keys:
         value = cfg[key]

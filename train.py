@@ -23,6 +23,7 @@ class ReplayBuffer:
         self.buffer = deque(maxlen=capacity)
 
     def push(self, state, action, reward, next_state, terminated, truncated, *, metadata=None):
+        # Validation des transitions avant stockage
         if not np.all(np.isfinite(state)):
             raise FloatingPointError(f"replay state contains non-finite values: {state}")
         if not np.isfinite(action):
@@ -35,6 +36,8 @@ class ReplayBuffer:
             raise TypeError(f"replay terminated must be bool, got {type(terminated).__name__}")
         if not isinstance(truncated, (bool, np.bool_)):
             raise TypeError(f"replay truncated must be bool, got {type(truncated).__name__}")
+
+        # Masque de bootstrap : 0 si l'épisode se termine
         bootstrap_mask = 0.0 if bool(terminated) or bool(truncated) else 1.0
         transition_metadata = {} if metadata is None else dict(metadata)
         self.buffer.append((
@@ -49,13 +52,7 @@ class ReplayBuffer:
         ))
 
     def sample(self, batch_size):
-        if batch_size <= 0:
-            raise ValueError(f"batch_size must be positive, got {batch_size}")
-        if len(self.buffer) < batch_size:
-            raise ValueError(
-                f"cannot sample batch of {batch_size} from buffer of {len(self.buffer)}"
-            )
-        batch = random.sample(self.buffer, batch_size)
+        batch = self.sample_entries(batch_size)
         states, actions, rewards, next_states, terminated, truncated, bootstrap_masks, _metadata = zip(*batch)
         states = np.stack(states)
         actions = np.stack(actions)
@@ -65,6 +62,27 @@ class ReplayBuffer:
         truncated = np.stack(truncated)
         bootstrap_masks = np.stack(bootstrap_masks)
         return states, actions, rewards, next_states, terminated, truncated, bootstrap_masks
+
+    def sample_entries(self, batch_size):
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
+        if len(self.buffer) < batch_size:
+            raise ValueError(
+                f"cannot sample batch of {batch_size} from buffer of {len(self.buffer)}"
+            )
+        return random.sample(self.buffer, batch_size)
+
+    def sample_with_metadata(self, batch_size):
+        batch = self.sample_entries(batch_size)
+        states, actions, rewards, next_states, terminated, truncated, bootstrap_masks, metadata = zip(*batch)
+        states = np.stack(states)
+        actions = np.stack(actions)
+        rewards = np.stack(rewards)
+        next_states = np.stack(next_states)
+        terminated = np.stack(terminated)
+        truncated = np.stack(truncated)
+        bootstrap_masks = np.stack(bootstrap_masks)
+        return states, actions, rewards, next_states, terminated, truncated, bootstrap_masks, list(metadata)
 
     def diagnostics(self, *, max_action):
         if max_action <= 0.0 or not np.isfinite(max_action):
@@ -83,6 +101,7 @@ class ReplayBuffer:
                 "near_capture_fraction": 0.0,
                 "target_state_coverage": 0.0,
                 "non_crash_transitions": 0,
+                "near_capture_non_crash_transitions": 0,
             }
         actions = np.array([entry[1][0] for entry in self.buffer], dtype=float)
         rewards = np.array([entry[2] for entry in self.buffer], dtype=float)
@@ -94,6 +113,11 @@ class ReplayBuffer:
             float(item.get("target_score", 0.0)) >= 0.75 for item in metadata
         ], dtype=bool)
         non_crash = sum(item.get("termination_reason") != "cart_limit_streak" for item in metadata)
+        near_capture_non_crash = sum(
+            item.get("termination_reason") != "cart_limit_streak"
+            and float(item.get("target_score", 0.0)) >= 0.75
+            for item in metadata
+        )
         histogram, _edges = np.histogram(actions, bins=10, range=(-max_action, max_action))
         return {
             "size": len(self.buffer),
@@ -108,6 +132,7 @@ class ReplayBuffer:
             "near_capture_fraction": float(np.mean(near_capture_flags.astype(float))),
             "target_state_coverage": float(np.mean(near_capture_flags | capture_flags.astype(bool))),
             "non_crash_transitions": int(non_crash),
+            "near_capture_non_crash_transitions": int(near_capture_non_crash),
         }
 
     @staticmethod
@@ -125,6 +150,13 @@ class ReplayBuffer:
             for entry in self.buffer
         )
 
+    def count_near_capture_non_crash_transitions(self):
+        return sum(
+            entry[7].get("termination_reason") != "cart_limit_streak"
+            and float(entry[7].get("target_score", 0.0)) >= 0.75
+            for entry in self.buffer
+        )
+
     def __len__(self):
         return len(self.buffer)
 
@@ -136,6 +168,8 @@ class PendulumTrainer:
         validate_config(cfg)
         self.config = cfg
         self.max_action = cfg["max_action"]
+
+        # Environnement et gestionnaire de récompense
         self.reward_manager = RewardManager(cfg)
         self.env = PendulumEnv(
             reward_manager=self.reward_manager,
@@ -149,6 +183,7 @@ class PendulumTrainer:
         self.state_dim = len(initial_state)
         self.action_dim = 1
 
+        # Réseaux acteur-critique TD3 (online + cibles)
         self.actor_model = PendulumActor(
             self.state_dim,
             self.action_dim,
@@ -166,6 +201,7 @@ class PendulumTrainer:
         self.actor_target.load_state_dict(self.actor_model.state_dict())
         self.critic_target.load_state_dict(self.critic_model.state_dict())
 
+        # Optimiseurs et mémoire de replay
         self.actor_optimizer = torch.optim.Adam(self.actor_model.parameters(), lr=cfg["actor_lr"])
         self.critic_optimizer = torch.optim.Adam(self.critic_model.parameters(), lr=cfg["critic_lr"])
 
@@ -182,6 +218,7 @@ class PendulumTrainer:
             self.load_models()
 
     def select_action(self, state, noise_std=0.0):
+        # Politique déterministe avec bruit gaussien optionnel
         if not np.all(np.isfinite(state)):
             raise FloatingPointError(f"policy state contains non-finite values: {state}")
         if not np.isfinite(noise_std) or noise_std < 0.0:
@@ -218,6 +255,7 @@ class PendulumTrainer:
         swing_phase,
         use_sinus_swing_exploration,
     ):
+        # Exploration sinusoïdale pendant le swing-up depuis le bas
         if initial_pose_mode == "down" and not capture_started and use_sinus_swing_exploration:
             action = self._swing_exploration_action(step_index, swing_period, swing_phase)
             exploration_noise = self.config["swing_up_exploration_noise"]
@@ -226,6 +264,8 @@ class PendulumTrainer:
             return float(np.clip(action, -self.max_action, self.max_action))
         if initial_pose_mode == "down" and not capture_started:
             return self.select_action(state, noise_std=self.config["swing_up_exploration_noise"])
+
+        # Bruit adapté selon la phase de l'épisode
         if initial_pose_mode == "down":
             noise_std = self.config["swing_up_capture_noise"]
         else:
@@ -233,6 +273,7 @@ class PendulumTrainer:
         return self.select_action(state, noise_std=noise_std)
 
     def collect_trajectory(self, episode):
+        # Initialisation de l'épisode
         selected_mode, mode_probabilities = self._select_episode_mode(episode)
         state = self.env.reset(episode_mode=selected_mode)
         should_render = self._should_render_episode(episode)
@@ -246,6 +287,8 @@ class PendulumTrainer:
         termination_reason = None
         initial_phase = self.env.initial_phase
         initial_pose_mode = self.env.initial_pose_mode
+
+        # Direction de transition pour les métriques
         if selected_mode == "capture_vertical":
             transition_direction = "capture_vertical"
         elif initial_pose_mode == "down":
@@ -255,6 +298,8 @@ class PendulumTrainer:
         in_target_history = []
         target_score_history = []
         end_y_history = []
+
+        # Paramètres d'exploration sinusoïdale pour le swing-up
         swing_period = random.uniform(
             self.config["swing_up_exploration_period_min"],
             self.config["swing_up_exploration_period_max"],
@@ -269,6 +314,7 @@ class PendulumTrainer:
         else:
             swing_up_sinus_episode = False
 
+        # Boucle de collecte pas-à-pas
         for step_idx in range(self.config["max_steps"]):
             if initial_pose_mode == "down" and not capture_started:
                 noise_std = self.config["swing_up_exploration_noise"]
@@ -276,6 +322,8 @@ class PendulumTrainer:
                 noise_std = self.config["swing_up_capture_noise"]
             else:
                 noise_std = self.config["exploration_noise"]
+
+            # Sélection de l'action et pas d'environnement
             action = self._select_collection_action(
                 state,
                 step_idx,
@@ -286,6 +334,8 @@ class PendulumTrainer:
                 swing_up_sinus_episode,
             )
             next_state, reward, terminated, truncated, info = self.env.step(action)
+
+            # Rendu optionnel pendant l'entraînement
             stop_requested = False
             if should_render:
                 rendering_successful = self.env.render(
@@ -303,6 +353,7 @@ class PendulumTrainer:
             components["transition_reward"] = 0.0
             components["pre_switch_reward_weight"] = 1.0
 
+            # Stockage de la transition dans le replay buffer
             self.memory.push(
                 state,
                 action,
@@ -335,6 +386,7 @@ class PendulumTrainer:
                 hold_after.append(in_target)
             phase_hold[int(info["phase"])].append(in_target)
 
+            # Mises à jour réseau si le buffer est prêt
             if self._should_update():
                 for _ in range(self.config["updates_per_train"]):
                     self.update_networks()
@@ -344,6 +396,7 @@ class PendulumTrainer:
                 termination_reason = "render_closed" if stop_requested else info["termination_reason"]
                 break
 
+        # Agrégation des métriques de fin d'épisode
         episode_length = step_idx + 1
         hold_before_switch = float(np.mean(hold_before)) if hold_before else 0.0
         hold_after_switch = float(np.mean(hold_after)) if hold_after else 0.0
@@ -351,6 +404,8 @@ class PendulumTrainer:
         final_hold = float(np.mean(in_target_history[-final_window:])) if in_target_history else 0.0
         peak_target_score = float(np.max(target_score_history)) if target_score_history else 0.0
         max_end_y = float(np.max(end_y_history)) if end_y_history else 0.0
+
+        # Critères de succès selon la direction de transition
         if transition_direction in ("down_to_up", "capture_vertical"):
             hold_after_switch = final_hold
             balanced_hold = final_hold
@@ -408,6 +463,7 @@ class PendulumTrainer:
         if episode < self.config["curriculum_start_episode"]:
             return base_probabilities
 
+        # Réduction de probabilité pour les modes déjà maîtrisés
         window = self.config["curriculum_window"]
         mode_scores = {
             "down_to_up": self._recent_metric_mean("down_to_up_final_hold", window, default=0.0),
@@ -495,7 +551,17 @@ class PendulumTrainer:
         return train_every <= 1 or self.total_env_steps % train_every == 0
 
     def update_networks(self):
-        states, actions, rewards, next_states, terminated, truncated, bootstrap_masks = self.memory.sample(self.config["batch_size"])
+        # Échantillonnage d'un batch depuis le replay buffer
+        (
+            states,
+            actions,
+            rewards,
+            next_states,
+            terminated,
+            truncated,
+            bootstrap_masks,
+            metadata,
+        ) = self.memory.sample_with_metadata(self.config["batch_size"])
         states_tensor = torch.FloatTensor(states)
         actions_tensor = torch.FloatTensor(actions)
         rewards_tensor = torch.FloatTensor(rewards).unsqueeze(-1)
@@ -503,6 +569,8 @@ class PendulumTrainer:
         bootstrap_masks_tensor = torch.FloatTensor(bootstrap_masks).unsqueeze(-1)
 
         self.total_it += 1
+
+        # Cible TD3 avec bruit sur l'action cible
         with torch.no_grad():
             td_targets = self._compute_td_targets(
                 rewards_tensor,
@@ -511,6 +579,7 @@ class PendulumTrainer:
                 bootstrap_masks_tensor,
             )
 
+        # Mise à jour du critic (double Q)
         current_primary, current_secondary = self.critic_model(states_tensor, actions_tensor)
         critic_loss = F.mse_loss(current_primary, td_targets) + F.mse_loss(current_secondary, td_targets)
         if not torch.isfinite(critic_loss):
@@ -520,12 +589,9 @@ class PendulumTrainer:
         torch.nn.utils.clip_grad_norm_(self.critic_model.parameters(), max_norm=1.0)
         self.critic_optimizer.step()
 
+        # Mise à jour de l'acteur (retardée) et des réseaux cibles
         actor_loss_value = 0.0
-        can_update_actor = (
-            self.memory.count_non_crash_transitions()
-            >= self.config["min_non_crash_transitions_for_actor_update"]
-        )
-        if self.total_it % self.config["policy_delay"] == 0 and can_update_actor:
+        if self.total_it % self.config["policy_delay"] == 0 and self._can_update_actor():
             actor_actions = self.actor_model(states_tensor)
             actor_loss = -self.critic_model.primary_value(states_tensor, actor_actions).mean()
             if not torch.isfinite(actor_loss):
@@ -541,7 +607,47 @@ class PendulumTrainer:
 
         self.metrics.add_metric("critic_loss", critic_loss.item())
         self.metrics.add_metric("actor_loss", actor_loss_value)
-        return {"critic_loss": critic_loss.item(), "actor_loss": actor_loss_value}
+        batch_diagnostics = self._batch_diagnostics(actions, rewards, metadata)
+        for key, value in batch_diagnostics.items():
+            self.metrics.add_metric(key, value)
+        return {
+            "critic_loss": critic_loss.item(),
+            "actor_loss": actor_loss_value,
+            **batch_diagnostics,
+        }
+
+    def _batch_diagnostics(self, actions, rewards, metadata):
+        actions = np.asarray(actions, dtype=float).reshape(-1)
+        rewards = np.asarray(rewards, dtype=float).reshape(-1)
+        capture_started = np.array(
+            [bool(item.get("capture_started", False)) for item in metadata],
+            dtype=float,
+        )
+        near_capture = np.array(
+            [float(item.get("target_score", 0.0)) >= 0.75 for item in metadata],
+            dtype=float,
+        )
+        crash = np.array(
+            [item.get("termination_reason") == "cart_limit_streak" for item in metadata],
+            dtype=float,
+        )
+        return {
+            "batch_action_abs_mean": float(np.mean(np.abs(actions))),
+            "batch_saturation_fraction": float(np.mean(np.abs(actions) >= 0.95 * self.max_action)),
+            "batch_reward_mean": float(np.mean(rewards)),
+            "batch_reward_min": float(np.min(rewards)),
+            "batch_capture_started_fraction": float(np.mean(capture_started)),
+            "batch_near_capture_fraction": float(np.mean(near_capture)),
+            "batch_crash_fraction": float(np.mean(crash)),
+        }
+
+    def _can_update_actor(self):
+        return (
+            self.memory.count_non_crash_transitions()
+            >= self.config["min_non_crash_transitions_for_actor_update"]
+            and self.memory.count_near_capture_non_crash_transitions()
+            >= self.config["min_near_capture_transitions_for_actor_update"]
+        )
 
     def replay_diagnostics(self):
         return self.memory.diagnostics(max_action=self.max_action)
@@ -551,6 +657,8 @@ class PendulumTrainer:
             raise ValueError(f"unknown replay prefill strategy: {strategy}")
         if not isinstance(num_steps, int) or isinstance(num_steps, bool) or num_steps <= 0:
             raise ValueError(f"num_steps must be a positive integer, got {num_steps!r}")
+
+        # Remplissage initial du buffer avant l'apprentissage
         rng = np.random.default_rng(seed)
         state = self.env.reset(episode_mode=episode_mode, seed=seed)
         for step in range(num_steps):
@@ -586,6 +694,7 @@ class PendulumTrainer:
                 state = self.env.reset(episode_mode=episode_mode, seed=seed + step + 1)
 
     def _compute_td_targets(self, rewards_tensor, next_states_tensor, actions_tensor, bootstrap_masks_tensor):
+        # Politique cible avec bruit gaussien clippé (TD3)
         noise = torch.randn_like(actions_tensor) * self.config["policy_noise"]
         noise = noise.clamp(
             -self.config["noise_clip"],
@@ -600,6 +709,7 @@ class PendulumTrainer:
         return rewards_tensor + self.config["gamma"] * bootstrap_masks_tensor * target_value
 
     def _polyak_update(self, online_model, target_model):
+        # Moyenne glissante des poids : θ_target ← τ θ + (1-τ) θ_target
         tau = self.config["polyak_tau"]
         with torch.no_grad():
             for param, target_param in zip(online_model.parameters(), target_model.parameters()):

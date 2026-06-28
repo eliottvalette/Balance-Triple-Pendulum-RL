@@ -81,6 +81,7 @@ config = {
     'capture_drop_target_score_threshold': 0.5,
     'capture_drop_grace_steps': 20,
     'capture_drop_truncation_steps': 75,
+    'capture_drop_terminates_episode': False,
     'hold_progress_bonus': 100.0,
     'action_l2_penalty': 0.5,
     'action_delta_penalty': 3.0,
@@ -124,7 +125,7 @@ def validate_config(cfg):
         'capture_in_target_step_bonus',
         'capture_drop_base_penalty', 'capture_drop_remaining_penalty',
         'capture_drop_target_score_threshold', 'capture_drop_grace_steps',
-        'capture_drop_truncation_steps',
+        'capture_drop_truncation_steps', 'capture_drop_terminates_episode',
         'hold_progress_bonus', 'action_l2_penalty', 'action_delta_penalty',
         'saturation_penalty',
         'render_training', 'render_every_episodes', 'render_first_episode',
@@ -261,7 +262,7 @@ def validate_config(cfg):
             raise ValueError(f"plot_config[{key!r}] must be a positive integer")
     for key in (
         'load_models', 'normalize_advantages', 'adaptive_curriculum_enabled',
-        'render_training', 'render_first_episode',
+        'render_training', 'render_first_episode', 'capture_drop_terminates_episode',
     ):
         if not isinstance(cfg[key], bool):
             raise ValueError(f"config[{key!r}] must be bool")

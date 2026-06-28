@@ -816,6 +816,7 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         custom = dict(config)
         custom["capture_drop_grace_steps"] = 1
         custom["capture_drop_truncation_steps"] = 2
+        custom["capture_drop_terminates_episode"] = True
         env = PendulumEnv(
             reward_manager=RewardManager(custom),
             env_config=custom,
@@ -840,6 +841,30 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         self.assertTrue(terminated)
         self.assertFalse(truncated)
         self.assertEqual("capture_drop_failure", end_info["termination_reason"])
+
+    def test_capture_vertical_continues_after_drop_when_termination_disabled(self):
+        custom = dict(config)
+        custom["capture_drop_grace_steps"] = 1
+        custom["capture_drop_truncation_steps"] = 2
+        custom["capture_drop_terminates_episode"] = False
+        env = PendulumEnv(
+            reward_manager=RewardManager(custom),
+            env_config=custom,
+        )
+        env.reset(episode_mode="capture_vertical")
+        env.current_state[1] = -math.pi / 2
+        env.current_state[2] = -math.pi / 2
+        env.rhs = mock.Mock(return_value=np.zeros_like(env.current_state))
+
+        env.step(0.0)
+        _state, _reward, terminated, truncated, drop_info = env.step(0.0)
+        self.assertTrue(drop_info["capture_drop"])
+        self.assertFalse(terminated)
+
+        for _ in range(4):
+            _state, _reward, terminated, truncated, _info = env.step(0.0)
+            self.assertFalse(terminated)
+            self.assertFalse(truncated)
 
     def test_down_to_up_does_not_get_capture_drop_penalty(self):
         custom = dict(config)

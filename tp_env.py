@@ -591,7 +591,8 @@ class PendulumEnv:
         # Conditions de fin d'épisode (rail, échec capture, ou horizon)
         self.cart_limit_streak = self.cart_limit_streak + 1 if hit_cart_limit else 0
         capture_drop_truncated = bool(
-            self.capture_drop_step is not None
+            self.config['capture_drop_terminates_episode']
+            and self.capture_drop_step is not None
             and self.num_steps
             >= self.capture_drop_step + int(self.config['capture_drop_truncation_steps'])
         )

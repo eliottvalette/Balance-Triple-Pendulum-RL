@@ -22,6 +22,9 @@ REWARD_COMPONENTS = [
     "potential_progress",
     "capture_quality",
     "capture_quality_bonus",
+    "capture_maintenance_bonus",
+    "capture_score_decay_penalty",
+    "capture_in_target_bonus",
     "capture_entry_bonus",
     "capture_drop_penalty",
     "hold_bonus",
@@ -38,6 +41,9 @@ EPISODE_DIAGNOSTIC_METRICS = [
     "hold_before_switch",
     "hold_after_switch",
     "balanced_hold",
+    "overall_hold",
+    "hold_vs_max_steps",
+    "final_hold",
 ]
 
 ACTION_METRICS = [

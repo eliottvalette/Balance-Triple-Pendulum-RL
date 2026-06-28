@@ -67,6 +67,7 @@ class PendulumEnv:
         self.hold_streak = 0
         self.cart_limit_streak = 0
         self.capture_drop_triggered = False
+        self.capture_drop_step = None
         self.success_achieved = False
         if self.reward_manager is not None:
             self.reward_manager.verify_cart_termination_is_suboptimal(
@@ -291,6 +292,7 @@ class PendulumEnv:
         self.hold_streak = 0
         self.cart_limit_streak = 0
         self.capture_drop_triggered = False
+        self.capture_drop_step = None
         self.success_achieved = False
         return self.get_state(action=0.0, phase=self.current_phase)
 
@@ -491,8 +493,10 @@ class PendulumEnv:
         max_action = float(self.config['max_action'])
         if not np.isfinite(action):
             raise ValueError(f"action must be finite, got {action!r}")
-        if not -max_action <= action <= max_action:
+        action_limit_tolerance = 1e-6 * max(1.0, max_action)
+        if abs(action) > max_action + action_limit_tolerance:
             raise ValueError(f"action must be in [{-max_action}, {max_action}], got {action}")
+        action = float(np.clip(action, -max_action, max_action))
         if self.reward_manager is None:
             raise RuntimeError("step() requires a reward_manager")
 
@@ -566,6 +570,7 @@ class PendulumEnv:
         )
         if capture_drop:
             self.capture_drop_triggered = True
+            self.capture_drop_step = self.num_steps
             capture_drop_penalty = float(self.config['capture_drop_penalty'])
             reward += capture_drop_penalty
             reward_components['terminal_failure_penalty'] = (
@@ -573,14 +578,20 @@ class PendulumEnv:
             )
         reward_components['capture_drop_penalty'] = capture_drop_penalty
 
-        # Conditions de fin d'épisode (rail, chute après capture, ou horizon)
+        # Conditions de fin d'épisode (rail, ou horizon)
         self.cart_limit_streak = self.cart_limit_streak + 1 if hit_cart_limit else 0
         terminated = bool(
             self.cart_limit_streak >= int(self.config['cart_limit_termination_steps'])
         )
-        if capture_drop:
-            terminated = True
-        truncated = bool(self.num_steps >= self.max_steps and not terminated)
+        capture_drop_truncated = bool(
+            self.capture_drop_step is not None
+            and self.num_steps
+            >= self.capture_drop_step + int(self.config['capture_drop_truncation_steps'])
+        )
+        truncated = bool(
+            (self.num_steps >= self.max_steps and not terminated)
+            or (capture_drop_truncated and not terminated)
+        )
 
         # Pénalités de proximité et de contact avec les rails
         cart_center_limit = self.xmax - self.cart_width / (2 * self.scale)
@@ -659,10 +670,10 @@ class PendulumEnv:
             "target_score": reward_components["target_score"],
             "in_target": reward_components["in_target"],
             "termination_reason": (
-                "capture_drop"
-                if capture_drop
-                else "cart_limit_streak"
+                "cart_limit_streak"
                 if terminated
+                else "capture_drop_truncation"
+                if capture_drop_truncated
                 else "max_steps"
                 if truncated
                 else None

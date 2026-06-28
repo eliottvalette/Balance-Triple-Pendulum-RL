@@ -21,7 +21,6 @@ from tp_env import PendulumEnv
 
 MODEL_SAVE_PREFIX = "models/interrupted"
 MODEL_LOAD_PREFIX = "models/checkpoint"
-MODEL_VERSION = "ppo-v1"
 ACTOR_EVAL_CAPTURE_SEEDS = (0, 1, 2, 3, 4)
 
 FloatArray = NDArray[np.float32]
@@ -162,6 +161,13 @@ class PendulumTrainer:
         self.reward_manager = RewardManager(self.config)
         self.env = PendulumEnv(
             reward_manager=self.reward_manager,
+            render_mode=None,
+            num_nodes=int(cfg["num_nodes"]),
+            max_steps=int(cfg["max_steps"]),
+            env_config=self.config,
+        )
+        self.eval_env = PendulumEnv(
+            reward_manager=RewardManager(self.config),
             render_mode=None,
             num_nodes=int(cfg["num_nodes"]),
             max_steps=int(cfg["max_steps"]),
@@ -364,9 +370,17 @@ class PendulumTrainer:
         hold_after_switch = float(np.mean(hold_after)) if hold_after else 0.0
         final_window = max(1, int(0.2 * len(in_target_history)))
         final_hold = float(np.mean(in_target_history[-final_window:]))
+        overall_hold = float(np.mean(in_target_history)) if in_target_history else 0.0
+        max_steps = int(self.config["max_steps"])
+        steps_in_target = float(np.sum(in_target_history)) if in_target_history else 0.0
+        hold_vs_max_steps = steps_in_target / max_steps
         peak_target_score = float(np.max(target_score_history))
         max_end_y = float(np.max(end_y_history))
-        if transition_direction in ("down_to_up", "capture_vertical"):
+        if transition_direction == "capture_vertical":
+            hold_after_switch = hold_vs_max_steps
+            balanced_hold = hold_vs_max_steps
+            episode_success = float(hold_vs_max_steps > 0.8)
+        elif transition_direction == "down_to_up":
             hold_after_switch = final_hold
             balanced_hold = final_hold
             episode_success = float(final_hold > 0.8)
@@ -383,6 +397,8 @@ class PendulumTrainer:
             "balanced_hold": balanced_hold,
             "episode_success": episode_success,
             "final_hold": final_hold,
+            "overall_hold": overall_hold,
+            "hold_vs_max_steps": hold_vs_max_steps,
             "peak_target_score": peak_target_score,
             "max_end_y": max_end_y,
             "success_rate_phase_1": float(np.mean(phase_hold[1])) if phase_hold[1] else 0.0,
@@ -501,10 +517,18 @@ class PendulumTrainer:
         return result
 
     def _actor_eval_on_fixed_capture_states(self) -> dict[str, float]:
-        actions = [
-            self._actor_raw_action(self.env.reset(episode_mode="capture_vertical", seed=seed))
-            for seed in self.ACTOR_EVAL_CAPTURE_SEEDS
-        ]
+        python_rng_state = random.getstate()
+        numpy_rng_state = np.random.get_state()
+        try:
+            actions = [
+                self._actor_raw_action(
+                    self.eval_env.reset(episode_mode="capture_vertical", seed=seed)
+                )
+                for seed in self.ACTOR_EVAL_CAPTURE_SEEDS
+            ]
+        finally:
+            random.setstate(python_rng_state)
+            np.random.set_state(numpy_rng_state)
         actions_array = np.asarray(actions, dtype=float)
         return {
             "actor_eval_mean_action": float(np.mean(actions_array)),
@@ -613,8 +637,8 @@ class PendulumTrainer:
                         f"Episode {episode:5d} | reward={summary['episode_reward']:8.2f} | "
                         f"len={summary['episode_length']:4d} | dir={summary['transition_direction']:<16s} | "
                         f"hold={summary['balanced_hold']:4.2f} | peak={summary['peak_target_score']:4.2f} | "
-                        f"policy={ppo_metrics['policy_loss']:+.4f} | value={ppo_metrics['value_loss']:.4f} | "
-                        f"kl={ppo_metrics['approx_kl']:.5f} | term={summary['termination_reason']}"
+                        f"value={ppo_metrics['value_loss']:.4f} | "
+                        f"term={summary['termination_reason']}"
                     )
                 if episode % self.plot_frequency == self.plot_frequency - 1:
                     self.metrics.generate_all_plots()
@@ -689,7 +713,6 @@ class PendulumTrainer:
             "total_env_steps": self.total_env_steps,
             "interrupted": interrupted,
             "hidden_dim": self.config["hidden_dim"],
-            "model_version": MODEL_VERSION,
         }
         with open(path + "_metadata.json", "w", encoding="utf-8") as metadata_file:
             json.dump(metadata, metadata_file, indent=2)
@@ -707,7 +730,6 @@ class PendulumTrainer:
             "state_dim": self.state_dim,
             "action_dim": self.action_dim,
             "hidden_dim": self.config["hidden_dim"],
-            "model_version": MODEL_VERSION,
         }
         missing_keys = sorted(set(expected) - set(metadata))
         if missing_keys:

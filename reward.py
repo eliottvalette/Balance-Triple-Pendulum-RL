@@ -60,6 +60,7 @@ class RewardManager:
             raise ValueError(f"hold_streak must be nonnegative, got {hold_streak}")
 
         # Métriques de cible et détection de capture
+        previous_metrics = self._target_metrics(previous_state, phase)
         metrics = self._target_metrics(next_state, phase)
         entered_capture = bool(
             not capture_started
@@ -85,6 +86,9 @@ class RewardManager:
         capture_quality_bonus = 0.0
         capture_entry_bonus = 0.0
         hold_bonus = 0.0
+        capture_maintenance_bonus = 0.0
+        capture_score_decay_penalty = 0.0
+        capture_in_target_bonus = 0.0
 
         # Récompense de capture / stabilisation (après capture ou phase 2)
         if next_capture_started or phase == -1:
@@ -100,10 +104,30 @@ class RewardManager:
             capture_entry_bonus = (
                 float(self.config["capture_entry_bonus"]) if entered_capture else 0.0
             )
+            capture_maintenance_bonus = (
+                float(self.config["capture_maintenance_weight"]) * metrics["target_score"]
+            )
+            if metrics["in_target"]:
+                capture_in_target_bonus = float(self.config["capture_in_target_step_bonus"])
+            if capture_started:
+                score_drop = max(
+                    0.0,
+                    previous_metrics["target_score"] - metrics["target_score"],
+                )
+                capture_score_decay_penalty = (
+                    -float(self.config["capture_score_decay_penalty"]) * score_drop
+                )
             # Bonus de maintien uniquement quand le streak progresse (évite les creux négatifs)
             if hold_progress_delta > 0.0:
                 hold_bonus = float(self.config["hold_progress_bonus"]) * hold_progress_delta
-            reward = capture_quality_bonus + capture_entry_bonus + hold_bonus
+            reward = (
+                capture_quality_bonus
+                + capture_entry_bonus
+                + hold_bonus
+                + capture_maintenance_bonus
+                + capture_score_decay_penalty
+                + capture_in_target_bonus
+            )
         else:
             # Récompense potentielle pendant le swing-up
             speed_score = 0.0
@@ -138,6 +162,9 @@ class RewardManager:
             "potential_progress": potential_progress,
             "capture_quality": capture_quality,
             "capture_quality_bonus": capture_quality_bonus,
+            "capture_maintenance_bonus": capture_maintenance_bonus,
+            "capture_score_decay_penalty": capture_score_decay_penalty,
+            "capture_in_target_bonus": capture_in_target_bonus,
             "capture_entry_bonus": capture_entry_bonus,
             "capture_speed_score": speed_score,
             "capture_action_score": action_score,
@@ -225,9 +252,8 @@ class RewardManager:
                 abs(height_error) + 0.5 * abs(end_x_error) + 0.25 * alignment_error
             )
             in_target = (
-                abs(height_error) < self.phase_1_height_tolerance
-                and abs(end_x_error) < 0.20
-                and angular_speed < 3.0
+                target_score >= float(self.config["swing_up_capture_score_threshold"])
+                and angular_speed < 4.0
             )
         else:
             # Phase 2 : pendule replié sous le chariot
@@ -240,10 +266,8 @@ class RewardManager:
                 abs(y1_error) + abs(end_y) + 0.5 * abs(end_x_error) + 0.25 * folded_error
             )
             in_target = (
-                abs(y1_error) < 0.10
-                and abs(end_y) < self.phase_2_end_height_tolerance
-                and abs(end_x_error) < 0.35
-                and angular_speed < 3.0
+                target_score >= float(self.config["swing_up_capture_score_threshold"])
+                and angular_speed < 4.0
             )
 
         return {

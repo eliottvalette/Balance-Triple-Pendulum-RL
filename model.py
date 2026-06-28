@@ -29,15 +29,23 @@ class PendulumActorPolicy(nn.Module):
         self.max_action = float(max_action)
         self.mean_network = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(hidden_dim, action_dim),
         )
         self.log_std = nn.Parameter(torch.full((action_dim,), float(initial_log_std)))
+        self._init_actor_output()
+
+    def _init_actor_output(self) -> None:
+        final_linear = self.mean_network[-1]
+        if not isinstance(final_linear, nn.Linear):
+            raise TypeError("expected final mean layer to be Linear")
+        nn.init.orthogonal_(final_linear.weight, gain=0.01)
+        nn.init.zeros_(final_linear.bias)
 
     def forward(self, state: Tensor) -> tuple[Tensor, Tensor]:
-        mean = self.max_action * torch.tanh(self.mean_network(state))
+        mean = self.mean_network(state).clamp(-self.max_action, self.max_action)
         std = self.log_std.clamp(-5.0, 2.0).exp().expand_as(mean)
         return mean, std
 
@@ -73,9 +81,9 @@ class PendulumValueCritic(nn.Module):
             raise ValueError("network dimensions must be positive")
         self.value_network = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(hidden_dim, 1),
         )
 

@@ -353,7 +353,7 @@ class RewardContractTests(unittest.TestCase):
         self.assertEqual(0, result.hold_streak)
         self.assertLess(result.components["hold_progress_delta"], 0.0)
         self.assertEqual(0.0, result.components["hold_bonus"])
-        self.assertGreaterEqual(result.reward, 0.0)
+        self.assertLess(result.components["capture_score_decay_penalty"], 0.0)
         self.assertLess(result.components["capture_quality_bonus"], 1.0)
 
     def test_losing_target_is_better_than_recoverable_rail_crash(self):
@@ -790,11 +790,11 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         _state, second_reward, second_terminated, _truncated, second_info = env.step(0.0)
 
         self.assertFalse(warmup_info["capture_drop"])
-        self.assertTrue(first_terminated)
+        self.assertFalse(first_terminated)
         self.assertFalse(second_terminated)
         self.assertTrue(first_info["capture_drop"])
         self.assertFalse(second_info["capture_drop"])
-        self.assertEqual("capture_drop", first_info["termination_reason"])
+        self.assertIsNone(first_info["termination_reason"])
         self.assertEqual(
             custom["capture_drop_penalty"],
             first_info["reward_components"]["capture_drop_penalty"],
@@ -805,6 +805,35 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         )
         self.assertEqual(0.0, second_info["reward_components"]["capture_drop_penalty"])
         self.assertLess(first_reward, 0.0)
+
+    def test_capture_vertical_truncates_after_post_drop_horizon(self):
+        custom = dict(config)
+        custom["capture_drop_grace_steps"] = 1
+        custom["capture_drop_truncation_steps"] = 2
+        env = PendulumEnv(
+            reward_manager=RewardManager(custom),
+            env_config=custom,
+        )
+        env.reset(episode_mode="capture_vertical")
+        env.current_state[1] = -math.pi / 2
+        env.current_state[2] = -math.pi / 2
+        env.rhs = mock.Mock(return_value=np.zeros_like(env.current_state))
+
+        env.step(0.0)
+        _state, _reward, terminated, truncated, drop_info = env.step(0.0)
+        self.assertTrue(drop_info["capture_drop"])
+        self.assertFalse(terminated)
+        self.assertFalse(truncated)
+
+        _state, _reward, terminated, truncated, first_after_info = env.step(0.0)
+        self.assertFalse(terminated)
+        self.assertFalse(truncated)
+        self.assertFalse(first_after_info["capture_drop"])
+
+        _state, _reward, terminated, truncated, end_info = env.step(0.0)
+        self.assertFalse(terminated)
+        self.assertTrue(truncated)
+        self.assertEqual("capture_drop_truncation", end_info["termination_reason"])
 
     def test_down_to_up_does_not_get_capture_drop_penalty(self):
         custom = dict(config)

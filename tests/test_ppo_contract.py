@@ -1,4 +1,5 @@
 import json
+import random
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,7 +10,7 @@ import torch
 
 from config import config
 from model import PendulumActorPolicy, PendulumValueCritic
-from train import MODEL_VERSION, PendulumTrainer, RolloutBuffer, compute_gae
+from train import PendulumTrainer, RolloutBuffer, compute_gae
 
 
 def trainer_config(**overrides):
@@ -27,6 +28,27 @@ def trainer_config(**overrides):
 
 
 class PPOContractTests(unittest.TestCase):
+    def test_fixed_state_evaluation_preserves_training_env_and_global_rng(self):
+        trainer = PendulumTrainer(trainer_config())
+        trainer.env.reset(episode_mode="down_to_up", seed=91)
+        training_state = trainer.env.current_state.copy()
+        training_step = trainer.env.num_steps
+        random.seed(2026)
+        np.random.seed(2026)
+        python_rng_state = random.getstate()
+        numpy_rng_state = np.random.get_state()
+
+        trainer._actor_eval_on_fixed_capture_states()
+
+        self.assertIsNot(trainer.env, trainer.eval_env)
+        self.assertTrue(np.array_equal(training_state, trainer.env.current_state))
+        self.assertEqual(training_step, trainer.env.num_steps)
+        self.assertEqual(python_rng_state, random.getstate())
+        restored_numpy_state = np.random.get_state()
+        self.assertEqual(numpy_rng_state[0], restored_numpy_state[0])
+        self.assertTrue(np.array_equal(numpy_rng_state[1], restored_numpy_state[1]))
+        self.assertEqual(numpy_rng_state[2:], restored_numpy_state[2:])
+
     def test_policy_samples_bounded_actions_and_consistent_log_probs(self):
         torch.manual_seed(7)
         policy = PendulumActorPolicy(5, hidden_dim=16, max_action=0.5)
@@ -173,7 +195,6 @@ class PPOContractTests(unittest.TestCase):
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 
             self.assertEqual("ppo", metadata["algorithm"])
-            self.assertEqual(MODEL_VERSION, metadata["model_version"])
 
             metadata["algorithm"] = "incompatible"
             metadata_path.write_text(json.dumps(metadata), encoding="utf-8")

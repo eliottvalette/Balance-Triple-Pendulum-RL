@@ -3,12 +3,11 @@ import unittest
 from unittest import mock
 
 import numpy as np
-import torch
 
 from config import config, validate_config
 from metrics import MetricsTracker
 from reward import RewardManager, RewardResult
-from train import ReplayBuffer, PendulumTrainer
+from train import PendulumTrainer
 from tp_env import PHYSICAL_STATE_LAYOUT, PendulumEnv
 
 
@@ -123,37 +122,6 @@ class StrictContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "episode_mode or phase"):
             env.reset()
-
-    def test_replay_buffer_rejects_short_batch(self):
-        buffer = ReplayBuffer(capacity=10)
-        buffer.push(np.zeros(2), 0.0, 0.0, np.zeros(2), False, False)
-
-        with self.assertRaisesRegex(ValueError, "batch"):
-            buffer.sample(2)
-
-    def test_replay_buffer_rejects_nonfinite_transition(self):
-        buffer = ReplayBuffer(capacity=10)
-
-        with self.assertRaises(FloatingPointError):
-            buffer.push(np.array([np.nan]), 0.0, 0.0, np.zeros(1), False, False)
-
-    def test_replay_buffer_requires_explicit_termination_and_truncation(self):
-        buffer = ReplayBuffer(capacity=10)
-
-        with self.assertRaises(TypeError):
-            buffer.push(np.zeros(2), 0.0, 0.0, np.zeros(2), False)
-
-    def test_replay_buffer_preserves_truncation_contract_and_bootstrap_mask(self):
-        buffer = ReplayBuffer(capacity=10)
-        buffer.push(np.array([1.0]), 0.1, 1.0, np.array([2.0]), False, False)
-        buffer.push(np.array([3.0]), 0.2, 2.0, np.array([4.0]), True, False)
-        buffer.push(np.array([5.0]), 0.3, 3.0, np.array([6.0]), False, True)
-
-        _states, _actions, _rewards, _next_states, terminated, truncated, bootstrap_masks = buffer.sample(3)
-
-        self.assertEqual(1, int(np.sum(terminated)))
-        self.assertEqual(1, int(np.sum(truncated)))
-        self.assertEqual(1, int(np.sum(bootstrap_masks)))
 
     def test_missing_saved_model_is_not_ignored(self):
         trainer = object.__new__(PendulumTrainer)
@@ -384,8 +352,9 @@ class RewardContractTests(unittest.TestCase):
 
         self.assertEqual(0, result.hold_streak)
         self.assertLess(result.components["hold_progress_delta"], 0.0)
-        self.assertLess(result.components["hold_bonus"], 0.0)
-        self.assertLess(result.reward, 0.0)
+        self.assertEqual(0.0, result.components["hold_bonus"])
+        self.assertGreaterEqual(result.reward, 0.0)
+        self.assertLess(result.components["capture_quality_bonus"], 1.0)
 
     def test_losing_target_is_better_than_recoverable_rail_crash(self):
         upright = physical_state(q1=math.pi / 2, q2=math.pi / 2)
@@ -692,7 +661,7 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         physical = env.get_physical_state()
 
         self.assertEqual(2, env.n)
-        self.assertEqual(53, len(observation))
+        self.assertEqual(52, len(observation))
         self.assertEqual((11,), physical.shape)
 
     def test_max_steps_is_truncation_not_termination(self):
@@ -710,34 +679,6 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         self.assertFalse(terminated)
         self.assertTrue(truncated)
         self.assertEqual("max_steps", info["termination_reason"])
-
-    def test_td_target_uses_explicit_bootstrap_mask(self):
-        trainer = object.__new__(PendulumTrainer)
-        trainer.config = env_config(gamma=0.5, policy_noise=0.0, noise_clip=0.0)
-        trainer.max_action = 1.0
-
-        class ConstantActor:
-            def __call__(self, states):
-                return torch.zeros((states.shape[0], 1), dtype=states.dtype)
-
-        class ConstantCritic:
-            def __call__(self, states, actions):
-                return (
-                    torch.full((states.shape[0], 1), 10.0, dtype=states.dtype),
-                    torch.full((states.shape[0], 1), 5.0, dtype=states.dtype),
-                )
-
-        trainer.actor_target = ConstantActor()
-        trainer.critic_target = ConstantCritic()
-
-        targets = trainer._compute_td_targets(
-            rewards_tensor=torch.tensor([[1.0], [2.0], [3.0]]),
-            next_states_tensor=torch.zeros((3, 4)),
-            actions_tensor=torch.zeros((3, 1)),
-            bootstrap_masks_tensor=torch.tensor([[1.0], [0.0], [0.0]]),
-        )
-
-        self.assertTrue(torch.allclose(targets, torch.tensor([[3.5], [2.0], [3.0]])))
 
     def test_cart_limit_is_penalized_without_immediate_termination(self):
         env = PendulumEnv(
@@ -849,16 +790,21 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         _state, second_reward, second_terminated, _truncated, second_info = env.step(0.0)
 
         self.assertFalse(warmup_info["capture_drop"])
-        self.assertFalse(first_terminated)
+        self.assertTrue(first_terminated)
         self.assertFalse(second_terminated)
         self.assertTrue(first_info["capture_drop"])
         self.assertFalse(second_info["capture_drop"])
+        self.assertEqual("capture_drop", first_info["termination_reason"])
         self.assertEqual(
             custom["capture_drop_penalty"],
             first_info["reward_components"]["capture_drop_penalty"],
         )
+        self.assertEqual(
+            custom["capture_drop_penalty"],
+            first_info["reward_components"]["terminal_failure_penalty"],
+        )
         self.assertEqual(0.0, second_info["reward_components"]["capture_drop_penalty"])
-        self.assertLess(first_reward, second_reward)
+        self.assertLess(first_reward, 0.0)
 
     def test_down_to_up_does_not_get_capture_drop_penalty(self):
         custom = dict(config)
@@ -875,14 +821,6 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         self.assertFalse(info["capture_drop"])
         self.assertEqual(0.0, info["reward_components"]["capture_drop_penalty"])
 
-    def test_config_rejects_invalid_sinus_probability_order(self):
-        invalid = dict(config)
-        invalid["swing_up_sinus_episode_probability_start"] = 0.2
-        invalid["swing_up_sinus_episode_probability_end"] = 0.8
-
-        with self.assertRaisesRegex(ValueError, "swing_up_sinus"):
-            validate_config(invalid)
-
     def test_default_training_probabilities_are_not_rewritten(self):
         cfg = dict(config)
         cfg["load_models"] = False
@@ -891,75 +829,6 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         probabilities = trainer._episode_mode_probabilities(episode=10_000)
 
         self.assertEqual(config["episode_mode_probabilities"], probabilities)
-
-    def test_swing_up_sinus_mode_uses_sinusoid_before_capture(self):
-        cfg = dict(config)
-        cfg["load_models"] = False
-        trainer = PendulumTrainer(cfg)
-        with mock.patch.object(trainer, "select_action", return_value=-0.5) as actor_call:
-            actions = []
-            for step_index in range(120):
-                action = trainer._select_collection_action(
-                    np.zeros(trainer.state_dim),
-                    step_index,
-                    capture_started=False,
-                    initial_pose_mode="down",
-                    swing_period=60.0,
-                    swing_phase=0.0,
-                    use_sinus_swing_exploration=True,
-                )
-                actions.append(action)
-        actor_call.assert_not_called()
-        self.assertLess(min(actions), -0.1)
-        self.assertGreater(max(actions), 0.1)
-
-    def test_swing_up_actor_mode_uses_actor_before_capture(self):
-        cfg = dict(config)
-        cfg["load_models"] = False
-        trainer = PendulumTrainer(cfg)
-        state = np.zeros(trainer.state_dim)
-        with mock.patch.object(trainer, "select_action", return_value=0.2) as actor_call:
-            action = trainer._select_collection_action(
-                state,
-                0,
-                capture_started=False,
-                initial_pose_mode="down",
-                swing_period=60.0,
-                swing_phase=0.0,
-                use_sinus_swing_exploration=False,
-            )
-        actor_call.assert_called_once_with(state, noise_std=config["swing_up_exploration_noise"])
-        self.assertEqual(0.2, action)
-
-    def test_swing_up_sinus_probability_decays_over_window(self):
-        cfg = dict(config)
-        cfg["load_models"] = False
-        trainer = PendulumTrainer(cfg)
-        start = cfg["swing_up_sinus_episode_probability_start"]
-        end = cfg["swing_up_sinus_episode_probability_end"]
-        decay = cfg["swing_up_sinus_episode_decay_episodes"]
-
-        self.assertAlmostEqual(start, trainer._swing_up_sinus_episode_probability(0))
-        self.assertAlmostEqual(end, trainer._swing_up_sinus_episode_probability(decay))
-        self.assertAlmostEqual(end, trainer._swing_up_sinus_episode_probability(decay * 2))
-
-    def test_capture_phase_uses_actor_after_swing_up(self):
-        cfg = dict(config)
-        cfg["load_models"] = False
-        trainer = PendulumTrainer(cfg)
-        state = np.zeros(trainer.state_dim)
-        with mock.patch.object(trainer, "select_action", return_value=0.2) as actor_call:
-            action = trainer._select_collection_action(
-                state,
-                0,
-                capture_started=True,
-                initial_pose_mode="down",
-                swing_period=60.0,
-                swing_phase=0.0,
-                use_sinus_swing_exploration=True,
-            )
-        actor_call.assert_called_once_with(state, noise_std=config["swing_up_capture_noise"])
-        self.assertEqual(0.2, action)
 
     def test_stable_hold_does_not_terminate_episode(self):
         env = PendulumEnv(
@@ -1015,219 +884,6 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         self.assertFalse(terminated)
         self.assertFalse(info["entered_success"])
         self.assertFalse(truncated)
-
-
-class TrainerContractTests(unittest.TestCase):
-    def _trainer_config(self, **overrides):
-        cfg = env_config(
-            load_models=False,
-            hidden_dim=16,
-            batch_size=4,
-            buffer_capacity=100,
-            policy_noise=0.0,
-            noise_clip=0.0,
-            policy_delay=2,
-            min_non_crash_transitions_for_actor_update=0,
-            min_near_capture_transitions_for_actor_update=0,
-        )
-        cfg.update(overrides)
-        return cfg
-
-    def _fill_replay(self, trainer, count, *, termination_reason=None):
-        state = np.zeros(trainer.state_dim, dtype=np.float32)
-        next_state = np.ones(trainer.state_dim, dtype=np.float32) * 0.1
-        for index in range(count):
-            trainer.memory.push(
-                state + index * 0.01,
-                0.05,
-                float(index),
-                next_state + index * 0.01,
-                False,
-                False,
-                metadata={
-                    "episode_mode": "down_to_up",
-                    "termination_reason": termination_reason,
-                    "capture_started": index % 2 == 0,
-                    "target_score": 0.8 if index % 2 == 0 else 0.1,
-                },
-            )
-
-    @staticmethod
-    def _parameters_changed(before, module):
-        return any(
-            not torch.allclose(previous, current)
-            for previous, current in zip(before, module.parameters())
-        )
-
-    @staticmethod
-    def _clone_parameters(module):
-        return [param.detach().clone() for param in module.parameters()]
-
-    def test_replay_buffer_sample_shapes_and_masks(self):
-        buffer = ReplayBuffer(capacity=10)
-        buffer.push(np.zeros(3), 0.1, 1.0, np.ones(3), False, False)
-        buffer.push(np.ones(3), -0.1, 2.0, np.zeros(3), True, False)
-
-        states, actions, rewards, next_states, terminated, truncated, bootstrap_masks = buffer.sample(2)
-
-        self.assertEqual((2, 3), states.shape)
-        self.assertEqual((2, 1), actions.shape)
-        self.assertEqual((2,), rewards.shape)
-        self.assertEqual((2, 3), next_states.shape)
-        self.assertEqual((2,), terminated.shape)
-        self.assertEqual((2,), truncated.shape)
-        self.assertEqual((2,), bootstrap_masks.shape)
-        self.assertEqual(1.0, float(np.max(bootstrap_masks)))
-        self.assertEqual(0.0, float(np.min(bootstrap_masks)))
-
-    def test_target_networks_do_not_receive_gradients(self):
-        trainer = PendulumTrainer(self._trainer_config(policy_delay=1))
-        self._fill_replay(trainer, trainer.config["batch_size"])
-
-        trainer.update_networks()
-
-        self.assertTrue(all(param.grad is None for param in trainer.actor_target.parameters()))
-        self.assertTrue(all(param.grad is None for param in trainer.critic_target.parameters()))
-
-    def test_actor_respects_policy_delay_and_critic_updates_every_step(self):
-        trainer = PendulumTrainer(self._trainer_config(policy_delay=2))
-        self._fill_replay(trainer, trainer.config["batch_size"])
-        actor_before = self._clone_parameters(trainer.actor_model)
-        critic_before = self._clone_parameters(trainer.critic_model)
-
-        first = trainer.update_networks()
-
-        self.assertEqual(0.0, first["actor_loss"])
-        self.assertFalse(self._parameters_changed(actor_before, trainer.actor_model))
-        self.assertTrue(self._parameters_changed(critic_before, trainer.critic_model))
-
-        actor_after_first = self._clone_parameters(trainer.actor_model)
-        critic_after_first = self._clone_parameters(trainer.critic_model)
-        second = trainer.update_networks()
-
-        self.assertNotEqual(0.0, second["actor_loss"])
-        self.assertTrue(self._parameters_changed(actor_after_first, trainer.actor_model))
-        self.assertTrue(self._parameters_changed(critic_after_first, trainer.critic_model))
-
-    def test_polyak_update_is_deterministic_and_slow(self):
-        trainer = object.__new__(PendulumTrainer)
-        trainer.config = env_config(polyak_tau=0.1)
-        online = torch.nn.Linear(2, 1)
-        target = torch.nn.Linear(2, 1)
-        with torch.no_grad():
-            for param in online.parameters():
-                param.fill_(1.0)
-            for param in target.parameters():
-                param.zero_()
-
-        trainer._polyak_update(online, target)
-
-        for param in target.parameters():
-            self.assertTrue(torch.allclose(param, torch.full_like(param, 0.1)))
-
-    def test_replay_buffer_reports_diagnostics(self):
-        buffer = ReplayBuffer(capacity=10)
-        buffer.push(
-            np.zeros(2),
-            0.49,
-            1.0,
-            np.ones(2),
-            False,
-            False,
-            metadata={
-                "episode_mode": "down_to_up",
-                "termination_reason": None,
-                "capture_started": True,
-                "target_score": 0.9,
-            },
-        )
-        buffer.push(
-            np.zeros(2),
-            -0.49,
-            -2.0,
-            np.ones(2),
-            True,
-            False,
-            metadata={
-                "episode_mode": "capture_vertical",
-                "termination_reason": "cart_limit_streak",
-                "capture_started": False,
-                "target_score": 0.1,
-            },
-        )
-
-        diagnostics = buffer.diagnostics(max_action=0.5)
-
-        self.assertEqual(2, diagnostics["size"])
-        self.assertEqual(10, len(diagnostics["action_histogram"]))
-        self.assertEqual({"down_to_up": 1, "capture_vertical": 1}, diagnostics["episode_mode_distribution"])
-        self.assertEqual({"cart_limit_streak": 1}, diagnostics["termination_reasons"])
-        self.assertEqual(1, diagnostics["non_crash_transitions"])
-        self.assertEqual(1, diagnostics["near_capture_non_crash_transitions"])
-        self.assertGreater(diagnostics["saturation_fraction"], 0.0)
-
-    def test_replay_buffer_can_be_seeded_with_sinus_exploration(self):
-        trainer = PendulumTrainer(self._trainer_config(batch_size=2))
-
-        trainer.prefill_replay_buffer(strategy="sinus", num_steps=5, seed=11)
-
-        self.assertEqual(5, len(trainer.memory))
-        diagnostics = trainer.replay_diagnostics()
-        self.assertEqual(5, diagnostics["size"])
-        self.assertIn("down_to_up", diagnostics["episode_mode_distribution"])
-
-    def test_actor_update_can_require_non_crash_transitions(self):
-        trainer = PendulumTrainer(
-            self._trainer_config(
-                policy_delay=1,
-                min_non_crash_transitions_for_actor_update=10,
-            )
-        )
-        self._fill_replay(
-            trainer,
-            trainer.config["batch_size"],
-            termination_reason="cart_limit_streak",
-        )
-        actor_before = self._clone_parameters(trainer.actor_model)
-        critic_before = self._clone_parameters(trainer.critic_model)
-
-        result = trainer.update_networks()
-
-        self.assertEqual(0.0, result["actor_loss"])
-        self.assertFalse(self._parameters_changed(actor_before, trainer.actor_model))
-        self.assertTrue(self._parameters_changed(critic_before, trainer.critic_model))
-
-    def test_actor_update_can_require_near_capture_transitions(self):
-        trainer = PendulumTrainer(
-            self._trainer_config(
-                policy_delay=1,
-                min_near_capture_transitions_for_actor_update=10,
-            )
-        )
-        self._fill_replay(trainer, trainer.config["batch_size"])
-        actor_before = self._clone_parameters(trainer.actor_model)
-        critic_before = self._clone_parameters(trainer.critic_model)
-
-        result = trainer.update_networks()
-
-        self.assertEqual(0.0, result["actor_loss"])
-        self.assertFalse(self._parameters_changed(actor_before, trainer.actor_model))
-        self.assertTrue(self._parameters_changed(critic_before, trainer.critic_model))
-
-    def test_actor_update_runs_after_near_capture_gate_is_satisfied(self):
-        trainer = PendulumTrainer(
-            self._trainer_config(
-                policy_delay=1,
-                min_near_capture_transitions_for_actor_update=2,
-            )
-        )
-        self._fill_replay(trainer, trainer.config["batch_size"])
-        actor_before = self._clone_parameters(trainer.actor_model)
-
-        result = trainer.update_networks()
-
-        self.assertNotEqual(0.0, result["actor_loss"])
-        self.assertTrue(self._parameters_changed(actor_before, trainer.actor_model))
 
 
 if __name__ == "__main__":

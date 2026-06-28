@@ -100,7 +100,9 @@ class RewardManager:
             capture_entry_bonus = (
                 float(self.config["capture_entry_bonus"]) if entered_capture else 0.0
             )
-            hold_bonus = float(self.config["hold_progress_bonus"]) * hold_progress_delta
+            # Bonus de maintien uniquement quand le streak progresse (évite les creux négatifs)
+            if hold_progress_delta > 0.0:
+                hold_bonus = float(self.config["hold_progress_bonus"]) * hold_progress_delta
             reward = capture_quality_bonus + capture_entry_bonus + hold_bonus
         else:
             # Récompense potentielle pendant le swing-up

@@ -11,9 +11,17 @@ config = {
     'actor_lr': 3e-4,
     'critic_lr': 3e-4,
     'gamma': 0.995,
-    'batch_size': 64,
+    'ppo_epochs': 10,
+    'minibatch_size': 64,
+    'gae_lambda': 0.95,
+    'clip_epsilon': 0.2,
+    'entropy_coefficient': 0.01,
+    'value_loss_coefficient': 0.5,
+    'max_grad_norm': 0.5,
+    'target_kl': 0.03,
+    'normalize_advantages': True,
+    'initial_log_std': -1.0,
     'hidden_dim': 256,
-    'buffer_capacity': 10_000,
     'load_models': False,
     'num_nodes': 2,
     'gravity': 1.0,
@@ -23,22 +31,7 @@ config = {
     'cart_friction': 0.1,
     'angular_velocity_damping': 0.0,
     'max_action': 0.5,
-    'exploration_noise': 0.10,
-    'swing_up_exploration_noise': 0.05,
-    'swing_up_exploration_amplitude': 0.45,
-    'swing_up_exploration_period_min': 60,
-    'swing_up_exploration_period_max': 120,
     'swing_up_capture_score_threshold': 0.75,
-    'swing_up_capture_noise': 0.03,
-    'policy_noise': 0.08,
-    'noise_clip': 0.15,
-    'policy_delay': 2,
-    'polyak_tau': 0.005,
-    'learning_starts': 1_000,
-    'train_every_steps': 4,
-    'updates_per_train': 1,
-    'min_non_crash_transitions_for_actor_update': 0,
-    'min_near_capture_transitions_for_actor_update': 0,
     'initial_angle_noise': 0.1122,
     'initial_velocity_noise': 0.04,
     'episode_mode_probabilities': {
@@ -85,9 +78,6 @@ config = {
     'action_l2_penalty': 0.0,
     'action_delta_penalty': 0.0,
     'saturation_penalty': 0.0,
-    'swing_up_sinus_episode_probability_start': 0.6,
-    'swing_up_sinus_episode_probability_end': 0.1,
-    'swing_up_sinus_episode_decay_episodes': 2000,
     'render_training': True,
     'render_every_episodes': 50,
     'render_first_episode': True,
@@ -104,17 +94,13 @@ config = {
 def validate_config(cfg):
     required_keys = {
         'num_episodes', 'max_steps', 'actor_lr', 'critic_lr', 'gamma',
-        'batch_size', 'hidden_dim', 'buffer_capacity', 'load_models',
+        'ppo_epochs', 'minibatch_size', 'gae_lambda', 'clip_epsilon',
+        'entropy_coefficient', 'value_loss_coefficient', 'max_grad_norm',
+        'target_kl', 'normalize_advantages', 'initial_log_std',
+        'hidden_dim', 'load_models',
         'num_nodes', 'gravity', 'cart_mass', 'bob_mass', 'angular_friction',
         'cart_friction', 'angular_velocity_damping', 'max_action',
-        'exploration_noise', 'swing_up_exploration_noise',
-        'swing_up_exploration_amplitude', 'swing_up_exploration_period_min',
-        'swing_up_exploration_period_max', 'swing_up_capture_score_threshold',
-        'swing_up_capture_noise', 'policy_noise', 'noise_clip',
-        'policy_delay', 'polyak_tau', 'learning_starts', 'train_every_steps',
-        'updates_per_train', 'initial_angle_noise', 'initial_velocity_noise',
-        'min_non_crash_transitions_for_actor_update',
-        'min_near_capture_transitions_for_actor_update',
+        'swing_up_capture_score_threshold', 'initial_angle_noise', 'initial_velocity_noise',
         'episode_mode_probabilities', 'adaptive_curriculum_enabled',
         'curriculum_start_episode', 'curriculum_window',
         'curriculum_min_probabilities', 'curriculum_max_probabilities',
@@ -129,9 +115,6 @@ def validate_config(cfg):
         'capture_drop_target_score_threshold', 'capture_drop_grace_steps',
         'hold_progress_bonus', 'action_l2_penalty', 'action_delta_penalty',
         'saturation_penalty',
-        'swing_up_sinus_episode_probability_start',
-        'swing_up_sinus_episode_probability_end',
-        'swing_up_sinus_episode_decay_episodes',
         'render_training', 'render_every_episodes', 'render_first_episode',
         'plot_config',
     }
@@ -143,11 +126,9 @@ def validate_config(cfg):
         raise ValueError(f"unknown config keys: {unknown}")
 
     positive_integer_keys = (
-        'num_episodes', 'max_steps', 'batch_size', 'hidden_dim',
-        'buffer_capacity', 'num_nodes', 'policy_delay', 'train_every_steps',
-        'updates_per_train', 'curriculum_window', 'cart_limit_termination_steps',
+        'num_episodes', 'max_steps', 'ppo_epochs', 'minibatch_size', 'hidden_dim',
+        'num_nodes', 'curriculum_window', 'cart_limit_termination_steps',
         'capture_drop_grace_steps',
-        'swing_up_sinus_episode_decay_episodes',
     )
     for key in positive_integer_keys:
         value = cfg[key]
@@ -156,8 +137,7 @@ def validate_config(cfg):
 
     positive_keys = (
         'actor_lr', 'critic_lr', 'gravity', 'cart_mass', 'bob_mass', 'max_action',
-        'swing_up_exploration_period_min', 'swing_up_exploration_period_max',
-        'capture_allowed_angular_speed',
+        'capture_allowed_angular_speed', 'max_grad_norm',
     )
     for key in positive_keys:
         value = cfg[key]
@@ -171,18 +151,15 @@ def validate_config(cfg):
 
     if not 0.0 <= cfg['gamma'] < 1.0:
         raise ValueError(f"config['gamma'] must be in [0, 1), got {cfg['gamma']!r}")
-    if not 0.0 < cfg['polyak_tau'] <= 1.0:
-        raise ValueError(f"config['polyak_tau'] must be in (0, 1], got {cfg['polyak_tau']!r}")
+    if not 0.0 <= cfg['gae_lambda'] <= 1.0:
+        raise ValueError(f"config['gae_lambda'] must be in [0, 1], got {cfg['gae_lambda']!r}")
+    if not 0.0 < cfg['clip_epsilon'] < 1.0:
+        raise ValueError(f"config['clip_epsilon'] must be in (0, 1), got {cfg['clip_epsilon']!r}")
     if cfg['transition_switch_step_min'] > cfg['transition_switch_step_max']:
         raise ValueError("transition_switch_step_min must be <= transition_switch_step_max")
-    if cfg['swing_up_exploration_period_min'] > cfg['swing_up_exploration_period_max']:
-        raise ValueError("swing_up_exploration_period_min must be <= swing_up_exploration_period_max")
-
     nonnegative_integer_keys = (
-        'learning_starts', 'curriculum_start_episode', 'transition_switch_step_min',
+        'curriculum_start_episode', 'transition_switch_step_min',
         'transition_switch_step_max', 'render_every_episodes',
-        'min_non_crash_transitions_for_actor_update',
-        'min_near_capture_transitions_for_actor_update',
     )
     for key in nonnegative_integer_keys:
         value = cfg[key]
@@ -191,9 +168,7 @@ def validate_config(cfg):
 
     nonnegative_keys = (
         'angular_friction', 'cart_friction', 'angular_velocity_damping',
-        'exploration_noise', 'swing_up_exploration_noise',
-        'swing_up_exploration_amplitude', 'swing_up_capture_noise', 'policy_noise',
-        'noise_clip', 'initial_angle_noise', 'initial_velocity_noise',
+        'initial_angle_noise', 'initial_velocity_noise',
         'capture_angle_noise', 'capture_cart_velocity_noise',
         'capture_angular_velocity_noise', 'down_angle_noise',
         'capture_entry_bonus', 'swing_up_energy_progress_weight',
@@ -201,6 +176,7 @@ def validate_config(cfg):
         'capture_quality_bonus',
         'hold_progress_bonus', 'cart_limit_proximity_penalty',
         'action_l2_penalty', 'action_delta_penalty', 'saturation_penalty',
+        'entropy_coefficient', 'value_loss_coefficient',
     )
     for key in nonnegative_keys:
         value = cfg[key]
@@ -211,6 +187,16 @@ def validate_config(cfg):
             or value < 0.0
         ):
             raise ValueError(f"config[{key!r}] must be finite and nonnegative, got {value!r}")
+    target_kl = cfg['target_kl']
+    if target_kl is not None and (
+        not isinstance(target_kl, (int, float))
+        or isinstance(target_kl, bool)
+        or not math.isfinite(target_kl)
+        or target_kl <= 0.0
+    ):
+        raise ValueError("target_kl must be None or a finite positive number")
+    if not isinstance(cfg['initial_log_std'], (int, float)) or not math.isfinite(cfg['initial_log_std']):
+        raise ValueError("initial_log_std must be finite")
     if not 0.0 < cfg['swing_up_capture_score_threshold'] <= 1.0:
         raise ValueError("swing_up_capture_score_threshold must be in (0, 1]")
     if not math.isfinite(cfg['cart_failure_penalty']) or cfg['cart_failure_penalty'] >= 0.0:
@@ -222,19 +208,6 @@ def validate_config(cfg):
     threshold = cfg['capture_drop_target_score_threshold']
     if not isinstance(threshold, (int, float)) or not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
         raise ValueError("capture_drop_target_score_threshold must be in [0, 1]")
-
-    start_probability = cfg['swing_up_sinus_episode_probability_start']
-    end_probability = cfg['swing_up_sinus_episode_probability_end']
-    if not isinstance(start_probability, (int, float)) or not math.isfinite(start_probability):
-        raise ValueError("swing_up_sinus_episode_probability_start must be finite")
-    if not isinstance(end_probability, (int, float)) or not math.isfinite(end_probability):
-        raise ValueError("swing_up_sinus_episode_probability_end must be finite")
-    if not 0.0 <= end_probability <= start_probability <= 1.0:
-        raise ValueError(
-            "swing_up_sinus probabilities must satisfy "
-            "0 <= swing_up_sinus_episode_probability_end <= "
-            "swing_up_sinus_episode_probability_start <= 1"
-        )
 
     _validate_probability_map('episode_mode_probabilities', cfg['episode_mode_probabilities'], require_sum=True)
     minimums = _validate_probability_map(
@@ -265,7 +238,10 @@ def validate_config(cfg):
     for key in ('plot_frequency', 'max_points_per_plot', 'plot_dpi'):
         if not isinstance(plot_config[key], int) or plot_config[key] <= 0:
             raise ValueError(f"plot_config[{key!r}] must be a positive integer")
-    for key in ('load_models', 'adaptive_curriculum_enabled', 'render_training', 'render_first_episode'):
+    for key in (
+        'load_models', 'normalize_advantages', 'adaptive_curriculum_enabled',
+        'render_training', 'render_first_episode',
+    ):
         if not isinstance(cfg[key], bool):
             raise ValueError(f"config[{key!r}] must be bool")
     return cfg

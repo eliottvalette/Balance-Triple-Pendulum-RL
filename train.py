@@ -1,411 +1,371 @@
+from __future__ import annotations
+
 import json
-import math
 import os
 import random
-from collections import deque
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 import torch
 import torch.nn.functional as F
+from numpy.typing import NDArray
+from torch import Tensor
 
 from config import EPISODE_MODES as CONFIG_EPISODE_MODES
 from config import config, validate_config
 from metrics import MetricsTracker
-from model import PendulumActor, PendulumCritic
+from model import PendulumActorPolicy, PendulumValueCritic
 from reward import RewardManager
 from tp_env import PendulumEnv
 
 MODEL_SAVE_PREFIX = "models/interrupted"
 MODEL_LOAD_PREFIX = "models/checkpoint"
+MODEL_VERSION = "ppo-v1"
+ACTOR_EVAL_CAPTURE_SEEDS = (0, 1, 2, 3, 4)
 
-class ReplayBuffer:
-    def __init__(self, capacity=10000):
-        self.buffer = deque(maxlen=capacity)
+FloatArray = NDArray[np.float32]
+BoolArray = NDArray[np.bool_]
 
-    def push(self, state, action, reward, next_state, terminated, truncated, *, metadata=None):
-        # Validation des transitions avant stockage
-        if not np.all(np.isfinite(state)):
-            raise FloatingPointError(f"replay state contains non-finite values: {state}")
-        if not np.isfinite(action):
-            raise FloatingPointError(f"replay action is non-finite: {action}")
-        if not np.isfinite(reward):
-            raise FloatingPointError(f"replay reward is non-finite: {reward}")
-        if not np.all(np.isfinite(next_state)):
-            raise FloatingPointError(f"replay next_state contains non-finite values: {next_state}")
-        if not isinstance(terminated, (bool, np.bool_)):
-            raise TypeError(f"replay terminated must be bool, got {type(terminated).__name__}")
-        if not isinstance(truncated, (bool, np.bool_)):
-            raise TypeError(f"replay truncated must be bool, got {type(truncated).__name__}")
 
-        # Masque de bootstrap : 0 si l'épisode se termine
-        bootstrap_mask = 0.0 if bool(terminated) or bool(truncated) else 1.0
-        transition_metadata = {} if metadata is None else dict(metadata)
-        self.buffer.append((
-            state,
-            np.array([action], dtype=np.float32),
-            reward,
-            next_state,
-            bool(terminated),
-            bool(truncated),
-            bootstrap_mask,
-            transition_metadata,
-        ))
+def compute_gae(
+    rewards: FloatArray,
+    values: FloatArray,
+    next_values: FloatArray,
+    dones: BoolArray,
+    terminated: BoolArray,
+    *,
+    gamma: float,
+    gae_lambda: float,
+) -> tuple[FloatArray, FloatArray]:
+    """Compute GAE without leaking advantages across episode boundaries.
 
-    def sample(self, batch_size):
-        batch = self.sample_entries(batch_size)
-        states, actions, rewards, next_states, terminated, truncated, bootstrap_masks, _metadata = zip(*batch)
-        states = np.stack(states)
-        actions = np.stack(actions)
-        rewards = np.stack(rewards)
-        next_states = np.stack(next_states)
-        terminated = np.stack(terminated)
-        truncated = np.stack(truncated)
-        bootstrap_masks = np.stack(bootstrap_masks)
-        return states, actions, rewards, next_states, terminated, truncated, bootstrap_masks
+    A true termination disables value bootstrapping. A time-limit truncation still
+    bootstraps from the final observation, while stopping recursive GAE propagation.
+    """
 
-    def sample_entries(self, batch_size):
-        if batch_size <= 0:
-            raise ValueError(f"batch_size must be positive, got {batch_size}")
-        if len(self.buffer) < batch_size:
-            raise ValueError(
-                f"cannot sample batch of {batch_size} from buffer of {len(self.buffer)}"
-            )
-        return random.sample(self.buffer, batch_size)
+    arrays = (rewards, values, next_values, dones, terminated)
+    lengths = {len(array) for array in arrays}
+    if lengths == {0}:
+        raise ValueError("cannot compute GAE for an empty rollout")
+    if len(lengths) != 1:
+        raise ValueError("GAE inputs must have the same length")
+    if not 0.0 <= gamma < 1.0:
+        raise ValueError("gamma must be in [0, 1)")
+    if not 0.0 <= gae_lambda <= 1.0:
+        raise ValueError("gae_lambda must be in [0, 1]")
+    for name, array in zip(("rewards", "values", "next_values"), arrays[:3]):
+        if not np.all(np.isfinite(array)):
+            raise FloatingPointError(f"{name} contains non-finite values")
 
-    def sample_with_metadata(self, batch_size):
-        batch = self.sample_entries(batch_size)
-        states, actions, rewards, next_states, terminated, truncated, bootstrap_masks, metadata = zip(*batch)
-        states = np.stack(states)
-        actions = np.stack(actions)
-        rewards = np.stack(rewards)
-        next_states = np.stack(next_states)
-        terminated = np.stack(terminated)
-        truncated = np.stack(truncated)
-        bootstrap_masks = np.stack(bootstrap_masks)
-        return states, actions, rewards, next_states, terminated, truncated, bootstrap_masks, list(metadata)
-
-    def diagnostics(self, *, max_action):
-        if max_action <= 0.0 or not np.isfinite(max_action):
-            raise ValueError(f"max_action must be finite and positive, got {max_action!r}")
-        if not self.buffer:
-            return {
-                "size": 0,
-                "action_histogram": [],
-                "saturation_fraction": 0.0,
-                "episode_mode_distribution": {},
-                "reward_mean": 0.0,
-                "reward_min": 0.0,
-                "reward_max": 0.0,
-                "termination_reasons": {},
-                "capture_fraction": 0.0,
-                "near_capture_fraction": 0.0,
-                "target_state_coverage": 0.0,
-                "non_crash_transitions": 0,
-                "near_capture_non_crash_transitions": 0,
-            }
-        actions = np.array([entry[1][0] for entry in self.buffer], dtype=float)
-        rewards = np.array([entry[2] for entry in self.buffer], dtype=float)
-        metadata = [entry[7] for entry in self.buffer]
-        mode_counts = self._count_metadata(metadata, "episode_mode")
-        reason_counts = self._count_metadata(metadata, "termination_reason")
-        capture_flags = np.array([bool(item.get("capture_started", False)) for item in metadata], dtype=float)
-        near_capture_flags = np.array([
-            float(item.get("target_score", 0.0)) >= 0.75 for item in metadata
-        ], dtype=bool)
-        non_crash = sum(item.get("termination_reason") != "cart_limit_streak" for item in metadata)
-        near_capture_non_crash = sum(
-            item.get("termination_reason") != "cart_limit_streak"
-            and float(item.get("target_score", 0.0)) >= 0.75
-            for item in metadata
+    advantages = np.zeros_like(rewards, dtype=np.float32)
+    gae = 0.0
+    for index in range(len(rewards) - 1, -1, -1):
+        bootstrap_mask = 0.0 if bool(terminated[index]) else 1.0
+        continuation_mask = 0.0 if bool(dones[index]) else 1.0
+        delta = (
+            float(rewards[index])
+            + gamma * bootstrap_mask * float(next_values[index])
+            - float(values[index])
         )
-        histogram, _edges = np.histogram(actions, bins=10, range=(-max_action, max_action))
+        gae = delta + gamma * gae_lambda * continuation_mask * gae
+        advantages[index] = gae
+    returns = advantages + values.astype(np.float32, copy=False)
+    return advantages, returns
+
+
+class RolloutBuffer:
+    """Short-lived storage for samples from the current policy only."""
+
+    def __init__(self) -> None:
+        self.clear()
+
+    def add(
+        self,
+        *,
+        state: NDArray[np.floating[Any]],
+        action: float,
+        reward: float,
+        done: bool,
+        terminated: bool,
+        value: float,
+        next_value: float,
+        log_prob: float,
+    ) -> None:
+        numeric_values = (action, reward, value, next_value, log_prob)
+        if not np.all(np.isfinite(state)) or not all(np.isfinite(item) for item in numeric_values):
+            raise FloatingPointError("rollout transition contains non-finite values")
+        if not isinstance(done, (bool, np.bool_)):
+            raise TypeError("done must be bool")
+        if not isinstance(terminated, (bool, np.bool_)):
+            raise TypeError("terminated must be bool")
+        if terminated and not done:
+            raise ValueError("a terminated transition must also be done")
+
+        self.states.append(np.asarray(state, dtype=np.float32).copy())
+        self.actions.append(float(action))
+        self.rewards.append(float(reward))
+        self.dones.append(bool(done))
+        self.terminated.append(bool(terminated))
+        self.values.append(float(value))
+        self.next_values.append(float(next_value))
+        self.log_probs.append(float(log_prob))
+
+    def compute_advantages(self, *, gamma: float, gae_lambda: float) -> None:
+        self.advantages, self.returns = compute_gae(
+            np.asarray(self.rewards, dtype=np.float32),
+            np.asarray(self.values, dtype=np.float32),
+            np.asarray(self.next_values, dtype=np.float32),
+            np.asarray(self.dones, dtype=np.bool_),
+            np.asarray(self.terminated, dtype=np.bool_),
+            gamma=gamma,
+            gae_lambda=gae_lambda,
+        )
+
+    def as_tensors(self) -> dict[str, Tensor]:
+        if len(self) == 0:
+            raise ValueError("cannot create a batch from an empty rollout")
+        if self.advantages is None or self.returns is None:
+            raise RuntimeError("advantages must be computed before batching")
         return {
-            "size": len(self.buffer),
-            "action_histogram": histogram.tolist(),
-            "saturation_fraction": float(np.mean(np.abs(actions) >= 0.95 * max_action)),
-            "episode_mode_distribution": mode_counts,
-            "reward_mean": float(np.mean(rewards)),
-            "reward_min": float(np.min(rewards)),
-            "reward_max": float(np.max(rewards)),
-            "termination_reasons": reason_counts,
-            "capture_fraction": float(np.mean(capture_flags)),
-            "near_capture_fraction": float(np.mean(near_capture_flags.astype(float))),
-            "target_state_coverage": float(np.mean(near_capture_flags | capture_flags.astype(bool))),
-            "non_crash_transitions": int(non_crash),
-            "near_capture_non_crash_transitions": int(near_capture_non_crash),
+            "states": torch.as_tensor(np.stack(self.states), dtype=torch.float32),
+            "actions": torch.as_tensor(self.actions, dtype=torch.float32).unsqueeze(-1),
+            "old_log_probs": torch.as_tensor(self.log_probs, dtype=torch.float32),
+            "advantages": torch.as_tensor(self.advantages, dtype=torch.float32),
+            "returns": torch.as_tensor(self.returns, dtype=torch.float32),
         }
 
-    @staticmethod
-    def _count_metadata(metadata, key):
-        counts = {}
-        for item in metadata:
-            value = item.get(key)
-            if value is not None:
-                counts[value] = counts.get(value, 0) + 1
-        return counts
+    def clear(self) -> None:
+        self.states: list[FloatArray] = []
+        self.actions: list[float] = []
+        self.rewards: list[float] = []
+        self.dones: list[bool] = []
+        self.terminated: list[bool] = []
+        self.values: list[float] = []
+        self.next_values: list[float] = []
+        self.log_probs: list[float] = []
+        self.advantages: FloatArray | None = None
+        self.returns: FloatArray | None = None
 
-    def count_non_crash_transitions(self):
-        return sum(
-            entry[7].get("termination_reason") != "cart_limit_streak"
-            for entry in self.buffer
-        )
-
-    def count_near_capture_non_crash_transitions(self):
-        return sum(
-            entry[7].get("termination_reason") != "cart_limit_streak"
-            and float(entry[7].get("target_score", 0.0)) >= 0.75
-            for entry in self.buffer
-        )
-
-    def __len__(self):
-        return len(self.buffer)
+    def __len__(self) -> int:
+        return len(self.states)
 
 
 class PendulumTrainer:
     EPISODE_MODES = CONFIG_EPISODE_MODES
+    ACTOR_EVAL_CAPTURE_SEEDS = ACTOR_EVAL_CAPTURE_SEEDS
 
-    def __init__(self, cfg):
+    def __init__(self, cfg: Mapping[str, Any]) -> None:
         validate_config(cfg)
-        self.config = cfg
-        self.max_action = cfg["max_action"]
-
-        # Environnement et gestionnaire de récompense
-        self.reward_manager = RewardManager(cfg)
+        self.config = dict(cfg)
+        self.max_action = float(cfg["max_action"])
+        self.reward_manager = RewardManager(self.config)
         self.env = PendulumEnv(
             reward_manager=self.reward_manager,
             render_mode=None,
-            num_nodes=cfg["num_nodes"],
-            max_steps=cfg["max_steps"],
-            env_config=cfg,
+            num_nodes=int(cfg["num_nodes"]),
+            max_steps=int(cfg["max_steps"]),
+            env_config=self.config,
         )
 
         initial_state = self.env.reset(episode_mode="capture_vertical")
         self.state_dim = len(initial_state)
         self.action_dim = 1
-
-        # Réseaux acteur-critique TD3 (online + cibles)
-        self.actor_model = PendulumActor(
+        self.actor_model = PendulumActorPolicy(
             self.state_dim,
             self.action_dim,
-            cfg["hidden_dim"],
+            int(cfg["hidden_dim"]),
             self.max_action,
+            float(cfg["initial_log_std"]),
         )
-        self.actor_target = PendulumActor(
-            self.state_dim,
-            self.action_dim,
-            cfg["hidden_dim"],
-            self.max_action,
+        self.critic_model = PendulumValueCritic(self.state_dim, int(cfg["hidden_dim"]))
+        self.actor_optimizer = torch.optim.Adam(
+            self.actor_model.parameters(), lr=float(cfg["actor_lr"])
         )
-        self.critic_model = PendulumCritic(self.state_dim, self.action_dim, cfg["hidden_dim"])
-        self.critic_target = PendulumCritic(self.state_dim, self.action_dim, cfg["hidden_dim"])
-        self.actor_target.load_state_dict(self.actor_model.state_dict())
-        self.critic_target.load_state_dict(self.critic_model.state_dict())
+        self.critic_optimizer = torch.optim.Adam(
+            self.critic_model.parameters(), lr=float(cfg["critic_lr"])
+        )
 
-        # Optimiseurs et mémoire de replay
-        self.actor_optimizer = torch.optim.Adam(self.actor_model.parameters(), lr=cfg["actor_lr"])
-        self.critic_optimizer = torch.optim.Adam(self.critic_model.parameters(), lr=cfg["critic_lr"])
-
+        self.rollout_buffer = RolloutBuffer()
         self.metrics = MetricsTracker(cfg["plot_config"])
-        self.plot_frequency = cfg["plot_config"]["plot_frequency"]
-        self.memory = ReplayBuffer(capacity=cfg["buffer_capacity"])
-        self.total_it = 0
+        self.plot_frequency = int(cfg["plot_config"]["plot_frequency"])
+        self.total_updates = 0
         self.total_env_steps = 0
 
         os.makedirs("results", exist_ok=True)
         os.makedirs("models", exist_ok=True)
-
         if cfg["load_models"]:
             self.load_models()
 
-    def select_action(self, state, noise_std=0.0):
-        # Politique déterministe avec bruit gaussien optionnel
+    def select_action(self, state: NDArray[np.floating[Any]], *, deterministic: bool) -> float:
         if not np.all(np.isfinite(state)):
-            raise FloatingPointError(f"policy state contains non-finite values: {state}")
-        if not np.isfinite(noise_std) or noise_std < 0.0:
-            raise ValueError(f"noise_std must be finite and nonnegative, got {noise_std}")
-        state_tensor = torch.FloatTensor(state).unsqueeze(0)
+            raise FloatingPointError("policy state contains non-finite values")
+        state_tensor = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
-            action = self.actor_model(state_tensor).cpu().numpy()[0, 0]
+            if deterministic:
+                action_tensor = self.actor_model.deterministic(state_tensor)
+            else:
+                action_tensor, _log_prob, _entropy = self.actor_model.sample(state_tensor)
+        action = float(action_tensor.item())
         if not np.isfinite(action):
-            raise FloatingPointError(f"actor produced a non-finite action: {action}")
-        if noise_std > 0:
-            action += np.random.normal(0.0, noise_std)
-        return float(np.clip(action, -self.max_action, self.max_action))
+            raise FloatingPointError("policy produced a non-finite action")
+        return action
 
-    def _swing_exploration_action(self, step_index, swing_period, swing_phase):
-        return float(
-            self.config["swing_up_exploration_amplitude"]
-            * math.sin(2.0 * math.pi * step_index / swing_period + swing_phase)
-        )
+    def _policy_step(self, state: NDArray[np.floating[Any]]) -> tuple[float, float, float]:
+        state_tensor = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0)
+        with torch.no_grad():
+            action, log_prob, _entropy = self.actor_model.sample(state_tensor)
+            value = self.critic_model(state_tensor)
+        return float(action.item()), float(log_prob.item()), float(value.item())
 
-    def _swing_up_sinus_episode_probability(self, episode):
-        start = float(self.config["swing_up_sinus_episode_probability_start"])
-        end = float(self.config["swing_up_sinus_episode_probability_end"])
-        decay_episodes = int(self.config["swing_up_sinus_episode_decay_episodes"])
-        progress = min(1.0, episode / decay_episodes)
-        return start + (end - start) * progress
+    def _actor_raw_action(self, state: NDArray[np.floating[Any]]) -> float:
+        return self.select_action(state, deterministic=True)
 
-    def _select_collection_action(
-        self,
-        state,
-        step_index,
-        capture_started,
-        initial_pose_mode,
-        swing_period,
-        swing_phase,
-        use_sinus_swing_exploration,
-    ):
-        # Exploration sinusoïdale pendant le swing-up depuis le bas
-        if initial_pose_mode == "down" and not capture_started and use_sinus_swing_exploration:
-            action = self._swing_exploration_action(step_index, swing_period, swing_phase)
-            exploration_noise = self.config["swing_up_exploration_noise"]
-            if exploration_noise > 0.0:
-                action += np.random.normal(0.0, exploration_noise)
-            return float(np.clip(action, -self.max_action, self.max_action))
-        if initial_pose_mode == "down" and not capture_started:
-            return self.select_action(state, noise_std=self.config["swing_up_exploration_noise"])
+    def collect_rollout(self, episode: int) -> dict[str, Any]:
+        if len(self.rollout_buffer) != 0:
+            raise RuntimeError("the previous rollout must be consumed before collecting another")
 
-        # Bruit adapté selon la phase de l'épisode
-        if initial_pose_mode == "down":
-            noise_std = self.config["swing_up_capture_noise"]
-        else:
-            noise_std = self.config["exploration_noise"]
-        return self.select_action(state, noise_std=noise_std)
-
-    def collect_trajectory(self, episode):
-        # Initialisation de l'épisode
         selected_mode, mode_probabilities = self._select_episode_mode(episode)
         state = self.env.reset(episode_mode=selected_mode)
         should_render = self._should_render_episode(episode)
         episode_reward = 0.0
-        reward_components_accumulated = {}
-        action_values = []
-        hold_before = []
-        hold_after = []
-        phase_hold = {1: [], -1: []}
+        reward_components_accumulated: dict[str, list[float]] = {}
+        action_values: list[float] = []
+        hold_before: list[float] = []
+        hold_after: list[float] = []
+        phase_hold: dict[int, list[float]] = {1: [], -1: []}
         switch_step = self.env.switch_step
-        termination_reason = None
+        termination_reason: str | None = None
         initial_phase = self.env.initial_phase
         initial_pose_mode = self.env.initial_pose_mode
-
-        # Direction de transition pour les métriques
-        if selected_mode == "capture_vertical":
-            transition_direction = "capture_vertical"
-        elif initial_pose_mode == "down":
-            transition_direction = "down_to_up"
-        else:
-            transition_direction = "up_to_fold" if initial_phase == 1 else "fold_to_up"
-        in_target_history = []
-        target_score_history = []
-        end_y_history = []
-
-        # Paramètres d'exploration sinusoïdale pour le swing-up
-        swing_period = random.uniform(
-            self.config["swing_up_exploration_period_min"],
-            self.config["swing_up_exploration_period_max"],
+        transition_direction = self._transition_direction(
+            selected_mode, initial_pose_mode, initial_phase
         )
-        swing_phase = random.uniform(0.0, 2.0 * math.pi)
-        capture_started = self.env.capture_started
-        swing_up_sinus_episode_probability = self._swing_up_sinus_episode_probability(episode)
-        if initial_pose_mode == "down":
-            swing_up_sinus_episode = (
-                random.random() < swing_up_sinus_episode_probability
-            )
-        else:
-            swing_up_sinus_episode = False
+        in_target_history: list[float] = []
+        target_score_history: list[float] = []
+        end_y_history: list[float] = []
 
-        # Boucle de collecte pas-à-pas
-        for step_idx in range(self.config["max_steps"]):
-            if initial_pose_mode == "down" and not capture_started:
-                noise_std = self.config["swing_up_exploration_noise"]
-            elif initial_pose_mode == "down":
-                noise_std = self.config["swing_up_capture_noise"]
-            else:
-                noise_std = self.config["exploration_noise"]
-
-            # Sélection de l'action et pas d'environnement
-            action = self._select_collection_action(
-                state,
-                step_idx,
-                capture_started,
-                initial_pose_mode,
-                swing_period,
-                swing_phase,
-                swing_up_sinus_episode,
-            )
+        for step_index in range(int(self.config["max_steps"])):
+            action, log_prob, value = self._policy_step(state)
             next_state, reward, terminated, truncated, info = self.env.step(action)
-
-            # Rendu optionnel pendant l'entraînement
             stop_requested = False
             if should_render:
                 rendering_successful = self.env.render(
                     action=action,
                     episode=episode,
-                    epsilon=noise_std,
-                    current_step=step_idx,
+                    epsilon=0.0,
+                    current_step=step_index,
                     phase=info["phase"],
                 )
-                if not rendering_successful:
-                    stop_requested = True
+                stop_requested = not rendering_successful
 
-            components = info["reward_components"]
-            capture_started = bool(info["capture_started"])
-            components["transition_reward"] = 0.0
-            components["pre_switch_reward_weight"] = 1.0
-
-            # Stockage de la transition dans le replay buffer
-            self.memory.push(
-                state,
-                action,
-                reward,
-                next_state,
-                terminated,
-                truncated,
-                metadata={
-                    "episode_mode": selected_mode,
-                    "termination_reason": info["termination_reason"],
-                    "capture_started": bool(info["capture_started"]),
-                    "target_score": float(info["target_score"]),
-                    "hit_cart_limit": bool(info["hit_cart_limit"]),
-                },
+            done = bool(terminated or truncated or stop_requested)
+            effective_termination = bool(terminated or stop_requested)
+            with torch.no_grad():
+                next_value = 0.0
+                if not effective_termination:
+                    next_state_tensor = torch.as_tensor(
+                        next_state, dtype=torch.float32
+                    ).unsqueeze(0)
+                    next_value = float(self.critic_model(next_state_tensor).item())
+            self.rollout_buffer.add(
+                state=state,
+                action=action,
+                reward=float(reward),
+                done=done,
+                terminated=effective_termination,
+                value=value,
+                next_value=next_value,
+                log_prob=log_prob,
             )
             self.total_env_steps += 1
-            action_values.append(action)
-            episode_reward += reward
 
-            for component_name, value in components.items():
-                reward_components_accumulated.setdefault(component_name, []).append(value)
+            components = info["reward_components"]
+            components["transition_reward"] = 0.0
+            components["pre_switch_reward_weight"] = 1.0
+            action_values.append(action)
+            episode_reward += float(reward)
+            for component_name, component_value in components.items():
+                reward_components_accumulated.setdefault(component_name, []).append(
+                    float(component_value)
+                )
 
             in_target = float(info["in_target"])
             in_target_history.append(in_target)
             target_score_history.append(float(info["target_score"]))
             end_y_history.append(float(components["end_y"]))
-            if step_idx < switch_step:
+            if step_index < switch_step:
                 hold_before.append(in_target)
             else:
                 hold_after.append(in_target)
             phase_hold[int(info["phase"])].append(in_target)
 
-            # Mises à jour réseau si le buffer est prêt
-            if self._should_update():
-                for _ in range(self.config["updates_per_train"]):
-                    self.update_networks()
-
             state = next_state
-            if terminated or truncated or stop_requested:
+            if done:
                 termination_reason = "render_closed" if stop_requested else info["termination_reason"]
                 break
 
-        # Agrégation des métriques de fin d'épisode
-        episode_length = step_idx + 1
+        self.rollout_buffer.compute_advantages(
+            gamma=float(self.config["gamma"]),
+            gae_lambda=float(self.config["gae_lambda"]),
+        )
+        return self._build_episode_summary(
+            episode_reward=episode_reward,
+            episode_length=step_index + 1,
+            reward_components=reward_components_accumulated,
+            hold_before=hold_before,
+            hold_after=hold_after,
+            phase_hold=phase_hold,
+            in_target_history=in_target_history,
+            target_score_history=target_score_history,
+            end_y_history=end_y_history,
+            action_values=action_values,
+            initial_phase=initial_phase,
+            initial_pose_mode=initial_pose_mode,
+            selected_mode=selected_mode,
+            transition_direction=transition_direction,
+            termination_reason=termination_reason or "none",
+            mode_probabilities=mode_probabilities,
+        )
+
+    def collect_trajectory(self, episode: int) -> dict[str, Any]:
+        """Compatibility name for callers; collection is still an on-policy rollout."""
+        return self.collect_rollout(episode)
+
+    @staticmethod
+    def _transition_direction(selected_mode: str, initial_pose_mode: str, initial_phase: int) -> str:
+        if selected_mode == "capture_vertical":
+            return "capture_vertical"
+        if initial_pose_mode == "down":
+            return "down_to_up"
+        return "up_to_fold" if initial_phase == 1 else "fold_to_up"
+
+    def _build_episode_summary(
+        self,
+        *,
+        episode_reward: float,
+        episode_length: int,
+        reward_components: dict[str, list[float]],
+        hold_before: list[float],
+        hold_after: list[float],
+        phase_hold: dict[int, list[float]],
+        in_target_history: list[float],
+        target_score_history: list[float],
+        end_y_history: list[float],
+        action_values: list[float],
+        initial_phase: int,
+        initial_pose_mode: str,
+        selected_mode: str,
+        transition_direction: str,
+        termination_reason: str,
+        mode_probabilities: Mapping[str, float],
+    ) -> dict[str, Any]:
         hold_before_switch = float(np.mean(hold_before)) if hold_before else 0.0
         hold_after_switch = float(np.mean(hold_after)) if hold_after else 0.0
         final_window = max(1, int(0.2 * len(in_target_history)))
-        final_hold = float(np.mean(in_target_history[-final_window:])) if in_target_history else 0.0
-        peak_target_score = float(np.max(target_score_history)) if target_score_history else 0.0
-        max_end_y = float(np.max(end_y_history)) if end_y_history else 0.0
-
-        # Critères de succès selon la direction de transition
+        final_hold = float(np.mean(in_target_history[-final_window:]))
+        peak_target_score = float(np.max(target_score_history))
+        max_end_y = float(np.max(end_y_history))
         if transition_direction in ("down_to_up", "capture_vertical"):
             hold_after_switch = final_hold
             balanced_hold = final_hold
@@ -413,10 +373,11 @@ class PendulumTrainer:
         else:
             balanced_hold = min(hold_before_switch, hold_after_switch)
             episode_success = float(hold_before_switch > 0.8 and hold_after_switch > 0.8)
-        return {
+
+        summary: dict[str, Any] = {
             "episode_reward": episode_reward,
             "episode_length": episode_length,
-            "reward_components": reward_components_accumulated,
+            "reward_components": reward_components,
             "hold_before_switch": hold_before_switch,
             "hold_after_switch": hold_after_switch,
             "balanced_hold": balanced_hold,
@@ -430,330 +391,245 @@ class PendulumTrainer:
             "initial_pose_mode": initial_pose_mode,
             "selected_mode": selected_mode,
             "transition_direction": transition_direction,
-            f"{transition_direction}_hold_before": hold_before_switch,
-            f"{transition_direction}_hold_after": hold_after_switch,
-            f"{transition_direction}_balanced_hold": balanced_hold,
-            f"{transition_direction}_success": episode_success,
-            f"{transition_direction}_final_hold": final_hold,
-            f"{transition_direction}_peak_target_score": peak_target_score,
-            f"{transition_direction}_max_end_y": max_end_y,
             "transition_reward_mean": 0.0,
-            "action_mean": float(np.mean(action_values)) if action_values else 0.0,
-            "action_std": float(np.std(action_values)) if action_values else 0.0,
-            "action_abs_mean": float(np.mean(np.abs(action_values))) if action_values else 0.0,
-            "termination_reason": termination_reason or "none",
-            "swing_up_sinus_episode": float(swing_up_sinus_episode),
-            "swing_up_sinus_episode_probability": swing_up_sinus_episode_probability,
-            "mode_probability_down_to_up": mode_probabilities["down_to_up"],
-            "mode_probability_capture_vertical": mode_probabilities["capture_vertical"],
-            "mode_probability_fold_to_up": mode_probabilities["fold_to_up"],
-            "mode_probability_up_to_fold": mode_probabilities["up_to_fold"],
+            "action_mean": float(np.mean(action_values)),
+            "action_std": float(np.std(action_values)),
+            "action_abs_mean": float(np.mean(np.abs(action_values))),
+            "termination_reason": termination_reason,
+        }
+        for mode in self.EPISODE_MODES:
+            summary[f"mode_probability_{mode}"] = float(mode_probabilities[mode])
+        for suffix, value in (
+            ("hold_before", hold_before_switch),
+            ("hold_after", hold_after_switch),
+            ("balanced_hold", balanced_hold),
+            ("success", episode_success),
+            ("final_hold", final_hold),
+            ("peak_target_score", peak_target_score),
+            ("max_end_y", max_end_y),
+        ):
+            summary[f"{transition_direction}_{suffix}"] = value
+        return summary
+
+    def update_ppo(self) -> dict[str, float]:
+        batch = self.rollout_buffer.as_tensors()
+        advantages = batch["advantages"]
+        if self.config["normalize_advantages"] and advantages.numel() > 1:
+            advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
+
+        batch_size = advantages.shape[0]
+        minibatch_size = min(int(self.config["minibatch_size"]), batch_size)
+        policy_losses: list[float] = []
+        value_losses: list[float] = []
+        entropies: list[float] = []
+        kl_values: list[float] = []
+        clip_fractions: list[float] = []
+        early_stop = False
+
+        for _epoch in range(int(self.config["ppo_epochs"])):
+            indices = torch.randperm(batch_size)
+            for start in range(0, batch_size, minibatch_size):
+                minibatch_indices = indices[start : start + minibatch_size]
+                states = batch["states"][minibatch_indices]
+                actions = batch["actions"][minibatch_indices]
+                old_log_probs = batch["old_log_probs"][minibatch_indices]
+                minibatch_advantages = advantages[minibatch_indices]
+                returns = batch["returns"][minibatch_indices]
+
+                new_log_probs, entropy = self.actor_model.evaluate_actions(states, actions)
+                log_ratio = new_log_probs - old_log_probs
+                ratio = log_ratio.exp()
+                unclipped_objective = ratio * minibatch_advantages
+                clipped_ratio = ratio.clamp(
+                    1.0 - float(self.config["clip_epsilon"]),
+                    1.0 + float(self.config["clip_epsilon"]),
+                )
+                clipped_objective = clipped_ratio * minibatch_advantages
+                policy_loss = -torch.min(unclipped_objective, clipped_objective).mean()
+                entropy_mean = entropy.mean()
+                actor_loss = policy_loss - float(self.config["entropy_coefficient"]) * entropy_mean
+
+                predicted_values = self.critic_model(states)
+                value_loss = F.mse_loss(predicted_values, returns)
+                critic_loss = float(self.config["value_loss_coefficient"]) * value_loss
+                if not torch.isfinite(actor_loss) or not torch.isfinite(critic_loss):
+                    raise FloatingPointError("PPO loss became non-finite")
+
+                self.actor_optimizer.zero_grad()
+                actor_loss.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    self.actor_model.parameters(), float(self.config["max_grad_norm"])
+                )
+                self.actor_optimizer.step()
+
+                self.critic_optimizer.zero_grad()
+                critic_loss.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    self.critic_model.parameters(), float(self.config["max_grad_norm"])
+                )
+                self.critic_optimizer.step()
+                self.total_updates += 1
+
+                with torch.no_grad():
+                    approx_kl = (old_log_probs - new_log_probs).mean().clamp_min(0.0)
+                    clip_fraction = ((ratio - 1.0).abs() > float(self.config["clip_epsilon"])).float().mean()
+                policy_losses.append(float(policy_loss.item()))
+                value_losses.append(float(value_loss.item()))
+                entropies.append(float(entropy_mean.item()))
+                kl_values.append(float(approx_kl.item()))
+                clip_fractions.append(float(clip_fraction.item()))
+
+                target_kl = self.config["target_kl"]
+                if target_kl is not None and approx_kl.item() > float(target_kl):
+                    early_stop = True
+                    break
+            if early_stop:
+                break
+
+        result = {
+            "policy_loss": float(np.mean(policy_losses)),
+            "value_loss": float(np.mean(value_losses)),
+            "entropy": float(np.mean(entropies)),
+            "approx_kl": float(np.mean(kl_values)),
+            "clip_fraction": float(np.mean(clip_fractions)),
+            "ppo_epochs_completed": float(_epoch + 1),
+            "kl_early_stop": float(early_stop),
+        }
+        for name, value in result.items():
+            self.metrics.add_metric(name, value)
+        self.rollout_buffer.clear()
+        return result
+
+    def _actor_eval_on_fixed_capture_states(self) -> dict[str, float]:
+        actions = [
+            self._actor_raw_action(self.env.reset(episode_mode="capture_vertical", seed=seed))
+            for seed in self.ACTOR_EVAL_CAPTURE_SEEDS
+        ]
+        actions_array = np.asarray(actions, dtype=float)
+        return {
+            "actor_eval_mean_action": float(np.mean(actions_array)),
+            "actor_eval_min_action": float(np.min(actions_array)),
+            "actor_eval_max_action": float(np.max(actions_array)),
+            "actor_eval_saturation_fraction": float(
+                np.mean(np.abs(actions_array) >= 0.95 * self.max_action)
+            ),
         }
 
-    def _select_episode_mode(self, episode):
+    def _select_episode_mode(self, episode: int) -> tuple[str, dict[str, float]]:
         probabilities = self._episode_mode_probabilities(episode)
         modes = list(self.EPISODE_MODES)
         weights = [probabilities[mode] for mode in modes]
         return random.choices(modes, weights=weights, k=1)[0], probabilities
 
-    def _episode_mode_probabilities(self, episode):
+    def _episode_mode_probabilities(self, episode: int) -> dict[str, float]:
         base_probabilities = dict(self.config["episode_mode_probabilities"])
         if not self.config["adaptive_curriculum_enabled"]:
             return base_probabilities
-        if episode < self.config["curriculum_start_episode"]:
+        if episode < int(self.config["curriculum_start_episode"]):
             return base_probabilities
-
-        # Réduction de probabilité pour les modes déjà maîtrisés
-        window = self.config["curriculum_window"]
+        window = int(self.config["curriculum_window"])
         mode_scores = {
-            "down_to_up": self._recent_metric_mean("down_to_up_final_hold", window, default=0.0),
-            "capture_vertical": self._recent_metric_mean("capture_vertical_final_hold", window, default=0.0),
-            "fold_to_up": self._recent_metric_mean("fold_to_up_balanced_hold", window, default=0.0),
-            "up_to_fold": self._recent_metric_mean("up_to_fold_balanced_hold", window, default=0.0),
+            "down_to_up": self._recent_metric_mean("down_to_up_final_hold", window),
+            "capture_vertical": self._recent_metric_mean("capture_vertical_final_hold", window),
+            "fold_to_up": self._recent_metric_mean("fold_to_up_balanced_hold", window),
+            "up_to_fold": self._recent_metric_mean("up_to_fold_balanced_hold", window),
         }
         raw_probabilities = {
             mode: base_probabilities[mode] * max(0.05, 1.0 - mode_scores[mode])
             for mode in self.EPISODE_MODES
         }
-        normalized = self._normalized_mode_probabilities(raw_probabilities)
-        return self._bounded_mode_probabilities(normalized)
+        return self._bounded_mode_probabilities(
+            self._normalized_mode_probabilities(raw_probabilities)
+        )
 
-    def _recent_metric_mean(self, metric_name, window, default=0.0):
-        if metric_name not in self.metrics.metrics:
-            return float(default)
-        values = self.metrics.metrics[metric_name]
-        if not values:
-            return float(default)
-        return float(np.mean(values[-window:]))
+    def _recent_metric_mean(self, metric_name: str, window: int) -> float:
+        values = self.metrics.metrics.get(metric_name, [])
+        return float(np.mean(values[-window:])) if values else 0.0
 
-    def _normalized_mode_probabilities(self, probabilities):
+    def _normalized_mode_probabilities(
+        self, probabilities: Mapping[str, float]
+    ) -> dict[str, float]:
         if set(probabilities) != set(self.EPISODE_MODES):
             raise ValueError(f"probabilities must define exactly {self.EPISODE_MODES}")
         values = {mode: float(probabilities[mode]) for mode in self.EPISODE_MODES}
         if not all(np.isfinite(value) and value >= 0.0 for value in values.values()):
-            raise ValueError(f"probabilities must be finite and nonnegative: {values}")
+            raise ValueError("probabilities must be finite and nonnegative")
         total = sum(values.values())
         if total <= 0.0:
             raise ValueError("probabilities must have a positive sum")
         return {mode: value / total for mode, value in values.items()}
 
-    def _bounded_mode_probabilities(self, probabilities):
-        min_probabilities = self.config["curriculum_min_probabilities"]
-        max_probabilities = self.config["curriculum_max_probabilities"]
+    def _bounded_mode_probabilities(
+        self, probabilities: Mapping[str, float]
+    ) -> dict[str, float]:
+        minimums = self.config["curriculum_min_probabilities"]
+        maximums = self.config["curriculum_max_probabilities"]
         bounded = {
-            mode: min(
-                float(max_probabilities[mode]),
-                max(float(min_probabilities[mode]), probabilities[mode]),
-            )
+            mode: min(float(maximums[mode]), max(float(minimums[mode]), probabilities[mode]))
             for mode in self.EPISODE_MODES
         }
         for _ in range(len(self.EPISODE_MODES) * 2):
-            total = sum(bounded.values())
-            diff = 1.0 - total
-            if abs(diff) < 1e-9:
+            difference = 1.0 - sum(bounded.values())
+            if abs(difference) < 1e-9:
                 break
-            if diff > 0:
-                adjustable = [
-                    mode for mode in self.EPISODE_MODES
-                    if bounded[mode] < float(max_probabilities[mode])
-                ]
-            else:
-                adjustable = [
-                    mode for mode in self.EPISODE_MODES
-                    if bounded[mode] > float(min_probabilities[mode])
-                ]
+            adjustable = [
+                mode
+                for mode in self.EPISODE_MODES
+                if (
+                    bounded[mode] < float(maximums[mode])
+                    if difference > 0.0
+                    else bounded[mode] > float(minimums[mode])
+                )
+            ]
             if not adjustable:
                 raise ValueError("curriculum probability bounds cannot produce a unit sum")
-            share = diff / len(adjustable)
+            share = difference / len(adjustable)
             for mode in adjustable:
                 bounded[mode] = min(
-                    float(max_probabilities[mode]),
-                    max(float(min_probabilities[mode]), bounded[mode] + share),
+                    float(maximums[mode]),
+                    max(float(minimums[mode]), bounded[mode] + share),
                 )
         if not np.isclose(sum(bounded.values()), 1.0, atol=1e-9):
-            raise ValueError(f"curriculum bounds failed to produce a unit sum: {bounded}")
+            raise ValueError("curriculum bounds failed to produce a unit sum")
         return bounded
 
-    def _should_render_episode(self, episode):
+    def _should_render_episode(self, episode: int) -> bool:
         if not self.config["render_training"]:
             return False
         if episode == 0 and self.config["render_first_episode"]:
             return True
-        render_every = self.config["render_every_episodes"]
-        return render_every > 0 and episode % render_every == 0
+        frequency = int(self.config["render_every_episodes"])
+        return frequency > 0 and episode % frequency == 0
 
-    def _should_update(self):
-        if len(self.memory) < self.config["batch_size"]:
-            return False
-        if self.total_env_steps < self.config["learning_starts"]:
-            return False
-        train_every = self.config["train_every_steps"]
-        return train_every <= 1 or self.total_env_steps % train_every == 0
-
-    def update_networks(self):
-        # Échantillonnage d'un batch depuis le replay buffer
-        (
-            states,
-            actions,
-            rewards,
-            next_states,
-            terminated,
-            truncated,
-            bootstrap_masks,
-            metadata,
-        ) = self.memory.sample_with_metadata(self.config["batch_size"])
-        states_tensor = torch.FloatTensor(states)
-        actions_tensor = torch.FloatTensor(actions)
-        rewards_tensor = torch.FloatTensor(rewards).unsqueeze(-1)
-        next_states_tensor = torch.FloatTensor(next_states)
-        bootstrap_masks_tensor = torch.FloatTensor(bootstrap_masks).unsqueeze(-1)
-
-        self.total_it += 1
-
-        # Cible TD3 avec bruit sur l'action cible
-        with torch.no_grad():
-            td_targets = self._compute_td_targets(
-                rewards_tensor,
-                next_states_tensor,
-                actions_tensor,
-                bootstrap_masks_tensor,
-            )
-
-        # Mise à jour du critic (double Q)
-        current_primary, current_secondary = self.critic_model(states_tensor, actions_tensor)
-        critic_loss = F.mse_loss(current_primary, td_targets) + F.mse_loss(current_secondary, td_targets)
-        if not torch.isfinite(critic_loss):
-            raise FloatingPointError(f"critic loss is non-finite at update {self.total_it}")
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic_model.parameters(), max_norm=1.0)
-        self.critic_optimizer.step()
-
-        # Mise à jour de l'acteur (retardée) et des réseaux cibles
-        actor_loss_value = 0.0
-        if self.total_it % self.config["policy_delay"] == 0 and self._can_update_actor():
-            actor_actions = self.actor_model(states_tensor)
-            actor_loss = -self.critic_model.primary_value(states_tensor, actor_actions).mean()
-            if not torch.isfinite(actor_loss):
-                raise FloatingPointError(f"actor loss is non-finite at update {self.total_it}")
-            self.actor_optimizer.zero_grad()
-            actor_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.actor_model.parameters(), max_norm=1.0)
-            self.actor_optimizer.step()
-            actor_loss_value = actor_loss.item()
-
-            self._polyak_update(self.actor_model, self.actor_target)
-            self._polyak_update(self.critic_model, self.critic_target)
-
-        self.metrics.add_metric("critic_loss", critic_loss.item())
-        self.metrics.add_metric("actor_loss", actor_loss_value)
-        batch_diagnostics = self._batch_diagnostics(actions, rewards, metadata)
-        for key, value in batch_diagnostics.items():
-            self.metrics.add_metric(key, value)
-        return {
-            "critic_loss": critic_loss.item(),
-            "actor_loss": actor_loss_value,
-            **batch_diagnostics,
-        }
-
-    def _batch_diagnostics(self, actions, rewards, metadata):
-        actions = np.asarray(actions, dtype=float).reshape(-1)
-        rewards = np.asarray(rewards, dtype=float).reshape(-1)
-        capture_started = np.array(
-            [bool(item.get("capture_started", False)) for item in metadata],
-            dtype=float,
-        )
-        near_capture = np.array(
-            [float(item.get("target_score", 0.0)) >= 0.75 for item in metadata],
-            dtype=float,
-        )
-        crash = np.array(
-            [item.get("termination_reason") == "cart_limit_streak" for item in metadata],
-            dtype=float,
-        )
-        return {
-            "batch_action_abs_mean": float(np.mean(np.abs(actions))),
-            "batch_saturation_fraction": float(np.mean(np.abs(actions) >= 0.95 * self.max_action)),
-            "batch_reward_mean": float(np.mean(rewards)),
-            "batch_reward_min": float(np.min(rewards)),
-            "batch_capture_started_fraction": float(np.mean(capture_started)),
-            "batch_near_capture_fraction": float(np.mean(near_capture)),
-            "batch_crash_fraction": float(np.mean(crash)),
-        }
-
-    def _can_update_actor(self):
-        return (
-            self.memory.count_non_crash_transitions()
-            >= self.config["min_non_crash_transitions_for_actor_update"]
-            and self.memory.count_near_capture_non_crash_transitions()
-            >= self.config["min_near_capture_transitions_for_actor_update"]
-        )
-
-    def replay_diagnostics(self):
-        return self.memory.diagnostics(max_action=self.max_action)
-
-    def prefill_replay_buffer(self, *, strategy, num_steps, episode_mode="down_to_up", seed=0):
-        if strategy not in ("random_safe", "sinus"):
-            raise ValueError(f"unknown replay prefill strategy: {strategy}")
-        if not isinstance(num_steps, int) or isinstance(num_steps, bool) or num_steps <= 0:
-            raise ValueError(f"num_steps must be a positive integer, got {num_steps!r}")
-
-        # Remplissage initial du buffer avant l'apprentissage
-        rng = np.random.default_rng(seed)
-        state = self.env.reset(episode_mode=episode_mode, seed=seed)
-        for step in range(num_steps):
-            if strategy == "random_safe":
-                action = float(rng.uniform(-0.5 * self.max_action, 0.5 * self.max_action))
-            else:
-                action = self._swing_exploration_action(
-                    step,
-                    float(self.config["swing_up_exploration_period_min"]),
-                    0.0,
-                )
-                action = float(np.clip(action, -self.max_action, self.max_action))
-            next_state, reward, terminated, truncated, info = self.env.step(action)
-            self.memory.push(
-                state,
-                action,
-                reward,
-                next_state,
-                terminated,
-                truncated,
-                metadata={
-                    "episode_mode": episode_mode,
-                    "termination_reason": info["termination_reason"],
-                    "capture_started": bool(info["capture_started"]),
-                    "target_score": float(info["target_score"]),
-                    "hit_cart_limit": bool(info["hit_cart_limit"]),
-                    "prefill_strategy": strategy,
-                },
-            )
-            self.total_env_steps += 1
-            state = next_state
-            if terminated or truncated:
-                state = self.env.reset(episode_mode=episode_mode, seed=seed + step + 1)
-
-    def _compute_td_targets(self, rewards_tensor, next_states_tensor, actions_tensor, bootstrap_masks_tensor):
-        # Politique cible avec bruit gaussien clippé (TD3)
-        noise = torch.randn_like(actions_tensor) * self.config["policy_noise"]
-        noise = noise.clamp(
-            -self.config["noise_clip"],
-            self.config["noise_clip"],
-        )
-        next_actions = (self.actor_target(next_states_tensor) + noise).clamp(
-            -self.max_action,
-            self.max_action,
-        )
-        target_primary, target_secondary = self.critic_target(next_states_tensor, next_actions)
-        target_value = torch.min(target_primary, target_secondary)
-        return rewards_tensor + self.config["gamma"] * bootstrap_masks_tensor * target_value
-
-    def _polyak_update(self, online_model, target_model):
-        # Moyenne glissante des poids : θ_target ← τ θ + (1-τ) θ_target
-        tau = self.config["polyak_tau"]
-        with torch.no_grad():
-            for param, target_param in zip(online_model.parameters(), target_model.parameters()):
-                target_param.data.mul_(1 - tau)
-                target_param.data.add_(tau * param.data)
-
-    def train(self):
+    def train(self) -> None:
         try:
-            for episode in range(self.config["num_episodes"]):
-                summary = self.collect_trajectory(episode)
+            for episode in range(int(self.config["num_episodes"])):
+                summary = self.collect_rollout(episode)
+                ppo_metrics = self.update_ppo()
+                summary.update(self._actor_eval_on_fixed_capture_states())
                 self._record_episode_metrics(summary)
-
                 if episode % 10 == 0:
                     print(
-                        f"Episode {episode:5d} | "
-                        f"reward={summary['episode_reward']:8.2f} | "
-                        f"len={summary['episode_length']:4d} | "
-                        f"dir={summary['transition_direction']:<10s} | "
-                        f"p=({summary['mode_probability_down_to_up']:.2f},"
-                        f"{summary['mode_probability_capture_vertical']:.2f},"
-                        f"{summary['mode_probability_fold_to_up']:.2f},"
-                        f"{summary['mode_probability_up_to_fold']:.2f}) | "
-                        f"before={summary['hold_before_switch']:4.2f} | "
-                        f"after={summary['hold_after_switch']:4.2f} | "
-                        f"balanced={summary['balanced_hold']:4.2f} | "
-                        f"peak={summary['peak_target_score']:4.2f} | "
-                        f"sinus={int(summary['swing_up_sinus_episode'])} | "
-                        f"eps={summary['swing_up_sinus_episode_probability']:.2f}"
+                        f"Episode {episode:5d} | reward={summary['episode_reward']:8.2f} | "
+                        f"len={summary['episode_length']:4d} | dir={summary['transition_direction']:<16s} | "
+                        f"hold={summary['balanced_hold']:4.2f} | peak={summary['peak_target_score']:4.2f} | "
+                        f"policy={ppo_metrics['policy_loss']:+.4f} | value={ppo_metrics['value_loss']:.4f} | "
+                        f"kl={ppo_metrics['approx_kl']:.5f} | term={summary['termination_reason']}"
                     )
-
                 if episode % self.plot_frequency == self.plot_frequency - 1:
                     self.metrics.generate_all_plots()
         except KeyboardInterrupt:
-            episode = len(self.metrics.metrics["episode_reward"])
-            self.save_models(MODEL_SAVE_PREFIX, episode=episode, interrupted=True)
-            print(f"\nKeyboardInterrupt: saved interrupted model at episode {episode}")
+            completed = len(self.metrics.metrics["episode_reward"])
+            self.save_models(MODEL_SAVE_PREFIX, episode=completed, interrupted=True)
+            print(f"\nKeyboardInterrupt: saved interrupted model at episode {completed}")
             raise
 
-        episode = len(self.metrics.metrics["episode_reward"])
-        self.save_models(MODEL_SAVE_PREFIX, episode=episode, interrupted=True)
-        print(f"Training finished: saved interrupted model at episode {episode}")
+        completed = len(self.metrics.metrics["episode_reward"])
+        self.save_models(MODEL_SAVE_PREFIX, episode=completed, interrupted=False)
+        print(f"Training finished: saved model at episode {completed}")
 
-    def _record_episode_metrics(self, summary):
-        scalar_keys = [
+    def _record_episode_metrics(self, summary: Mapping[str, Any]) -> None:
+        scalar_keys = (
             "episode_reward",
             "episode_length",
             "hold_before_switch",
@@ -769,21 +645,21 @@ class PendulumTrainer:
             "action_mean",
             "action_std",
             "action_abs_mean",
-            "swing_up_sinus_episode",
-            "swing_up_sinus_episode_probability",
             "mode_probability_down_to_up",
             "mode_probability_capture_vertical",
             "mode_probability_fold_to_up",
             "mode_probability_up_to_fold",
-        ]
+            "actor_eval_mean_action",
+            "actor_eval_min_action",
+            "actor_eval_max_action",
+            "actor_eval_saturation_fraction",
+        )
         for key in scalar_keys:
             self.metrics.add_metric(key, summary[key])
-
         for component_name, values in summary["reward_components"].items():
             if values:
                 self.metrics.add_metric(component_name, float(np.mean(values)))
-
-        for direction in ("up_to_fold", "fold_to_up", "down_to_up", "capture_vertical"):
+        for direction in self.EPISODE_MODES:
             for suffix in (
                 "hold_before",
                 "hold_after",
@@ -797,28 +673,28 @@ class PendulumTrainer:
                 if key in summary:
                     self.metrics.add_metric(key, summary[key])
 
-    def save_models(self, path, episode=None, interrupted=False):
+    def save_models(self, path: str, episode: int | None = None, interrupted: bool = False) -> None:
         torch.save(self.actor_model.state_dict(), path + "_actor.pth")
         torch.save(self.critic_model.state_dict(), path + "_critic.pth")
         torch.save(self.actor_optimizer.state_dict(), path + "_actor_optimizer.pth")
         torch.save(self.critic_optimizer.state_dict(), path + "_critic_optimizer.pth")
         metadata = {
-            "algorithm": "td3",
+            "algorithm": "ppo",
             "state_dim": self.state_dim,
             "action_dim": self.action_dim,
             "max_action": self.max_action,
             "num_nodes": self.config["num_nodes"],
             "episode": episode,
-            "total_updates": self.total_it,
+            "total_updates": self.total_updates,
             "total_env_steps": self.total_env_steps,
             "interrupted": interrupted,
             "hidden_dim": self.config["hidden_dim"],
-            "model_version": 4,
+            "model_version": MODEL_VERSION,
         }
         with open(path + "_metadata.json", "w", encoding="utf-8") as metadata_file:
             json.dump(metadata, metadata_file, indent=2)
 
-    def load_models(self):
+    def load_models(self) -> None:
         metadata_path = f"{MODEL_LOAD_PREFIX}_metadata.json"
         if not os.path.exists(metadata_path):
             raise FileNotFoundError(
@@ -827,29 +703,42 @@ class PendulumTrainer:
         with open(metadata_path, encoding="utf-8") as metadata_file:
             metadata = json.load(metadata_file)
         expected = {
-            "algorithm": "td3",
+            "algorithm": "ppo",
             "state_dim": self.state_dim,
             "action_dim": self.action_dim,
             "hidden_dim": self.config["hidden_dim"],
-            "model_version": 4,
+            "model_version": MODEL_VERSION,
         }
         missing_keys = sorted(set(expected) - set(metadata))
         if missing_keys:
             raise ValueError(f"saved model metadata is missing required keys: {missing_keys}")
-        for key, value in expected.items():
-            if metadata[key] != value:
+        for key, expected_value in expected.items():
+            if metadata[key] != expected_value:
                 raise ValueError(
-                    f"incompatible saved model: {key} is {metadata[key]!r}, expected {value!r}"
+                    f"incompatible saved model: {key} is {metadata[key]!r}, "
+                    f"expected {expected_value!r}"
                 )
 
-        self.actor_model.load_state_dict(torch.load(f"{MODEL_LOAD_PREFIX}_actor.pth", weights_only=True))
-        self.critic_model.load_state_dict(torch.load(f"{MODEL_LOAD_PREFIX}_critic.pth", weights_only=True))
-        self.actor_target.load_state_dict(self.actor_model.state_dict())
-        self.critic_target.load_state_dict(self.critic_model.state_dict())
-        self.actor_optimizer.load_state_dict(torch.load(f"{MODEL_LOAD_PREFIX}_actor_optimizer.pth", weights_only=True))
-        self.critic_optimizer.load_state_dict(torch.load(f"{MODEL_LOAD_PREFIX}_critic_optimizer.pth", weights_only=True))
+        paths = {
+            "actor": f"{MODEL_LOAD_PREFIX}_actor.pth",
+            "critic": f"{MODEL_LOAD_PREFIX}_critic.pth",
+            "actor optimizer": f"{MODEL_LOAD_PREFIX}_actor_optimizer.pth",
+            "critic optimizer": f"{MODEL_LOAD_PREFIX}_critic_optimizer.pth",
+        }
+        missing_files = [path for path in paths.values() if not os.path.exists(path)]
+        if missing_files:
+            raise FileNotFoundError(f"saved model files are missing: {missing_files}")
+        self.actor_model.load_state_dict(torch.load(paths["actor"], weights_only=True))
+        self.critic_model.load_state_dict(torch.load(paths["critic"], weights_only=True))
+        self.actor_optimizer.load_state_dict(
+            torch.load(paths["actor optimizer"], weights_only=True)
+        )
+        self.critic_optimizer.load_state_dict(
+            torch.load(paths["critic optimizer"], weights_only=True)
+        )
+        self.total_updates = int(metadata.get("total_updates", 0))
+        self.total_env_steps = int(metadata.get("total_env_steps", 0))
 
 
 if __name__ == "__main__":
-    trainer = PendulumTrainer(config)
-    trainer.train()
+    PendulumTrainer(config).train()

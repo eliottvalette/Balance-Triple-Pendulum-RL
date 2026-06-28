@@ -1,0 +1,15 @@
+{
+  "seed": 0,
+  "num_steps": 50,
+  "policies": [
+    "zero_action",
+    "constant_+0.02",
+    "constant_-0.02",
+    "constant_+0.05",
+    "constant_-0.05",
+    "actor_deterministic",
+    "actor_plus_noise_0.10"
+  ],
+  "capture_drop_grace_steps": 20,
+  "capture_drop_target_score_threshold": 0.5
+}

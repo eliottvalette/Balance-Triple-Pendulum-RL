@@ -434,7 +434,7 @@ class PendulumEnv:
             np.sin(q2), np.cos(q2), q2_dot,
             position_x1, position_y1, position_x2, position_y2,
             vx1, vy1, vx2, vy2,
-            self.applied_force, self.previous_action, action,
+            self.applied_force, self.previous_action,
             phase_1, capture_started, initial_pose_down, normalized_steps, time_to_switch, has_switched,
             active_height_error, active_x_error, active_shape_error,
             phase1_end_y_error, phase1_end_x_error, phase1_alignment_error,
@@ -554,10 +554,11 @@ class PendulumEnv:
         reward = result.reward
         reward_components = dict(result.components)
 
-        # Pénalité si le pendule retombe après une capture verticale
+        # Pénalité terminale si le pendule retombe après une capture verticale
         capture_drop_penalty = 0.0
         capture_drop = bool(
             self.initial_pose_mode == "capture"
+            and self.capture_started
             and not self.capture_drop_triggered
             and self.num_steps > int(self.config['capture_drop_grace_steps'])
             and reward_components["target_score"]
@@ -567,13 +568,18 @@ class PendulumEnv:
             self.capture_drop_triggered = True
             capture_drop_penalty = float(self.config['capture_drop_penalty'])
             reward += capture_drop_penalty
+            reward_components['terminal_failure_penalty'] = (
+                reward_components.get('terminal_failure_penalty', 0.0) + capture_drop_penalty
+            )
         reward_components['capture_drop_penalty'] = capture_drop_penalty
 
-        # Conditions de fin d'épisode (rail ou horizon)
+        # Conditions de fin d'épisode (rail, chute après capture, ou horizon)
         self.cart_limit_streak = self.cart_limit_streak + 1 if hit_cart_limit else 0
         terminated = bool(
             self.cart_limit_streak >= int(self.config['cart_limit_termination_steps'])
         )
+        if capture_drop:
+            terminated = True
         truncated = bool(self.num_steps >= self.max_steps and not terminated)
 
         # Pénalités de proximité et de contact avec les rails
@@ -653,7 +659,9 @@ class PendulumEnv:
             "target_score": reward_components["target_score"],
             "in_target": reward_components["in_target"],
             "termination_reason": (
-                "cart_limit_streak"
+                "capture_drop"
+                if capture_drop
+                else "cart_limit_streak"
                 if terminated
                 else "max_steps"
                 if truncated

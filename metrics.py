@@ -38,7 +38,6 @@ EPISODE_DIAGNOSTIC_METRICS = [
     "hold_before_switch",
     "hold_after_switch",
     "balanced_hold",
-    "swing_up_sinus_episode_probability",
 ]
 
 ACTION_METRICS = [
@@ -48,8 +47,8 @@ ACTION_METRICS = [
 ]
 
 LOSS_METRICS = [
-    "actor_loss",
-    "critic_loss",
+    "policy_loss",
+    "value_loss",
 ]
 
 
@@ -193,13 +192,13 @@ class MetricsTracker:
             raw_ds, raw_idx = self._downsample_if_needed(clipped)
             ax.plot(raw_idx, raw_ds, color=color, alpha=0.12, linewidth=0.7)
             self._plot_moving_average(ax, values, color, f"{loss_name} MA{self.episode_window}")
-        title = "Network Losses (log scale)"
+        title = "PPO Losses"
         if spike_notes:
             title += f"\nspikes: {' | '.join(spike_notes[:2])}"
         ax.set_title(title, fontsize=11, pad=10)
         ax.set_xlabel("Update")
         ax.set_ylabel("Loss")
-        ax.set_yscale("log")
+        ax.set_yscale("symlog", linthresh=1e-3)
 
     def plot_metrics(self, save_path=None):
         if not self.enable_plots:
@@ -237,21 +236,17 @@ class MetricsTracker:
 
         self._apply_dark_axes(diagnostic_ax)
         diagnostic_names = list(EPISODE_DIAGNOSTIC_METRICS)
-        if "swing_up_sinus_episode" in self.metrics and self.metrics["swing_up_sinus_episode"]:
-            diagnostic_names.append("swing_up_sinus_episode")
         diagnostic_colors = self._panel_color_map(diagnostic_names)
         for metric_name in EPISODE_DIAGNOSTIC_METRICS:
             if metric_name not in self.metrics or len(self.metrics[metric_name]) < self.episode_window:
                 continue
             values = np.array(self.metrics[metric_name], dtype=float)
             self._plot_moving_average(diagnostic_ax, values, diagnostic_colors[metric_name], metric_name)
-        if "swing_up_sinus_episode" in self.metrics and self.metrics["swing_up_sinus_episode"]:
-            sinus_flags = np.array(self.metrics["swing_up_sinus_episode"], dtype=float)
-            sinus_episodes = np.flatnonzero(sinus_flags > 0.5)
-            if sinus_episodes.size > 0:
-                sinus_color = diagnostic_colors["swing_up_sinus_episode"]
-                diagnostic_ax.scatter(sinus_episodes, np.full(sinus_episodes.shape, 0.03), s=14, marker="|", color=sinus_color, linewidths=1.2, label="sinus episode", zorder=4)
-        diagnostic_ax.set_title("Episode Diagnostics (MA)\npeak | before | after | balanced | eps | sinus markers", fontsize=11, pad=10)
+        diagnostic_ax.set_title(
+            "Episode Diagnostics (MA)\npeak | before | after | balanced",
+            fontsize=11,
+            pad=10,
+        )
         diagnostic_ax.set_xlabel("Episode")
         diagnostic_ax.set_ylabel("Value")
         diagnostic_ax.set_ylim(-0.02, 1.05)

@@ -387,6 +387,24 @@ class RewardContractTests(unittest.TestCase):
         self.assertLess(result.components["capture_quality_bonus"], 1.0)
         self.assertEqual(0.0, result.components["hold_bonus"])
 
+    def test_capture_vertical_cart_center_bonus_in_phase_up_above_threshold(self):
+        custom = dict(config)
+        custom["capture_cart_center_weight"] = 2.0
+        manager = RewardManager(custom)
+        upright_center = physical_state(q1=math.pi / 2, q2=math.pi / 2, x=0.0)
+        upright_offset = physical_state(q1=math.pi / 2, q2=math.pi / 2, x=1.0)
+        kwargs = dict(action=0.0, phase=1, capture_started=True, hold_streak=10, initial_pose_mode="capture")
+        center = manager.evaluate_transition(upright_center, upright_center, **kwargs)
+        offset = manager.evaluate_transition(upright_offset, upright_offset, **kwargs)
+        self.assertGreater(center.components["capture_cart_center_bonus"], 0.0)
+        self.assertGreater(center.components["capture_cart_center_bonus"], offset.components["capture_cart_center_bonus"])
+        below_threshold = manager.evaluate_transition(physical_state(), physical_state(), action=0.0, phase=1, capture_started=True, hold_streak=0, initial_pose_mode="capture")
+        self.assertEqual(0.0, below_threshold.components["capture_cart_center_bonus"])
+        phase_down = manager.evaluate_transition(upright_center, upright_center, action=0.0, phase=-1, capture_started=True, hold_streak=10, initial_pose_mode="capture")
+        self.assertEqual(0.0, phase_down.components["capture_cart_center_bonus"])
+        other_mode = manager.evaluate_transition(upright_center, upright_center, action=0.0, phase=1, capture_started=True, hold_streak=10, initial_pose_mode="down")
+        self.assertEqual(0.0, other_mode.components["capture_cart_center_bonus"])
+
     def test_excessive_angular_speed_cannot_enter_capture(self):
         fast_upright = physical_state(q1=math.pi / 2, q2=math.pi / 2, u1=2.0, u2=2.0)
 
@@ -702,6 +720,41 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         self.assertLess(info["reward_components"]["cart_limit_step_penalty"], 0.0)
         self.assertIsNone(info["termination_reason"])
 
+    def test_border_action_blocks_push_toward_wall_in_margin(self):
+        custom = dict(config)
+        custom["cart_border_action_margin"] = 0.10
+        env = PendulumEnv(reward_manager=RewardManager(custom), env_config=custom)
+        env.reset(episode_mode="capture_vertical")
+        cart_center_limit = env._cart_center_limit()
+        env.current_state[0] = cart_center_limit * 0.99
+        env.applied_force = 0.0
+        max_action = float(custom["max_action"])
+
+        def rhs(_state, _time, _parameters, force_function):
+            derivative = np.zeros_like(env.current_state)
+            derivative[0] = 5.0 * force_function(_state)
+            return derivative
+
+        env.rhs = rhs
+        _state, _reward, terminated, truncated, info = env.step(max_action)
+        self.assertLess(info["cart_border_action_scale"], 1.0)
+        self.assertAlmostEqual(max_action, info["policy_action"])
+        self.assertFalse(info["hit_cart_limit"])
+        self.assertFalse(terminated)
+        self.assertFalse(truncated)
+
+    def test_border_action_keeps_pull_away_from_wall_at_full_strength(self):
+        custom = dict(config)
+        custom["cart_border_action_margin"] = 0.10
+        env = PendulumEnv(reward_manager=RewardManager(custom), env_config=custom)
+        env.reset(episode_mode="capture_vertical")
+        cart_center_limit = env._cart_center_limit()
+        env.current_state[0] = cart_center_limit * 0.99
+        max_action = float(custom["max_action"])
+        action, scale = env._limit_action_near_cart_border(-max_action, cart_center_limit * 0.99)
+        self.assertAlmostEqual(-max_action, action)
+        self.assertAlmostEqual(1.0, scale)
+
     def test_cart_limit_streak_eventually_terminates(self):
         custom = dict(config)
         custom["cart_limit_termination_steps"] = 2
@@ -841,6 +894,61 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         self.assertTrue(terminated)
         self.assertFalse(truncated)
         self.assertEqual("capture_drop_failure", end_info["termination_reason"])
+
+    def test_capture_vertical_recovery_cancels_post_drop_termination(self):
+        custom = dict(config)
+        custom["capture_drop_grace_steps"] = 1
+        custom["capture_drop_truncation_steps"] = 5
+        custom["capture_drop_recovery_steps"] = 2
+        custom["capture_drop_terminates_episode"] = True
+        env = PendulumEnv(reward_manager=RewardManager(custom), env_config=custom)
+        env.reset(episode_mode="capture_vertical")
+        env.rhs = mock.Mock(return_value=np.zeros_like(env.current_state))
+        env.current_state[1] = -math.pi / 2
+        env.current_state[2] = -math.pi / 2
+        env.step(0.0)
+        _state, _reward, terminated, _truncated, drop_info = env.step(0.0)
+        self.assertTrue(drop_info["capture_drop"])
+        self.assertFalse(terminated)
+        for _ in range(2):
+            env.current_state[1] = math.pi / 2
+            env.current_state[2] = math.pi / 2
+            _state, _reward, terminated, _truncated, recovery_info = env.step(0.0)
+            self.assertFalse(terminated)
+        self.assertTrue(recovery_info["capture_drop_recovered"])
+        self.assertIsNone(env.capture_drop_step)
+        for _ in range(6):
+            env.current_state[1] = math.pi / 2
+            env.current_state[2] = math.pi / 2
+            _state, _reward, terminated, _truncated, _info = env.step(0.0)
+            self.assertFalse(terminated)
+
+    def test_capture_vertical_redrop_terminates_without_second_penalty(self):
+        custom = dict(config)
+        custom["capture_drop_grace_steps"] = 1
+        custom["capture_drop_recovery_steps"] = 2
+        custom["capture_drop_terminates_episode"] = True
+        custom["capture_drop_redrop_terminates"] = True
+        env = PendulumEnv(reward_manager=RewardManager(custom), env_config=custom)
+        env.reset(episode_mode="capture_vertical")
+        env.rhs = mock.Mock(return_value=np.zeros_like(env.current_state))
+        env.current_state[1] = -math.pi / 2
+        env.current_state[2] = -math.pi / 2
+        env.step(0.0)
+        env.step(0.0)
+        for _ in range(2):
+            env.current_state[1] = math.pi / 2
+            env.current_state[2] = math.pi / 2
+            env.step(0.0)
+        env.current_state[1] = -math.pi / 2
+        env.current_state[2] = -math.pi / 2
+        _state, reward, terminated, truncated, redrop_info = env.step(0.0)
+        self.assertTrue(redrop_info["capture_redrop"])
+        self.assertTrue(terminated)
+        self.assertFalse(truncated)
+        self.assertEqual("capture_drop_redrop", redrop_info["termination_reason"])
+        self.assertEqual(0.0, redrop_info["reward_components"]["capture_drop_penalty"])
+        self.assertGreaterEqual(reward, 0.0)
 
     def test_capture_vertical_continues_after_drop_when_termination_disabled(self):
         custom = dict(config)

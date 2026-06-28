@@ -25,6 +25,7 @@ REWARD_COMPONENTS = [
     "capture_maintenance_bonus",
     "capture_score_decay_penalty",
     "capture_in_target_bonus",
+    "capture_cart_center_bonus",
     "capture_entry_bonus",
     "capture_drop_penalty",
     "hold_bonus",

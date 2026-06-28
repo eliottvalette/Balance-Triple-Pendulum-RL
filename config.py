@@ -12,7 +12,7 @@ config = {
     'load_models': True,
     'gamma': 0.995,
     'num_nodes': 2,
-    'gravity': 0.81,
+    'gravity': 9.81,
     'cart_mass': 0.01 / 3.0,
     'bob_mass': 0.01 / 3.0,
     'angular_friction': 0.0005,
@@ -66,6 +66,7 @@ config = {
     'cart_failure_penalty': -100.0,
     'cart_limit_step_penalty': -5.0,
     'cart_limit_proximity_penalty': 2.0,
+    'cart_border_action_margin': 0.06,
     'cart_limit_termination_steps': 50,
     'capture_entry_bonus': 5.0,
     'swing_up_energy_progress_weight': 6.0,
@@ -76,12 +77,15 @@ config = {
     'capture_maintenance_weight': 2.0,
     'capture_score_decay_penalty': 40.0,
     'capture_in_target_step_bonus': 0.5,
+    'capture_cart_center_weight': 1.0,
     'capture_drop_base_penalty': -200.0,
     'capture_drop_remaining_penalty': -800.0,
     'capture_drop_target_score_threshold': 0.5,
     'capture_drop_grace_steps': 20,
     'capture_drop_truncation_steps': 75,
-    'capture_drop_terminates_episode': False,
+    'capture_drop_recovery_steps': 20,
+    'capture_drop_redrop_terminates': True,
+    'capture_drop_terminates_episode': True,
     'hold_progress_bonus': 100.0,
     'action_l2_penalty': 0.5,
     'action_delta_penalty': 3.0,
@@ -117,15 +121,17 @@ def validate_config(cfg):
         'capture_cart_position_noise', 'capture_cart_velocity_noise',
         'capture_angular_velocity_noise', 'down_angle_noise',
         'cart_failure_penalty', 'cart_limit_step_penalty',
-        'cart_limit_proximity_penalty', 'cart_limit_termination_steps',
+        'cart_limit_proximity_penalty', 'cart_border_action_margin',
+        'cart_limit_termination_steps',
         'capture_entry_bonus', 'swing_up_energy_progress_weight',
         'swing_up_height_progress_weight', 'swing_up_cart_safety_weight',
         'capture_allowed_angular_speed', 'capture_quality_bonus',
         'capture_maintenance_weight', 'capture_score_decay_penalty',
-        'capture_in_target_step_bonus',
+        'capture_in_target_step_bonus', 'capture_cart_center_weight',
         'capture_drop_base_penalty', 'capture_drop_remaining_penalty',
         'capture_drop_target_score_threshold', 'capture_drop_grace_steps',
-        'capture_drop_truncation_steps', 'capture_drop_terminates_episode',
+        'capture_drop_truncation_steps', 'capture_drop_recovery_steps',
+        'capture_drop_redrop_terminates', 'capture_drop_terminates_episode',
         'hold_progress_bonus', 'action_l2_penalty', 'action_delta_penalty',
         'saturation_penalty',
         'render_training', 'render_every_episodes', 'render_first_episode',
@@ -142,6 +148,7 @@ def validate_config(cfg):
         'num_episodes', 'max_steps', 'ppo_epochs', 'minibatch_size', 'hidden_dim',
         'num_nodes', 'curriculum_window', 'cart_limit_termination_steps',
         'capture_drop_grace_steps', 'capture_drop_truncation_steps',
+        'capture_drop_recovery_steps',
     )
     for key in positive_integer_keys:
         value = cfg[key]
@@ -188,6 +195,7 @@ def validate_config(cfg):
         'swing_up_height_progress_weight', 'swing_up_cart_safety_weight',
         'capture_quality_bonus', 'capture_maintenance_weight',
         'capture_score_decay_penalty', 'capture_in_target_step_bonus',
+        'capture_cart_center_weight',
         'hold_progress_bonus', 'cart_limit_proximity_penalty',
         'action_l2_penalty', 'action_delta_penalty', 'saturation_penalty',
         'entropy_coefficient', 'value_loss_coefficient',
@@ -217,6 +225,11 @@ def validate_config(cfg):
         raise ValueError("cart_failure_penalty must be finite and negative")
     if not math.isfinite(cfg['cart_limit_step_penalty']) or cfg['cart_limit_step_penalty'] >= 0.0:
         raise ValueError("cart_limit_step_penalty must be finite and negative")
+    border_margin = cfg['cart_border_action_margin']
+    if not isinstance(border_margin, (int, float)) or not math.isfinite(border_margin):
+        raise ValueError("cart_border_action_margin must be finite")
+    if not 0.0 <= border_margin < 1.0:
+        raise ValueError("cart_border_action_margin must be in [0, 1)")
     if (
         not math.isfinite(cfg['capture_drop_base_penalty'])
         or cfg['capture_drop_base_penalty'] >= 0.0
@@ -263,6 +276,7 @@ def validate_config(cfg):
     for key in (
         'load_models', 'normalize_advantages', 'adaptive_curriculum_enabled',
         'render_training', 'render_first_episode', 'capture_drop_terminates_episode',
+        'capture_drop_redrop_terminates',
     ):
         if not isinstance(cfg[key], bool):
             raise ValueError(f"config[{key!r}] must be bool")

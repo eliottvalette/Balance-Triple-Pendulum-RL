@@ -68,6 +68,7 @@ class PendulumEnv:
         self.cart_limit_streak = 0
         self.capture_drop_triggered = False
         self.capture_drop_step = None
+        self.capture_drop_recovery_streak = 0
         self.success_achieved = False
         if self.reward_manager is not None:
             self.reward_manager.verify_cart_termination_is_suboptimal(
@@ -299,6 +300,7 @@ class PendulumEnv:
         self.cart_limit_streak = 0
         self.capture_drop_triggered = False
         self.capture_drop_step = None
+        self.capture_drop_recovery_streak = 0
         self.success_achieved = False
         return self.get_state(action=0.0, phase=self.current_phase)
 
@@ -467,6 +469,29 @@ class PendulumEnv:
         ))
 
 
+    def _cart_center_limit(self) -> float:
+        return self.xmax - self.cart_width / (2 * self.scale)
+
+    def _cart_limit_ratio(self, cart_position: float) -> float:
+        return min(1.0, abs(float(cart_position)) / self._cart_center_limit())
+
+    def _limit_action_near_cart_border(self, action: float, cart_position: float) -> tuple[float, float]:
+        margin = float(self.config['cart_border_action_margin'])
+        if margin <= 0.0:
+            return action, 1.0
+        cart_limit_ratio = self._cart_limit_ratio(cart_position)
+        border_start_ratio = 1.0 - margin
+        if cart_limit_ratio <= border_start_ratio:
+            return action, 1.0
+        border_proximity = (cart_limit_ratio - border_start_ratio) / margin
+        border_proximity = float(np.clip(border_proximity, 0.0, 1.0))
+        toward_wall_scale = 1.0 - border_proximity
+        if cart_position > 0.0 and action > 0.0:
+            return float(action * toward_wall_scale), toward_wall_scale
+        if cart_position < 0.0 and action < 0.0:
+            return float(action * toward_wall_scale), toward_wall_scale
+        return action, 1.0
+
     def step(self, action=0.0, phase=None):
         """
         Effectue un pas de simulation avec l'action donnée (force appliquée).
@@ -503,6 +528,9 @@ class PendulumEnv:
         if abs(action) > max_action + action_limit_tolerance:
             raise ValueError(f"action must be in [{-max_action}, {max_action}], got {action}")
         action = float(np.clip(action, -max_action, max_action))
+        policy_action = action
+        cart_position = float(self.current_state[0])
+        action, cart_border_action_scale = self._limit_action_near_cart_border(action, cart_position)
         if self.reward_manager is None:
             raise RuntimeError("step() requires a reward_manager")
 
@@ -558,6 +586,7 @@ class PendulumEnv:
             phase=self.current_phase,
             capture_started=self.capture_started,
             hold_streak=self.hold_streak,
+            initial_pose_mode=self.initial_pose_mode,
         )
         self.capture_started = result.capture_started
         self.hold_streak = result.hold_streak
@@ -566,17 +595,22 @@ class PendulumEnv:
 
         # Pénalité terminale si le pendule retombe après une capture verticale
         capture_drop_penalty = 0.0
+        capture_redrop = False
+        capture_drop_recovered = False
+        target_score = float(reward_components["target_score"])
+        drop_score_threshold = float(self.config['capture_drop_target_score_threshold'])
+        recovery_score_threshold = float(self.config['swing_up_capture_score_threshold'])
         capture_drop = bool(
             self.initial_pose_mode == "capture"
             and self.capture_started
             and not self.capture_drop_triggered
             and self.num_steps > int(self.config['capture_drop_grace_steps'])
-            and reward_components["target_score"]
-            < float(self.config['capture_drop_target_score_threshold'])
+            and target_score < drop_score_threshold
         )
         if capture_drop:
             self.capture_drop_triggered = True
             self.capture_drop_step = self.num_steps
+            self.capture_drop_recovery_streak = 0
             remaining_fraction = 1.0 - self.num_steps / self.max_steps
             capture_drop_penalty = (
                 float(self.config['capture_drop_base_penalty'])
@@ -586,15 +620,48 @@ class PendulumEnv:
             reward_components['terminal_failure_penalty'] = (
                 reward_components.get('terminal_failure_penalty', 0.0) + capture_drop_penalty
             )
+        elif (
+            self.capture_drop_step is not None
+            and target_score >= recovery_score_threshold
+        ):
+            self.capture_drop_recovery_streak += 1
+        else:
+            self.capture_drop_recovery_streak = 0
+        if (
+            self.capture_drop_step is not None
+            and self.capture_drop_recovery_streak
+            >= int(self.config['capture_drop_recovery_steps'])
+        ):
+            self.capture_drop_step = None
+            self.capture_drop_recovery_streak = 0
+            capture_drop_recovered = True
+        if (
+            self.initial_pose_mode == "capture"
+            and self.capture_started
+            and self.capture_drop_triggered
+            and self.capture_drop_step is None
+            and not capture_drop_recovered
+            and self.num_steps > int(self.config['capture_drop_grace_steps'])
+            and target_score < drop_score_threshold
+        ):
+            capture_redrop = True
         reward_components['capture_drop_penalty'] = capture_drop_penalty
 
         # Conditions de fin d'épisode (rail, échec capture, ou horizon)
         self.cart_limit_streak = self.cart_limit_streak + 1 if hit_cart_limit else 0
         capture_drop_truncated = bool(
             self.config['capture_drop_terminates_episode']
-            and self.capture_drop_step is not None
-            and self.num_steps
-            >= self.capture_drop_step + int(self.config['capture_drop_truncation_steps'])
+            and (
+                (
+                    self.config['capture_drop_redrop_terminates']
+                    and capture_redrop
+                )
+                or (
+                    self.capture_drop_step is not None
+                    and self.num_steps
+                    >= self.capture_drop_step + int(self.config['capture_drop_truncation_steps'])
+                )
+            )
         )
         terminated = bool(
             self.cart_limit_streak >= int(self.config['cart_limit_termination_steps'])
@@ -603,8 +670,8 @@ class PendulumEnv:
         truncated = bool(self.num_steps >= self.max_steps and not terminated)
 
         # Pénalités de proximité et de contact avec les rails
-        cart_center_limit = self.xmax - self.cart_width / (2 * self.scale)
-        cart_limit_ratio = min(1.0, abs(float(next_state[0])) / cart_center_limit)
+        cart_center_limit = self._cart_center_limit()
+        cart_limit_ratio = self._cart_limit_ratio(float(next_state[0]))
         cart_proximity_penalty = (
             -float(self.config['cart_limit_proximity_penalty']) * cart_limit_ratio**4
         )
@@ -673,6 +740,10 @@ class PendulumEnv:
             "success_achieved": self.success_achieved,
             "entered_success": result.success,
             "capture_drop": capture_drop,
+            "capture_redrop": capture_redrop,
+            "capture_drop_recovered": capture_drop_recovered,
+            "policy_action": policy_action,
+            "cart_border_action_scale": cart_border_action_scale,
             "hit_cart_limit": hit_cart_limit,
             "cart_limit_streak": self.cart_limit_streak,
             "reward_components": reward_components,
@@ -681,6 +752,8 @@ class PendulumEnv:
             "termination_reason": (
                 "cart_limit_streak"
                 if terminated and self.cart_limit_streak >= int(self.config['cart_limit_termination_steps'])
+                else "capture_drop_redrop"
+                if terminated and capture_redrop
                 else "capture_drop_failure"
                 if terminated and capture_drop_truncated
                 else "max_steps"
@@ -810,6 +883,7 @@ class PendulumEnv:
                     phase=phase,
                     capture_started=self.capture_started,
                     hold_streak=self.hold_streak,
+                    initial_pose_mode=self.initial_pose_mode,
                 )
                 reward_components = preview.components
                 
@@ -1014,6 +1088,7 @@ class PendulumEnv:
                                 phase=current_phase,
                                 capture_started=self.capture_started,
                                 hold_streak=self.hold_streak,
+                                initial_pose_mode=self.initial_pose_mode,
                             )
                             reward_components = preview.components
                             print('------- Composants de récompense -------')

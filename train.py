@@ -251,6 +251,7 @@ class PendulumTrainer:
         in_target_history: list[float] = []
         target_score_history: list[float] = []
         end_y_history: list[float] = []
+        capture_drop_recovery_step: int | None = None
 
         for step_index in range(int(self.config["max_steps"])):
             action, log_prob, value = self._policy_step(state)
@@ -306,6 +307,8 @@ class PendulumTrainer:
             else:
                 hold_after.append(in_target)
             phase_hold[int(info["phase"])].append(in_target)
+            if info["capture_drop_recovered"]:
+                capture_drop_recovery_step = step_index + 1
 
             state = next_state
             if done:
@@ -333,6 +336,7 @@ class PendulumTrainer:
             transition_direction=transition_direction,
             termination_reason=termination_reason or "none",
             mode_probabilities=mode_probabilities,
+            capture_drop_recovery_step=capture_drop_recovery_step,
         )
 
     def collect_trajectory(self, episode: int) -> dict[str, Any]:
@@ -366,6 +370,7 @@ class PendulumTrainer:
         transition_direction: str,
         termination_reason: str,
         mode_probabilities: Mapping[str, float],
+        capture_drop_recovery_step: int | None,
     ) -> dict[str, Any]:
         hold_before_switch = float(np.mean(hold_before)) if hold_before else 0.0
         hold_after_switch = float(np.mean(hold_after)) if hold_after else 0.0
@@ -413,6 +418,8 @@ class PendulumTrainer:
             "action_std": float(np.std(action_values)),
             "action_abs_mean": float(np.mean(np.abs(action_values))),
             "termination_reason": termination_reason,
+            "capture_drop_recovered": capture_drop_recovery_step is not None,
+            "capture_drop_recovery_step": capture_drop_recovery_step,
         }
         for mode in self.EPISODE_MODES:
             summary[f"mode_probability_{mode}"] = float(mode_probabilities[mode])
@@ -634,12 +641,15 @@ class PendulumTrainer:
                 summary.update(self._actor_eval_on_fixed_capture_states())
                 self._record_episode_metrics(summary)
                 if episode % 10 == 0:
+                    recover_log = ""
+                    if summary["capture_drop_recovered"]:
+                        recover_log = f" | recover@{summary['capture_drop_recovery_step']}"
                     print(
                         f"Episode {episode:5d} | reward={summary['episode_reward']:8.2f} | "
                         f"len={summary['episode_length']:4d} | dir={summary['transition_direction']:<16s} | "
                         f"hold={summary['balanced_hold']:4.2f} | peak={summary['peak_target_score']:4.2f} | "
                         f"value={ppo_metrics['value_loss']:.4f} | "
-                        f"term={summary['termination_reason']}"
+                        f"term={summary['termination_reason']}{recover_log}"
                     )
                 if episode % self.plot_frequency == self.plot_frequency - 1:
                     self.metrics.generate_all_plots()

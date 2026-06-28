@@ -49,6 +49,7 @@ class RewardManager:
         phase: int,
         capture_started: bool,
         hold_streak: int,
+        initial_pose_mode: str = "target",
     ) -> RewardResult:
         self._validate_physical_state(previous_state, "previous_state")
         self._validate_physical_state(next_state, "next_state")
@@ -89,6 +90,7 @@ class RewardManager:
         capture_maintenance_bonus = 0.0
         capture_score_decay_penalty = 0.0
         capture_in_target_bonus = 0.0
+        capture_cart_center_bonus = 0.0
 
         # Récompense de capture / stabilisation (après capture ou phase 2)
         if next_capture_started or phase == -1:
@@ -109,6 +111,16 @@ class RewardManager:
             )
             if metrics["in_target"]:
                 capture_in_target_bonus = float(self.config["capture_in_target_step_bonus"])
+            if (
+                initial_pose_mode == "capture"
+                and phase == 1
+                and metrics["target_score"]
+                >= float(self.config["swing_up_capture_score_threshold"])
+            ):
+                capture_cart_center_bonus = (
+                    float(self.config["capture_cart_center_weight"])
+                    * self._cart_safety_score(float(next_state[0]))
+                )
             if capture_started:
                 score_drop = max(
                     0.0,
@@ -127,6 +139,7 @@ class RewardManager:
                 + capture_maintenance_bonus
                 + capture_score_decay_penalty
                 + capture_in_target_bonus
+                + capture_cart_center_bonus
             )
         else:
             # Récompense potentielle pendant le swing-up
@@ -165,6 +178,7 @@ class RewardManager:
             "capture_maintenance_bonus": capture_maintenance_bonus,
             "capture_score_decay_penalty": capture_score_decay_penalty,
             "capture_in_target_bonus": capture_in_target_bonus,
+            "capture_cart_center_bonus": capture_cart_center_bonus,
             "capture_entry_bonus": capture_entry_bonus,
             "capture_speed_score": speed_score,
             "capture_action_score": action_score,
@@ -323,7 +337,7 @@ class RewardManager:
     def _cart_safety_score(self, cart_x: float) -> float:
         # Pénalité douce quand le chariot s'approche des rails
         normalized = abs(cart_x) / self.cart_limit
-        return float(np.clip(1.0 - normalized**2, 0.0, 1.0))
+        return float(np.clip(1.0 - normalized**(0.2), 0.0, 1.0))
 
     @staticmethod
     def _validate_physical_state(physical_state: np.ndarray, name: str) -> None:

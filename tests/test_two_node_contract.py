@@ -431,6 +431,7 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
             initial_angle_noise=0.0,
             initial_velocity_noise=0.0,
             capture_angle_noise=0.0,
+            capture_cart_position_noise=0.0,
             capture_cart_velocity_noise=0.0,
             capture_angular_velocity_noise=0.0,
             down_angle_noise=0.0,
@@ -795,12 +796,17 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         self.assertTrue(first_info["capture_drop"])
         self.assertFalse(second_info["capture_drop"])
         self.assertIsNone(first_info["termination_reason"])
-        self.assertEqual(
-            custom["capture_drop_penalty"],
+        remaining_fraction = 1.0 - env.capture_drop_step / custom["max_steps"]
+        expected_drop_penalty = (
+            custom["capture_drop_base_penalty"]
+            + custom["capture_drop_remaining_penalty"] * remaining_fraction
+        )
+        self.assertAlmostEqual(
+            expected_drop_penalty,
             first_info["reward_components"]["capture_drop_penalty"],
         )
-        self.assertEqual(
-            custom["capture_drop_penalty"],
+        self.assertAlmostEqual(
+            expected_drop_penalty,
             first_info["reward_components"]["terminal_failure_penalty"],
         )
         self.assertEqual(0.0, second_info["reward_components"]["capture_drop_penalty"])
@@ -831,9 +837,9 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         self.assertFalse(first_after_info["capture_drop"])
 
         _state, _reward, terminated, truncated, end_info = env.step(0.0)
-        self.assertFalse(terminated)
-        self.assertTrue(truncated)
-        self.assertEqual("capture_drop_truncation", end_info["termination_reason"])
+        self.assertTrue(terminated)
+        self.assertFalse(truncated)
+        self.assertEqual("capture_drop_failure", end_info["termination_reason"])
 
     def test_down_to_up_does_not_get_capture_drop_penalty(self):
         custom = dict(config)
@@ -907,7 +913,7 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         self.assertFalse(terminated)
         self.assertFalse(info["entered_success"])
         self.assertFalse(env.success_achieved)
-        self.assertEqual(1.0, reward)
+        self.assertAlmostEqual(1.0, reward, delta=0.01)
 
         _state, _reward, terminated, truncated, info = env.step(0.0)
         self.assertFalse(terminated)

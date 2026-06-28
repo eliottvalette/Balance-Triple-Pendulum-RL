@@ -54,7 +54,8 @@ def variants(episodes, max_steps):
         capture_angular_velocity_noise=0.05,
     )
     capture_soft_drop = deepcopy(capture_only)
-    capture_soft_drop["capture_drop_penalty"] = -10.0
+    capture_soft_drop["capture_drop_base_penalty"] = -10.0
+    capture_soft_drop["capture_drop_remaining_penalty"] = -10.0
     down_only = deepcopy(mixed)
     down_only["episode_mode_probabilities"] = {
         "down_to_up": 1.0,

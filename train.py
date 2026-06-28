@@ -158,6 +158,7 @@ class PendulumTrainer:
         validate_config(cfg)
         self.config = dict(cfg)
         self.max_action = float(cfg["max_action"])
+        self.ppo_reward_scale = float(cfg["ppo_reward_scale"])
         self.reward_manager = RewardManager(self.config)
         self.env = PendulumEnv(
             reward_manager=self.reward_manager,
@@ -277,7 +278,7 @@ class PendulumTrainer:
             self.rollout_buffer.add(
                 state=state,
                 action=action,
-                reward=float(reward),
+                reward=float(reward) * self.ppo_reward_scale,
                 done=done,
                 terminated=effective_termination,
                 value=value,

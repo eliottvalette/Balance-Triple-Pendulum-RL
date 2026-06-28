@@ -239,6 +239,12 @@ class PendulumEnv:
             self.switch_step = rd.randint(low, high)
         self.has_switched = False
 
+        if use_capture_vertical:
+            position_initiale_chariot = rd.uniform(
+                -float(self.config['capture_cart_position_noise']),
+                float(self.config['capture_cart_position_noise']),
+            )
+
         # Angles et vitesses initiales selon le mode
         angle_noise = (
             self.config['down_angle_noise']
@@ -571,27 +577,29 @@ class PendulumEnv:
         if capture_drop:
             self.capture_drop_triggered = True
             self.capture_drop_step = self.num_steps
-            capture_drop_penalty = float(self.config['capture_drop_penalty'])
+            remaining_fraction = 1.0 - self.num_steps / self.max_steps
+            capture_drop_penalty = (
+                float(self.config['capture_drop_base_penalty'])
+                + float(self.config['capture_drop_remaining_penalty']) * remaining_fraction
+            )
             reward += capture_drop_penalty
             reward_components['terminal_failure_penalty'] = (
                 reward_components.get('terminal_failure_penalty', 0.0) + capture_drop_penalty
             )
         reward_components['capture_drop_penalty'] = capture_drop_penalty
 
-        # Conditions de fin d'épisode (rail, ou horizon)
+        # Conditions de fin d'épisode (rail, échec capture, ou horizon)
         self.cart_limit_streak = self.cart_limit_streak + 1 if hit_cart_limit else 0
-        terminated = bool(
-            self.cart_limit_streak >= int(self.config['cart_limit_termination_steps'])
-        )
         capture_drop_truncated = bool(
             self.capture_drop_step is not None
             and self.num_steps
             >= self.capture_drop_step + int(self.config['capture_drop_truncation_steps'])
         )
-        truncated = bool(
-            (self.num_steps >= self.max_steps and not terminated)
-            or (capture_drop_truncated and not terminated)
+        terminated = bool(
+            self.cart_limit_streak >= int(self.config['cart_limit_termination_steps'])
+            or capture_drop_truncated
         )
+        truncated = bool(self.num_steps >= self.max_steps and not terminated)
 
         # Pénalités de proximité et de contact avec les rails
         cart_center_limit = self.xmax - self.cart_width / (2 * self.scale)
@@ -671,9 +679,9 @@ class PendulumEnv:
             "in_target": reward_components["in_target"],
             "termination_reason": (
                 "cart_limit_streak"
-                if terminated
-                else "capture_drop_truncation"
-                if capture_drop_truncated
+                if terminated and self.cart_limit_streak >= int(self.config['cart_limit_termination_steps'])
+                else "capture_drop_failure"
+                if terminated and capture_drop_truncated
                 else "max_steps"
                 if truncated
                 else None
@@ -976,7 +984,7 @@ class PendulumEnv:
                         target_force = force_increment
                     elif event.key == pygame.K_SPACE:
                         target_force = 0.0
-                        self.reset(phase=current_phase)
+                        self.reset(episode_mode="capture_vertical")
                     elif event.key == pygame.K_p:  # Changer vers la phase 1
                         current_phase = 1 if current_phase == -1 else -1
                         self.reset(phase=current_phase)

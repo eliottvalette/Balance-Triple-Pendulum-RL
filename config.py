@@ -10,7 +10,7 @@ config = {
     'max_steps': 1000,
     'hidden_dim': 256,
     'load_models': True,
-    'gamma': 0.99,
+    'gamma': 0.995,
     'num_nodes': 2,
     'gravity': 0.81,
     'cart_mass': 0.01 / 3.0,
@@ -55,11 +55,13 @@ config = {
     'value_loss_coefficient': 0.5,
     'max_grad_norm': 0.5,
     'target_kl': 0.03,
+    'ppo_reward_scale': 0.01,
     'normalize_advantages': True,
-    'initial_log_std': -2.5,
-    'capture_angle_noise': 0.06,
-    'capture_cart_velocity_noise': 0.02,
-    'capture_angular_velocity_noise': 0.3,
+    'initial_log_std': -2.0,
+    'capture_cart_position_noise': 0.15,
+    'capture_cart_velocity_noise': 0.1,
+    'capture_angle_noise': 0.1,
+    'capture_angular_velocity_noise': 0.1,
     'down_angle_noise': 0.25,
     'cart_failure_penalty': -100.0,
     'cart_limit_step_penalty': -5.0,
@@ -74,7 +76,8 @@ config = {
     'capture_maintenance_weight': 2.0,
     'capture_score_decay_penalty': 40.0,
     'capture_in_target_step_bonus': 0.5,
-    'capture_drop_penalty': -50.0,
+    'capture_drop_base_penalty': -200.0,
+    'capture_drop_remaining_penalty': -800.0,
     'capture_drop_target_score_threshold': 0.5,
     'capture_drop_grace_steps': 20,
     'capture_drop_truncation_steps': 75,
@@ -100,7 +103,7 @@ def validate_config(cfg):
         'num_episodes', 'max_steps', 'actor_lr', 'critic_lr', 'gamma',
         'ppo_epochs', 'minibatch_size', 'gae_lambda', 'clip_epsilon',
         'entropy_coefficient', 'value_loss_coefficient', 'max_grad_norm',
-        'target_kl', 'normalize_advantages', 'initial_log_std',
+        'target_kl', 'ppo_reward_scale', 'normalize_advantages', 'initial_log_std',
         'hidden_dim', 'load_models',
         'num_nodes', 'gravity', 'cart_mass', 'bob_mass', 'angular_friction',
         'cart_friction', 'angular_velocity_damping', 'max_action',
@@ -110,15 +113,16 @@ def validate_config(cfg):
         'curriculum_min_probabilities', 'curriculum_max_probabilities',
         'transition_switch_step_min', 'transition_switch_step_max',
         'capture_angle_noise',
-        'capture_cart_velocity_noise', 'capture_angular_velocity_noise',
-        'down_angle_noise', 'cart_failure_penalty', 'cart_limit_step_penalty',
+        'capture_cart_position_noise', 'capture_cart_velocity_noise',
+        'capture_angular_velocity_noise', 'down_angle_noise',
+        'cart_failure_penalty', 'cart_limit_step_penalty',
         'cart_limit_proximity_penalty', 'cart_limit_termination_steps',
         'capture_entry_bonus', 'swing_up_energy_progress_weight',
         'swing_up_height_progress_weight', 'swing_up_cart_safety_weight',
         'capture_allowed_angular_speed', 'capture_quality_bonus',
         'capture_maintenance_weight', 'capture_score_decay_penalty',
         'capture_in_target_step_bonus',
-        'capture_drop_penalty',
+        'capture_drop_base_penalty', 'capture_drop_remaining_penalty',
         'capture_drop_target_score_threshold', 'capture_drop_grace_steps',
         'capture_drop_truncation_steps',
         'hold_progress_bonus', 'action_l2_penalty', 'action_delta_penalty',
@@ -145,7 +149,7 @@ def validate_config(cfg):
 
     positive_keys = (
         'actor_lr', 'critic_lr', 'gravity', 'cart_mass', 'bob_mass', 'max_action',
-        'capture_allowed_angular_speed', 'max_grad_norm',
+        'capture_allowed_angular_speed', 'max_grad_norm', 'ppo_reward_scale',
     )
     for key in positive_keys:
         value = cfg[key]
@@ -177,8 +181,8 @@ def validate_config(cfg):
     nonnegative_keys = (
         'angular_friction', 'cart_friction', 'angular_velocity_damping',
         'initial_angle_noise', 'initial_velocity_noise',
-        'capture_angle_noise', 'capture_cart_velocity_noise',
-        'capture_angular_velocity_noise', 'down_angle_noise',
+        'capture_angle_noise', 'capture_cart_position_noise',
+        'capture_cart_velocity_noise', 'capture_angular_velocity_noise',
         'capture_entry_bonus', 'swing_up_energy_progress_weight',
         'swing_up_height_progress_weight', 'swing_up_cart_safety_weight',
         'capture_quality_bonus', 'capture_maintenance_weight',
@@ -212,8 +216,16 @@ def validate_config(cfg):
         raise ValueError("cart_failure_penalty must be finite and negative")
     if not math.isfinite(cfg['cart_limit_step_penalty']) or cfg['cart_limit_step_penalty'] >= 0.0:
         raise ValueError("cart_limit_step_penalty must be finite and negative")
-    if not math.isfinite(cfg['capture_drop_penalty']) or cfg['capture_drop_penalty'] >= 0.0:
-        raise ValueError("capture_drop_penalty must be finite and negative")
+    if (
+        not math.isfinite(cfg['capture_drop_base_penalty'])
+        or cfg['capture_drop_base_penalty'] >= 0.0
+    ):
+        raise ValueError("capture_drop_base_penalty must be finite and negative")
+    if (
+        not math.isfinite(cfg['capture_drop_remaining_penalty'])
+        or cfg['capture_drop_remaining_penalty'] >= 0.0
+    ):
+        raise ValueError("capture_drop_remaining_penalty must be finite and negative")
     threshold = cfg['capture_drop_target_score_threshold']
     if not isinstance(threshold, (int, float)) or not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
         raise ValueError("capture_drop_target_score_threshold must be in [0, 1]")

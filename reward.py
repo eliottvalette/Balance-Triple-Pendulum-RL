@@ -246,13 +246,24 @@ class RewardManager:
         # Phase 1 : pendule vertical au-dessus du chariot
         if phase == 1:
             height_error = self.max_height - end_y
+            y1_error = self.length - y1
             alignment_error = 1.0 - np.cos(q1 - q2)
-            target_score = np.exp(-8.0 * height_error**2 - 2.0 * end_x_error**2)
+            target_score = np.exp(
+                -8.0 * height_error**2
+                -4.0 * y1_error**2
+                -2.0 * end_x_error**2
+                -2.0 * alignment_error
+            )
             target_error = (
-                abs(height_error) + 0.5 * abs(end_x_error) + 0.25 * alignment_error
+                abs(height_error)
+                + abs(y1_error)
+                + 0.5 * abs(end_x_error)
+                + 0.25 * alignment_error
             )
             in_target = (
                 target_score >= float(self.config["swing_up_capture_score_threshold"])
+                and abs(y1_error) < 0.08
+                and alignment_error < 0.08
                 and angular_speed < 4.0
             )
         else:

@@ -1,0 +1,12 @@
+{
+  "algorithm": "ppo",
+  "state_dim": 52,
+  "action_dim": 1,
+  "max_action": 0.2,
+  "num_nodes": 2,
+  "episode": 2943,
+  "total_updates": 209065,
+  "total_env_steps": 15853270,
+  "interrupted": true,
+  "hidden_dim": 256
+}

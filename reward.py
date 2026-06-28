@@ -148,6 +148,33 @@ class RewardManager:
             action_score = 0.0
             reward = potential_progress
 
+        # Anti-sleep: pénalise le fait de rester bas et immobile après une chute.
+        low_pose_penalty = 0.0
+        low_energy_penalty = 0.0
+        sleep_penalty = 0.0
+        height_score = self._height_score(next_state)
+        energy_score = self._energy_score(next_state)
+        angular_speed = float(metrics["angular_speed"])
+        end_y = float(metrics["end_y"])
+        low_pose_depth = max(0.0, 0.45 - height_score) / 0.45
+        if low_pose_depth > 0.0:
+            low_pose_penalty = -float(self.config["low_pose_penalty"]) * low_pose_depth
+            energy_deficit = max(0.0, 1.0 - energy_score)
+            low_energy_penalty = (
+                -float(self.config["low_energy_penalty"])
+                * low_pose_depth
+                * energy_deficit
+            )
+            sleep_threshold = float(self.config["anti_sleep_angular_speed_threshold"])
+            if end_y < 0.0 and angular_speed < sleep_threshold:
+                sleep_factor = 1.0 - angular_speed / max(1e-6, sleep_threshold)
+                sleep_penalty = (
+                    -float(self.config["anti_sleep_penalty"])
+                    * low_pose_depth
+                    * sleep_factor
+                )
+        reward += low_pose_penalty + low_energy_penalty + sleep_penalty
+
         # Journalisation des composantes pour le suivi et le rendu
         components = {
             "reward": float(reward),
@@ -187,6 +214,9 @@ class RewardManager:
             "hold_progress": float(hold_progress),
             "hold_progress_delta": float(hold_progress_delta),
             "phase": float(phase),
+            "low_pose_penalty": low_pose_penalty,
+            "low_energy_penalty": low_energy_penalty,
+            "sleep_penalty": sleep_penalty,
         }
         return RewardResult(
             reward=float(reward),

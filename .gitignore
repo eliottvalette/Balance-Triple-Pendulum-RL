@@ -4,20 +4,15 @@ __pycache__/
 *$py.class
 
 # Model files and directories
-models/
-*.pth
 *.pt
 *.h5
 *.hdf5
 *.keras
-*.model
 *.onnx
 *.pkl
 *.joblib
 *.pickle
 *.bin
-*checkpoint*
-*saved_model*
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -32,3 +27,6 @@ logs/
 # Forked repos
 physics_guide/
 Pendulum-NEAT-main/
+
+models/interrupted_*
+models/interrupted_*

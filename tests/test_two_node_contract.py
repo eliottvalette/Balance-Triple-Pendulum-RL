@@ -159,7 +159,14 @@ class RewardContractTests(unittest.TestCase):
         )
 
         self.assertLessEqual(result.reward, 0.0)
-        self.assertAlmostEqual(result.reward, result.components["swing_up_progress"])
+        self.assertLess(result.components["low_pose_penalty"], 0.0)
+        self.assertAlmostEqual(
+            result.reward,
+            result.components["swing_up_progress"]
+            + result.components["low_pose_penalty"]
+            + result.components["low_energy_penalty"]
+            + result.components["sleep_penalty"],
+        )
 
     def test_reward_components_expose_contract_layers(self):
         state = physical_state()
@@ -404,6 +411,36 @@ class RewardContractTests(unittest.TestCase):
         self.assertEqual(0.0, phase_down.components["capture_cart_center_bonus"])
         other_mode = manager.evaluate_transition(upright_center, upright_center, action=0.0, phase=1, capture_started=True, hold_streak=10, initial_pose_mode="down")
         self.assertEqual(0.0, other_mode.components["capture_cart_center_bonus"])
+
+    def test_anti_sleep_penalizes_idle_bottom_pose(self):
+        bottom = physical_state(q1=-math.pi / 2, q2=-math.pi / 2, u1=0.0, u2=0.0)
+        result = self.manager.evaluate_transition(
+            bottom,
+            bottom,
+            action=0.0,
+            phase=1,
+            capture_started=True,
+            hold_streak=0,
+            initial_pose_mode="capture",
+        )
+        self.assertLess(result.components["low_pose_penalty"], 0.0)
+        self.assertLess(result.components["low_energy_penalty"], 0.0)
+        self.assertLess(result.components["sleep_penalty"], 0.0)
+
+    def test_anti_sleep_does_not_penalize_stable_upright_hold(self):
+        upright = physical_state(q1=math.pi / 2, q2=math.pi / 2, u1=0.0, u2=0.0)
+        result = self.manager.evaluate_transition(
+            upright,
+            upright,
+            action=0.0,
+            phase=1,
+            capture_started=True,
+            hold_streak=10,
+            initial_pose_mode="capture",
+        )
+        self.assertEqual(0.0, result.components["low_pose_penalty"])
+        self.assertEqual(0.0, result.components["low_energy_penalty"])
+        self.assertEqual(0.0, result.components["sleep_penalty"])
 
     def test_excessive_angular_speed_cannot_enter_capture(self):
         fast_upright = physical_state(q1=math.pi / 2, q2=math.pi / 2, u1=2.0, u2=2.0)
@@ -948,7 +985,7 @@ class TwoNodeEnvironmentTests(unittest.TestCase):
         self.assertFalse(truncated)
         self.assertEqual("capture_drop_redrop", redrop_info["termination_reason"])
         self.assertEqual(0.0, redrop_info["reward_components"]["capture_drop_penalty"])
-        self.assertGreaterEqual(reward, 0.0)
+        self.assertLess(redrop_info["reward_components"]["sleep_penalty"], 0.0)
 
     def test_capture_vertical_continues_after_drop_when_termination_disabled(self):
         custom = dict(config)

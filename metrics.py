@@ -34,6 +34,9 @@ REWARD_COMPONENTS = [
     "cart_proximity_penalty",
     "cart_limit_step_penalty",
     "cart_failure_penalty",
+    "low_pose_penalty",
+    "low_energy_penalty",
+    "sleep_penalty",
     "transition_reward",
 ]
 

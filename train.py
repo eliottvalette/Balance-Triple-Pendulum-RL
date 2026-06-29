@@ -715,6 +715,7 @@ class PendulumTrainer:
         torch.save(self.critic_optimizer.state_dict(), path + "_critic_optimizer.pth")
         metadata = {
             "algorithm": "ppo",
+            "policy_distribution": "tanh_squashed_gaussian",
             "state_dim": self.state_dim,
             "action_dim": self.action_dim,
             "max_action": self.max_action,
@@ -738,6 +739,7 @@ class PendulumTrainer:
             metadata = json.load(metadata_file)
         expected = {
             "algorithm": "ppo",
+            "policy_distribution": "tanh_squashed_gaussian",
             "state_dim": self.state_dim,
             "action_dim": self.action_dim,
             "hidden_dim": self.config["hidden_dim"],

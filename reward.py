@@ -28,7 +28,8 @@ class RewardManager:
         self.length = float(arm_length)
         self.mass = float(cfg.get("bob_mass", mass))
         self.max_height = self.length * self.num_nodes
-        self.phase_1_height_tolerance = 0.08
+        self.phase_1_height_tolerance = 0.04
+        self.phase_1_alignment_tolerance = 0.08
         self.phase_2_end_height_tolerance = 0.12
         self.cart_limit = 1.8
 
@@ -306,8 +307,8 @@ class RewardManager:
             )
             in_target = (
                 target_score >= float(self.config["swing_up_capture_score_threshold"])
-                and abs(y1_error) < 0.08
-                and alignment_error < 0.08
+                and abs(y1_error) < self.phase_1_height_tolerance
+                and alignment_error < self.phase_1_alignment_tolerance
                 and angular_speed < 4.0
             )
         else:

@@ -5,6 +5,7 @@ import math
 import torch
 from torch import Tensor, nn
 from torch.distributions import Normal
+from torch.nn import functional as F
 
 
 class PendulumActorPolicy(nn.Module):
@@ -45,31 +46,50 @@ class PendulumActorPolicy(nn.Module):
         nn.init.zeros_(final_linear.bias)
 
     def forward(self, state: Tensor) -> tuple[Tensor, Tensor]:
-        mean = self.mean_network(state).clamp(-self.max_action, self.max_action)
-        std = self.log_std.clamp(-5.0, 2.0).exp().expand_as(mean)
-        return mean, std
+        raw_mean = self.mean_network(state)
+        std = self.log_std.clamp(-5.0, 2.0).exp().expand_as(raw_mean)
+        return raw_mean, std
 
     def _distribution(self, state: Tensor) -> Normal:
         mean, std = self(state)
         return Normal(mean, std)
 
+    def _squash(self, raw_action: Tensor) -> Tensor:
+        return self.max_action * torch.tanh(raw_action)
+
+    def _inverse_squash(self, action: Tensor) -> Tensor:
+        normalized_action = action / self.max_action
+        epsilon = torch.finfo(normalized_action.dtype).eps
+        # Only stabilise atanh at exact floating-point boundaries. Executed
+        # actions are produced by tanh and are never hard-clamped here.
+        normalized_action = normalized_action.clamp(-1.0 + epsilon, 1.0 - epsilon)
+        return torch.atanh(normalized_action)
+
+    def _squashed_log_prob(self, distribution: Normal, raw_action: Tensor) -> Tensor:
+        log_tanh_derivative = 2.0 * (
+            math.log(2.0) - raw_action - F.softplus(-2.0 * raw_action)
+        )
+        log_abs_det_jacobian = math.log(self.max_action) + log_tanh_derivative
+        return (distribution.log_prob(raw_action) - log_abs_det_jacobian).sum(dim=-1)
+
     def sample(self, state: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         distribution = self._distribution(state)
-        action = distribution.sample().clamp(-self.max_action, self.max_action)
-        log_prob = distribution.log_prob(action).sum(dim=-1)
+        raw_action = distribution.sample()
+        action = self._squash(raw_action)
+        log_prob = self._squashed_log_prob(distribution, raw_action)
         entropy = distribution.entropy().sum(dim=-1)
         return action, log_prob, entropy
 
     def evaluate_actions(self, state: Tensor, action: Tensor) -> tuple[Tensor, Tensor]:
         distribution = self._distribution(state)
-        bounded_action = action.clamp(-self.max_action, self.max_action)
-        log_prob = distribution.log_prob(bounded_action).sum(dim=-1)
+        raw_action = self._inverse_squash(action)
+        log_prob = self._squashed_log_prob(distribution, raw_action)
         entropy = distribution.entropy().sum(dim=-1)
         return log_prob, entropy
 
     def deterministic(self, state: Tensor) -> Tensor:
-        mean, _std = self(state)
-        return mean
+        raw_mean, _std = self(state)
+        return self._squash(raw_mean)
 
 
 class PendulumValueCritic(nn.Module):

@@ -1,12 +1,13 @@
 {
   "algorithm": "ppo",
+  "policy_distribution": "tanh_squashed_gaussian",
   "state_dim": 52,
   "action_dim": 1,
   "max_action": 0.2,
   "num_nodes": 2,
-  "episode": 400,
-  "total_updates": 306576,
-  "total_env_steps": 28567515,
-  "interrupted": true,
+  "episode": 10000,
+  "total_updates": 212905,
+  "total_env_steps": 6678659,
+  "interrupted": false,
   "hidden_dim": 256
 }

@@ -7,6 +7,7 @@ from unittest import mock
 
 import numpy as np
 import torch
+from torch.distributions import Normal
 
 from config import config
 from model import PendulumActorPolicy, PendulumValueCritic
@@ -64,15 +65,61 @@ class PPOContractTests(unittest.TestCase):
         self.assertTrue(torch.allclose(log_probs, evaluated_log_probs))
         self.assertTrue(torch.allclose(entropy, evaluated_entropy))
 
-    def test_policy_deterministic_action_is_distribution_mean(self):
+    def test_policy_log_prob_includes_tanh_and_action_scale_jacobian(self):
+        policy = PendulumActorPolicy(
+            3,
+            hidden_dim=8,
+            max_action=0.5,
+            initial_log_std=-0.3,
+        )
+        states = torch.zeros(2, 3)
+        raw_actions = torch.tensor([[0.4], [-0.7]])
+        actions = policy.max_action * torch.tanh(raw_actions)
+
+        raw_mean, std = policy(states)
+        log_probs, _entropy = policy.evaluate_actions(states, actions)
+        expected = (
+            Normal(raw_mean, std).log_prob(raw_actions)
+            - torch.log(torch.tensor(policy.max_action))
+            - torch.log1p(-torch.tanh(raw_actions).square())
+        ).sum(dim=-1)
+
+        self.assertTrue(torch.allclose(log_probs, expected, atol=1e-6))
+
+    def test_policy_deterministic_action_is_squashed_raw_mean(self):
         policy = PendulumActorPolicy(3, hidden_dim=8, max_action=0.5)
         states = torch.randn(4, 3)
 
-        mean, std = policy(states)
+        raw_mean, std = policy(states)
+        expected_action = policy.max_action * torch.tanh(raw_mean)
 
-        self.assertTrue(torch.allclose(policy.deterministic(states), mean))
-        self.assertTrue(torch.all(mean.abs() <= 0.5))
+        self.assertTrue(torch.allclose(policy.deterministic(states), expected_action))
+        self.assertTrue(torch.all(policy.deterministic(states).abs() <= 0.5))
         self.assertTrue(torch.all(std > 0.0))
+
+    def test_policy_squash_preserves_gradient_beyond_action_limit(self):
+        policy = PendulumActorPolicy(3, hidden_dim=8, max_action=0.5)
+        final_layer = policy.mean_network[-1]
+        assert isinstance(final_layer, torch.nn.Linear)
+        with torch.no_grad():
+            final_layer.weight.zero_()
+            final_layer.bias.fill_(1.0)
+
+        action = policy.deterministic(torch.zeros(1, 3))
+        action.sum().backward()
+
+        self.assertLess(float(action.item()), policy.max_action)
+        self.assertGreater(float(final_layer.bias.grad.item()), 0.0)
+
+    def test_policy_evaluates_boundary_actions_without_non_finite_values(self):
+        policy = PendulumActorPolicy(3, hidden_dim=8, max_action=0.5)
+        states = torch.zeros(2, 3)
+        actions = torch.tensor([[policy.max_action], [-policy.max_action]])
+
+        log_probs, entropy = policy.evaluate_actions(states, actions)
+
+        self.assertTrue(torch.all(torch.isfinite(log_probs)))
+        self.assertTrue(torch.all(torch.isfinite(entropy)))
 
     def test_value_critic_returns_one_value_per_state(self):
         critic = PendulumValueCritic(6, hidden_dim=8)
@@ -195,11 +242,26 @@ class PPOContractTests(unittest.TestCase):
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 
             self.assertEqual("ppo", metadata["algorithm"])
+            self.assertEqual("tanh_squashed_gaussian", metadata["policy_distribution"])
 
             metadata["algorithm"] = "incompatible"
             metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
             with mock.patch("train.MODEL_LOAD_PREFIX", str(prefix)):
                 with self.assertRaisesRegex(ValueError, "incompatible"):
+                    trainer.load_models()
+
+    def test_checkpoint_rejects_legacy_clamped_gaussian_policy(self):
+        trainer = PendulumTrainer(trainer_config())
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            prefix = Path(temporary_directory) / "checkpoint"
+            trainer.save_models(str(prefix), episode=3)
+            metadata_path = Path(f"{prefix}_metadata.json")
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            del metadata["policy_distribution"]
+            metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+            with mock.patch("train.MODEL_LOAD_PREFIX", str(prefix)):
+                with self.assertRaisesRegex(ValueError, "policy_distribution"):
                     trainer.load_models()
 
 

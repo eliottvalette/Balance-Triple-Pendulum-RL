@@ -5,9 +5,9 @@
   "action_dim": 1,
   "max_action": 0.2,
   "num_nodes": 2,
-  "episode": 10000,
-  "total_updates": 212905,
-  "total_env_steps": 6678659,
-  "interrupted": false,
+  "episode": 339,
+  "total_updates": 154251,
+  "total_env_steps": 8673792,
+  "interrupted": true,
   "hidden_dim": 256
 }

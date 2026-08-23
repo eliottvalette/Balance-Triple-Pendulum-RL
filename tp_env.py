@@ -1,17 +1,23 @@
 # tp_env.py
+import json
+from pathlib import Path
+
 import numpy as np
 import random as rd
 import pygame
+import torch
 from numpy.linalg import solve
 from numpy import pi, cos, sin, hstack, zeros
 from sympy import symbols, Dummy, lambdify
 from sympy.physics.mechanics import ReferenceFrame, Point, Particle, KanesMethod, dynamicsymbols
 from config import config, validate_config
+from model import PendulumActorPolicy
 from reward import RewardManager
 
 DT = 0.01
 FIXED_NUM_NODES = 2
 PHYSICAL_STATE_LAYOUT = ("x", "q1", "q2", "x_dot", "q1_dot", "q2_dot", "force", "x1", "y1", "x2", "y2")
+SAVED_MODEL_PREFIX = Path(__file__).resolve().parent / "models" / "saved" / "checkpoint"
 
 class PendulumEnv:
     def __init__(
@@ -198,13 +204,15 @@ class PendulumEnv:
         state_derivative = np.array(solve(self.M_func(*arguments), self.F_func(*arguments))).T[0]
         return state_derivative
 
-    def reset(self, phase=None, episode_mode=None, seed=None):
+    def reset(self, phase=None, episode_mode=None, seed=None, no_noise=False):
         # Graine aléatoire optionnelle
         if seed is not None:
             if not isinstance(seed, int) or isinstance(seed, bool):
                 raise ValueError(f"seed must be an integer, got {seed!r}")
             rd.seed(seed)
             np.random.seed(seed)
+        if not isinstance(no_noise, (bool, np.bool_)):
+            raise TypeError(f"no_noise must be bool, got {no_noise!r}")
 
         # Mode d'épisode et phase initiale
         position_initiale_chariot = 0.0
@@ -240,7 +248,7 @@ class PendulumEnv:
             self.switch_step = rd.randint(low, high)
         self.has_switched = False
 
-        if use_capture_vertical:
+        if use_capture_vertical and not no_noise:
             position_initiale_chariot = rd.uniform(
                 -float(self.config['capture_cart_position_noise']),
                 float(self.config['capture_cart_position_noise']),
@@ -261,11 +269,17 @@ class PendulumEnv:
         else:
             base_angles = [pi / 2, -pi / 2] + [-pi / 2] * (len(self.positions) - 3)
 
-        angles_initiaux = [
-            base_angle + rd.uniform(-angle_noise, angle_noise)
-            for base_angle in base_angles
-        ]
-        if use_capture_vertical:
+        angles_initiaux = (
+            list(base_angles)
+            if no_noise
+            else [
+                base_angle + rd.uniform(-angle_noise, angle_noise)
+                for base_angle in base_angles
+            ]
+        )
+        if no_noise:
+            vitesses_initiales = np.zeros(len(self.velocities), dtype=float)
+        elif use_capture_vertical:
             vitesses_initiales = np.array([
                 rd.uniform(-self.config['capture_cart_velocity_noise'], self.config['capture_cart_velocity_noise']),
                 *[
@@ -769,7 +783,15 @@ class PendulumEnv:
             info,
         )
         
-    def render(self, action, episode = 0, epsilon = 0, current_step = 0, phase = None):
+    def render(
+        self,
+        action,
+        episode=0,
+        epsilon=0,
+        current_step=0,
+        phase=None,
+        control_mode="manual",
+    ):
         """
         Affiche l'état actuel du pendule.
         """
@@ -850,11 +872,15 @@ class PendulumEnv:
         force_text = self.font.render(f'force = {force_value:.2f}', True, self.TEXT_COLOR)
         info_text = self.font.render('Utilisez les flèches gauche/droite pour appliquer une force', True, self.TEXT_COLOR)
         phase_text = self.font.render(f'Phase: {phase} (Touches 1 et 2 pour changer)', True, self.TEXT_COLOR)
+        mode_color = (40, 130, 70) if control_mode == "saved_model" else self.TEXT_COLOR
+        mode_label = "SAVED MODEL" if control_mode == "saved_model" else "MANUAL"
+        mode_text = self.font.render(f'Control: {mode_label} (M)', True, mode_color)
         
         self.screen.blit(time_text, (20, 20))
         self.screen.blit(force_text, (20, 45))
         self.screen.blit(info_text, (20, self.height - 30))
         self.screen.blit(phase_text, (20, self.height - 55))
+        self.screen.blit(mode_text, (20, 120))
         
         # Afficher les composants de récompense si le reward_manager est disponible
         if self.reward_manager is not None:
@@ -1027,24 +1053,28 @@ class PendulumEnv:
             title (str): Titre de la fenêtre.
         """
         self._init_pygame()
-        pygame.display.set_caption(title)
+        initial_window_mode = "SAVED MODEL" if not manual_mode else "MANUAL"
+        pygame.display.set_caption(f"{title} - {initial_window_mode}")
         
         if self.reward_manager is None:
             raise RuntimeError("animate() requires a reward_manager")
         
         if self.current_state is None:
-            self.reset(phase=1)  # Phase initiale par défaut
+            self.reset(phase=1, no_noise=True)  # Phase initiale par défaut
         
-        force_increment = 0.5
+        force_increment = float(self.config["max_action"])
         target_force = 0.0
+        model_policy = None
+        model_control_enabled = not manual_mode
         running = True
         episode = 0
         epsilon = 1.0
         current_phase = 1  # Phase initiale
+        print("Controls: Left/Right manual force | M toggle saved model | Space reset | P phase | S diagnostics")
         
         while running:
             if self.num_steps >= max_steps:
-                self.reset(phase=current_phase)  # Réinitialiser avec la phase courante
+                self.reset(phase=current_phase, no_noise=True)  # Réinitialiser avec la phase courante
                 self.num_steps = 0
                 episode += 1
                 epsilon *= 0.995  # Simuler une décroissance d'epsilon
@@ -1057,12 +1087,21 @@ class PendulumEnv:
                         target_force = -force_increment
                     elif event.key == pygame.K_RIGHT:
                         target_force = force_increment
+                    elif event.key == pygame.K_m:
+                        if model_policy is None:
+                            model_policy = self._load_saved_actor_policy(SAVED_MODEL_PREFIX)
+                        model_control_enabled = not model_control_enabled
+                        target_force = 0.0
+                        mode_name = "saved model" if model_control_enabled else "manual"
+                        window_mode = "SAVED MODEL" if model_control_enabled else "MANUAL"
+                        pygame.display.set_caption(f"{title} - {window_mode}")
+                        print(f"Control mode: {mode_name}")
                     elif event.key == pygame.K_SPACE:
                         target_force = 0.0
-                        self.reset(episode_mode="capture_vertical")
+                        self.reset(episode_mode="capture_vertical", no_noise=True)
                     elif event.key == pygame.K_p:  # Changer vers la phase 1
                         current_phase = 1 if current_phase == -1 else -1
-                        self.reset(phase=current_phase)
+                        self.reset(phase=current_phase, no_noise=True)
                     elif event.key == pygame.K_s:
                         state = self.get_state(action=target_force, phase=current_phase)
                         physical_state = self.get_physical_state()
@@ -1097,30 +1136,104 @@ class PendulumEnv:
                             print('------- Fin des composants de récompense -------')
                         
                 elif event.type == pygame.KEYUP:
-                    if event.key in [pygame.K_LEFT, pygame.K_RIGHT]:
+                    if event.key in [pygame.K_LEFT, pygame.K_RIGHT] and not model_control_enabled:
                         target_force = 0.0
             
             # Mise à jour de la force et de l'état
+            if model_control_enabled and model_policy is None:
+                model_policy = self._load_saved_actor_policy(SAVED_MODEL_PREFIX)
+            action = (
+                self._model_action(model_policy, current_phase)
+                if model_control_enabled
+                else target_force
+            )
             _next_state, _reward, terminated, truncated, _info = self.step(
-                target_force,
+                action,
                 phase=current_phase,
             )
             
             # Rendu avec informations sur l'épisode et epsilon
-            if not self.render(action=target_force, episode=episode, epsilon=epsilon, current_step=self.num_steps, phase=current_phase):
+            control_mode = "saved_model" if model_control_enabled else "manual"
+            if not self.render(
+                action=action,
+                episode=episode,
+                epsilon=epsilon,
+                current_step=self.num_steps,
+                phase=current_phase,
+                control_mode=control_mode,
+            ):
                 break
 
             if terminated or truncated:
-                self.reset(phase=current_phase)
+                self.reset(phase=current_phase, no_noise=True)
 
         if self.pygame_initialized:
             pygame.quit()
             self.pygame_initialized = False
+
+    def _load_saved_actor_policy(self, prefix):
+        metadata_path = Path(f"{prefix}_metadata.json")
+        actor_path = Path(f"{prefix}_actor.pth")
+        if not metadata_path.exists():
+            raise FileNotFoundError(f"saved model metadata is missing: {metadata_path}")
+        if not actor_path.exists():
+            raise FileNotFoundError(f"saved actor weights are missing: {actor_path}")
+
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        state_dim = len(self.get_state(action=0.0, phase=self.current_phase))
+        expected = {
+            "algorithm": "ppo",
+            "state_dim": state_dim,
+            "action_dim": 1,
+            "max_action": float(self.config["max_action"]),
+            "num_nodes": FIXED_NUM_NODES,
+            "hidden_dim": int(self.config["hidden_dim"]),
+        }
+        missing_keys = sorted(set(expected) - set(metadata))
+        if missing_keys:
+            raise ValueError(f"saved model metadata is missing required keys: {missing_keys}")
+        for key, expected_value in expected.items():
+            if metadata[key] != expected_value:
+                raise ValueError(
+                    f"incompatible saved model: {key} is {metadata[key]!r}, "
+                    f"expected {expected_value!r}"
+                )
+        policy_distribution = metadata.get("policy_distribution")
+        if policy_distribution is None:
+            print("Warning: saved model metadata has no policy_distribution; loading actor weights after strict shape validation.")
+        elif policy_distribution != "tanh_squashed_gaussian":
+            raise ValueError(
+                "incompatible saved model: policy_distribution is "
+                f"{policy_distribution!r}, expected 'tanh_squashed_gaussian'"
+            )
+
+        policy = PendulumActorPolicy(
+            state_dim,
+            int(metadata["action_dim"]),
+            int(metadata["hidden_dim"]),
+            float(metadata["max_action"]),
+            float(self.config["initial_log_std"]),
+        )
+        policy.load_state_dict(torch.load(actor_path, map_location="cpu", weights_only=True))
+        policy.eval()
+        print(f"Loaded saved actor from {actor_path}")
+        return policy
+
+    def _model_action(self, policy, phase):
+        if policy is None:
+            raise RuntimeError("model control is enabled but no policy is loaded")
+        state = self.get_state(action=self.previous_action, phase=phase)
+        state_tensor = torch.as_tensor(state, dtype=torch.float32).unsqueeze(0)
+        with torch.no_grad():
+            action = float(policy.deterministic(state_tensor).item())
+        if not np.isfinite(action):
+            raise FloatingPointError(f"saved model produced a non-finite action: {action!r}")
+        return action
 
 # Exemple d'utilisation
 if __name__ == "__main__":
     env = PendulumEnv(reward_manager=RewardManager(config), env_config=config)
     
     # Utilisation avec les nouvelles méthodes
-    env.reset(phase = 1)
+    env.reset(phase=1, no_noise=True)
     env.animate_pendulum_pygame(max_steps=10_000, manual_mode = True, title='Simulation Pendulum')
